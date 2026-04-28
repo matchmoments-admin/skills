@@ -1,0 +1,99 @@
+{
+  "$schema_note": "Each entry: phrase (case-insensitive substring match) + replacement options. Workflows scan drafts for these and replace with the first replacement that fits the surrounding sentence; if none fit, the sentence is rewritten. Categories are documentation only — the scrubber treats all entries the same.",
+
+  "marketing_register": [
+    { "phrase": "leverage", "replacements": ["use", "apply", "draw on"], "note": "as a verb. Acceptable as a noun ('the leverage'); the scrubber uses word-boundary matching on '\\bleverage\\b' followed by a space + non-noun." },
+    { "phrase": "synergy", "replacements": ["combination", "fit", "interaction"] },
+    { "phrase": "synergize", "replacements": ["combine", "work together"] },
+    { "phrase": "best-in-class", "replacements": ["the best", "the leading", "the strongest in this category"] },
+    { "phrase": "best-of-breed", "replacements": ["the strongest", "the most capable"] },
+    { "phrase": "cutting-edge", "replacements": ["new", "recent", "still-changing"] },
+    { "phrase": "bleeding-edge", "replacements": ["very new", "still-experimental", "fresh"] },
+    { "phrase": "next-generation", "replacements": ["new", "the next", "current"] },
+    { "phrase": "next-gen", "replacements": ["new", "the next", "current"] },
+    { "phrase": "world-class", "replacements": ["strong", "high-quality", "very good"] },
+    { "phrase": "thought leader", "replacements": ["expert", "well-known voice", "prominent figure"] },
+    { "phrase": "thought leadership", "replacements": ["industry voice", "expertise"] },
+    { "phrase": "AI-powered", "replacements": ["uses AI", "AI-driven", "with AI"] },
+    { "phrase": "AI-first", "replacements": ["AI-centric", "built on AI"] },
+    { "phrase": "game-changer", "replacements": ["a meaningful shift", "a significant change", "a real difference"] },
+    { "phrase": "game-changing", "replacements": ["meaningful", "significant"] },
+    { "phrase": "revolutionize", "replacements": ["change", "remake", "shift"] },
+    { "phrase": "revolutionary", "replacements": ["new", "novel", "significantly different"] },
+    { "phrase": "disrupt", "replacements": ["change", "displace", "compete with"], "note": "as a tech-business verb; literal 'disrupt' (interrupt) is fine." },
+    { "phrase": "disruptive", "replacements": ["new", "challenging", "displacing"] },
+    { "phrase": "paradigm shift", "replacements": ["shift", "structural change"] },
+    { "phrase": "supercharge", "replacements": ["accelerate", "speed up", "increase"] },
+    { "phrase": "turbocharge", "replacements": ["accelerate", "speed up"] }
+  ],
+
+  "ai_writing_tells": [
+    { "phrase": "in today's digital landscape", "replacements": ["today", "right now", ""], "note": "if no timing matters at all, just delete it." },
+    { "phrase": "in today's fast-paced", "replacements": ["today", "now", ""] },
+    { "phrase": "in the modern world", "replacements": ["today", "now", ""] },
+    { "phrase": "in the digital age", "replacements": ["today", "now"] },
+    { "phrase": "in today's", "replacements": ["today's", "current", ""], "note": "broad match; the specific noun follows ('in today's economy', 'in today's landscape')" },
+    { "phrase": "delve", "replacements": ["look at", "examine", "go into"], "note": "AI's most distinctive tell" },
+    { "phrase": "delves into", "replacements": ["covers", "examines", "looks at"] },
+    { "phrase": "dive into", "replacements": ["look at", "go into", "cover"], "note": "as in 'let's dive into X'" },
+    { "phrase": "deep-dive", "replacements": ["close look", "detailed examination"], "note": "as a verb. Noun form 'a deep dive into X' is acceptable." },
+    { "phrase": "embark", "replacements": ["start", "begin"], "note": "almost never the right verb in technical writing" },
+    { "phrase": "tapestry", "replacements": ["mix", "set", "range", "combination"] },
+    { "phrase": "robust", "replacements": ["strong", "reliable", "well-tested", "solid"], "note": "overused; pick the specific quality you mean." },
+    { "phrase": "seamless", "replacements": ["smooth", "uninterrupted", "without friction"] },
+    { "phrase": "seamlessly", "replacements": ["smoothly", "without manual steps", "without breakage"] },
+    { "phrase": "navigate the landscape", "replacements": ["work in this space", "operate in this market", "find your way"] },
+    { "phrase": "the landscape", "replacements": ["the space", "the market", "the field"], "note": "specifically as in 'the X landscape'" },
+    { "phrase": "multifaceted", "replacements": ["complex", "with several dimensions", "multi-part"] },
+    { "phrase": "harness the power of", "replacements": ["use", "apply"], "note": "always" },
+    { "phrase": "unleash the power of", "replacements": ["use", "fully apply"] },
+    { "phrase": "elevate", "replacements": ["raise", "improve", "lift"], "note": "as a marketing verb; 'elevate the table' is fine." },
+    { "phrase": "foster", "replacements": ["grow", "build", "encourage", "enable"] },
+    { "phrase": "crucial", "replacements": ["important", "necessary", "central"], "note": "not always wrong but heavily overused" },
+    { "phrase": "pivotal", "replacements": ["important", "central", "decisive"] },
+    { "phrase": "ever-evolving", "replacements": ["changing", "still developing"] },
+    { "phrase": "ever-changing", "replacements": ["changing", "still developing"] },
+    { "phrase": "in the realm of", "replacements": ["in", "for", "with"] },
+    { "phrase": "the realm of", "replacements": ["the area of", "the field of"] },
+    { "phrase": "navigating", "replacements": ["working through", "handling", "dealing with"], "note": "as a metaphor; literal navigation is fine" },
+    { "phrase": "intricacies", "replacements": ["details", "nuances", "specifics"] },
+    { "phrase": "myriad", "replacements": ["many", "a wide range of", "lots of"] },
+    { "phrase": "plethora", "replacements": ["many", "a lot of"] },
+    { "phrase": "the world of", "replacements": ["the space of", "the field of"], "note": "as in 'in the world of crypto'" },
+    { "phrase": "stand the test of time", "replacements": ["last", "endure"] }
+  ],
+
+  "ai_intro_patterns": [
+    { "phrase": "have you ever wondered", "replacements": [""], "note": "delete the sentence entirely; it's almost never load-bearing" },
+    { "phrase": "imagine", "replacements": ["picture", ""], "note": "as in 'Imagine you're a developer who...' — usually deletable" },
+    { "phrase": "let's dive in", "replacements": ["let's start", "here's what's happening"] },
+    { "phrase": "let's get started", "replacements": ["here's how", "here's what to do"] },
+    { "phrase": "in this article", "replacements": ["below", "here", ""], "note": "delete; the article doesn't need to remind the reader they're in an article" },
+    { "phrase": "in this post", "replacements": ["here", "below", ""] },
+    { "phrase": "in this guide", "replacements": ["here", ""] },
+    { "phrase": "without further ado", "replacements": [""], "note": "always delete" }
+  ],
+
+  "ai_closing_patterns": [
+    { "phrase": "in conclusion", "replacements": ["", "finally", "to summarise"], "note": "usually deletable; the section header 'Conclusion' or last paragraph stands alone" },
+    { "phrase": "to wrap up", "replacements": ["", "finally"] },
+    { "phrase": "stay tuned", "replacements": ["more soon", "watch this space", ""] },
+    { "phrase": "the journey", "replacements": ["the work", "the process"] },
+    { "phrase": "embark on this journey", "replacements": ["start this work", "begin"] }
+  ],
+
+  "weak_intensifiers": [
+    { "phrase": "very", "replacements": [""], "note": "almost always deletable; the noun should carry the weight" },
+    { "phrase": "really", "replacements": [""], "note": "same as 'very'" },
+    { "phrase": "absolutely", "replacements": [""] },
+    { "phrase": "quite", "replacements": [""] },
+    { "phrase": "rather", "replacements": [""], "note": "as an intensifier ('rather large'); 'rather than' is fine" },
+    { "phrase": "literally", "replacements": [""], "note": "almost always wrong; if literal, the surrounding text shows it" }
+  ],
+
+  "_runtime_notes": {
+    "match_mode": "case-insensitive substring with word-boundary-aware behavior. Implementations should match `\\b<phrase>\\b` to avoid partial-word hits (e.g. 'leverage' shouldn't match 'leverages' across word boundary unless the phrase is registered as 'leverages' — register both forms when conjugation matters).",
+    "replacement_strategy": "try each replacement in order. Pick the first that fits grammatically. If none fit, rewrite the surrounding sentence to remove the phrase entirely. Empty-string replacement means 'delete and check sentence still parses'.",
+    "scope": "applies to body prose. Skip code blocks, frontmatter, and direct quotes (a quoted source said 'leverage' is part of the source's voice, not the author's). The scrubber should detect ``` fences and \" \" / ' ' quote pairs surrounding ≥ 6 words and skip those regions."
+  }
+}

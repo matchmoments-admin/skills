@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate skills
+        run: python3 scripts/validate_skills.py
+
+      - name: Verify install scripts are executable
+        run: |
+          test -x scripts/install.sh
+          test -x scripts/uninstall.sh
+          test -x scripts/update.sh
+          test -x scripts/validate_skills.py
+
+      - name: Dry-run install (verifies the script parses + would do the right thing)
+        run: |
+          mkdir -p /tmp/test-skills-dest
+          CLAUDE_SKILLS_DIR=/tmp/test-skills-dest ./scripts/install.sh --dry-run

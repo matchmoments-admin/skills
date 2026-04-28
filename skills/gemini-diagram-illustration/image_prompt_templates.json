@@ -1,0 +1,53 @@
+{
+  "$schema_note": "Each template defines a style suffix that is appended to the per-segment subject prompt. aspect_ratio + image_size are passed straight to mcp__gemini__gemini-generate-image. negative_terms are appended in the form 'No <term>.' to discourage drift.",
+
+  "sketch": {
+    "_description": "Hand-drawn ink-on-paper sketch — the default for illustrated blog diagrams. Cohesive across multiple segments, prints well, reads at any size.",
+    "model_hint": "gemini image generation (any current Gemini model with image output)",
+    "prompt_suffix": "Hand-drawn sketch in black ink on cream paper. Loose, confident linework with cross-hatching for shadows. Naive perspective with slightly wonky lines, like a pencil-and-pen note in a notebook. Single subject, centered in frame, with a clear silhouette. White or warm cream background. Black ink only — no other colors.",
+    "aspect_ratio": "1:1",
+    "image_size": "1K",
+    "negative_terms": ["photorealistic", "vector", "smooth gradients", "3D render", "logo", "watermark", "text overlay", "borders", "frames"],
+    "good_for": ["explainer blog posts", "process diagrams", "narrative flowcharts", "video thumbnails"]
+  },
+
+  "flat-illustration": {
+    "_description": "Clean flat vector illustration — Storyset / Freepik adjacent. Use when you want a SaaS-website hero feel rather than a hand-drawn one.",
+    "model_hint": "gemini image generation",
+    "prompt_suffix": "Flat vector illustration with no outlines. Faceless characters if humans appear. Limited palette: deep navy and slate primaries with one accent color (terracotta or teal). Geometric shapes, generous whitespace, no shadows or gradients. Single subject, centered, clean silhouette. Modern, friendly, professional — like a SaaS landing-page illustration.",
+    "aspect_ratio": "1:1",
+    "image_size": "1K",
+    "negative_terms": ["photorealistic", "hand-drawn", "sketchy", "rough textures", "cross-hatching", "ink", "watermark"],
+    "good_for": ["product diagrams", "feature explainers", "marketing pages"]
+  },
+
+  "watercolor": {
+    "_description": "Soft watercolor washes for warm, editorial blog feel. Pairs with the warm-editorial palette in the excalidraw-diagram skill.",
+    "model_hint": "gemini image generation",
+    "prompt_suffix": "Soft watercolor illustration with warm earth tones — terracotta, ochre, cream, deep navy accents. Gentle washes, slightly translucent, paper texture visible. Loose painterly style, deckle edges if framed. Single subject, centered. Cream or off-white background. No hard outlines.",
+    "aspect_ratio": "4:3",
+    "image_size": "2K",
+    "negative_terms": ["photorealistic", "vector", "sharp lines", "digital", "neon", "cyberpunk"],
+    "good_for": ["personal essays", "founder-story posts", "warm-editorial blog series"]
+  },
+
+  "blueprint": {
+    "_description": "White-line-on-blue technical blueprint look — for architecture or engineering write-ups where you want a 'schematic' feel rather than narrative warmth.",
+    "model_hint": "gemini image generation",
+    "prompt_suffix": "Technical blueprint illustration: white linework on a deep blue paper background. Precise, schematic, slightly faded lines as if photocopied. Annotations and arrows in the same white ink. Subject rendered as if in an exploded technical diagram or architectural drawing. Single subject, centered, clear silhouette. No color other than white-on-blue.",
+    "aspect_ratio": "4:3",
+    "image_size": "1K",
+    "negative_terms": ["photorealistic", "watercolor", "warm tones", "natural lighting", "color"],
+    "good_for": ["architecture posts", "infra deep-dives", "system-design write-ups"]
+  },
+
+  "isometric": {
+    "_description": "Isometric flat-3D scenes — good for system maps where multiple objects need to coexist and the viewer wants to see how they relate spatially.",
+    "model_hint": "gemini image generation",
+    "prompt_suffix": "Isometric flat 3D illustration. 30-degree projection. Faceless characters and stylised objects, no outlines, soft drop shadows. Limited palette of navy, slate, and one accent color. Subject(s) arranged on a small stage or floating platform with generous whitespace around. Clean, friendly, professional.",
+    "aspect_ratio": "1:1",
+    "image_size": "1K",
+    "negative_terms": ["photorealistic", "hand-drawn", "ink", "sketchy"],
+    "good_for": ["architecture overviews", "multi-system diagrams", "platform maps"]
+  }
+}

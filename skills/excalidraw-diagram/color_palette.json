@@ -1,0 +1,63 @@
+{
+  "$schema_note": "Each palette must define bg, primary, accent, muted, text. Optional: safe, warn, danger, surface, surface_alt. All values are hex strings.",
+
+  "ask-arthur": {
+    "_description": "Ask Arthur brand palette — deep navy primary, action teal accent, warm slate text. Sourced from apps/web/app/globals.css.",
+    "bg": "#ffffff",
+    "surface": "#ecfdf5",
+    "surface_alt": "#fff8e1",
+    "primary": "#001f3f",
+    "accent": "#008a98",
+    "muted": "#42526e",
+    "text": "#171717",
+    "safe": "#059669",
+    "warn": "#d97706",
+    "danger": "#d32f2f",
+    "border": "#e2e8f0"
+  },
+
+  "ask-arthur-dark": {
+    "_description": "Inverted Ask Arthur palette for dark-mode diagrams or hero blog images on dark backgrounds.",
+    "bg": "#001f3f",
+    "surface": "#002b45",
+    "surface_alt": "#06314f",
+    "primary": "#ecfdf5",
+    "accent": "#0d9488",
+    "muted": "#94a3b8",
+    "text": "#ffffff",
+    "safe": "#a7f3d0",
+    "warn": "#ffe082",
+    "danger": "#fecaca",
+    "border": "#42526e"
+  },
+
+  "neutral": {
+    "_description": "Generic monochrome fallback when the diagram doesn't belong to a specific brand context (internal docs, scratch).",
+    "bg": "#ffffff",
+    "surface": "#f8fafc",
+    "surface_alt": "#f1f5f9",
+    "primary": "#0f172a",
+    "accent": "#2563eb",
+    "muted": "#64748b",
+    "text": "#0f172a",
+    "safe": "#16a34a",
+    "warn": "#d97706",
+    "danger": "#dc2626",
+    "border": "#cbd5e1"
+  },
+
+  "warm-editorial": {
+    "_description": "Cream + deep navy + accent terracotta — matches the ask-arthur-warm-editorial illustration style for blog posts that already use those visuals.",
+    "bg": "#fdf6ec",
+    "surface": "#f5e9d3",
+    "surface_alt": "#ead8b8",
+    "primary": "#1c2541",
+    "accent": "#c1502e",
+    "muted": "#5a6b7e",
+    "text": "#1c2541",
+    "safe": "#3a7d44",
+    "warn": "#c1872b",
+    "danger": "#a83232",
+    "border": "#d8c8a8"
+  }
+}

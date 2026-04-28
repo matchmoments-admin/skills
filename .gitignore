@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Per-user state created by skills at runtime
+skills/blog/.active-persona
+
+# Backup files created by install.sh when conflicts exist
+*.bak
+*.bak.*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Test artefacts
+diagrams/
+distribution/
