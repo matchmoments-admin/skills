@@ -11,6 +11,7 @@ Project-agnostic. Install once on any machine, use across every project.
 | `excalidraw-diagram`           | Generate clean shape-and-arrow diagrams as `.excalidraw` JSON. Pattern library (linear flow, multi-room, comparison, evidence, circular, 2×2). Free, fast.         |
 | `gemini-diagram-illustration`  | Generate illustrated diagrams: parses content into 3–7 visual beats, fans out parallel Gemini image-gen calls, bakes images as base64 into one self-contained `.excalidraw`. |
 | `blog`                         | End-to-end blog workflow with subcommands `plan / persona / outline / brief / write / audit / rewrite / repurpose`. Persona-driven voice modeled on popular bloggers. |
+| `slide-deck`                   | Zero-dependency, animation-rich HTML presentations on a fixed 1920×1080 stage. "Show, don't tell" style discovery (3 visual previews → pick), 12 curated presets + an Ask Arthur brand preset, PPT→web conversion, Vercel deploy + PDF export. |
 
 ## Install
 
@@ -119,6 +120,8 @@ The `blog` skill borrows its persona-framework idea, AI-phrase scrubbing approac
 The `gemini-diagram-illustration` skill is inspired by Adam Goodyer's Gemini-Diagram-Illustration approach, with the renderer swapped from Playwright (browser-based) to a base64-embed pipeline that uses the existing Gemini MCP tools.
 
 The `excalidraw-diagram` skill's render → critique → edit loop is inspired by Cole Medin's Excalidraw Skill workflow, with the Python renderer swapped from a browser-based approach to a dependency-free Pillow port.
+
+The `slide-deck` skill is vendored and adapted from [zarazhangrui/frontend-slides](https://github.com/zarazhangrui/frontend-slides) (MIT-licensed). This copy trims the upstream 34-template "bold pack" down to the core system (12 presets + the mandatory fixed-stage CSS, HTML template, animation reference, and PPT/deploy/export scripts) and adds an Ask Arthur brand preset. The upstream bold pack can be re-added later under `skills/slide-deck/bold-template-pack/` without changing the orchestrator's core flow.
 
 ## License
 
