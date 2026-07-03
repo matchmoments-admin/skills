@@ -12,6 +12,7 @@ Project-agnostic. Install once on any machine, use across every project.
 | `gemini-diagram-illustration`  | Generate illustrated diagrams: parses content into 3–7 visual beats, fans out parallel Gemini image-gen calls, bakes images as base64 into one self-contained `.excalidraw`. |
 | `blog`                         | End-to-end blog workflow with subcommands `plan / persona / outline / brief / write / audit / rewrite / repurpose`. Persona-driven voice modeled on popular bloggers. |
 | `slide-deck`                   | Zero-dependency, animation-rich HTML presentations on a fixed 1920×1080 stage. "Show, don't tell" style discovery (3 visual previews → pick), 12 curated presets + an Ask Arthur brand preset, PPT→web conversion, Vercel deploy + PDF export. |
+| `pitch`                        | Generate/refresh the concise (~7-slide) Ask Arthur platform brief in the "Signal" editorial style (Source Serif 4 + gold-italic emphasis, navy/cream dual surface). Ask-Arthur-specific companion to `slide-deck`; facts in `pitch/content.md`. |
 
 ## Install
 
@@ -122,6 +123,8 @@ The `gemini-diagram-illustration` skill is inspired by Adam Goodyer's Gemini-Dia
 The `excalidraw-diagram` skill's render → critique → edit loop is inspired by Cole Medin's Excalidraw Skill workflow, with the Python renderer swapped from a browser-based approach to a dependency-free Pillow port.
 
 The `slide-deck` skill is vendored and adapted from [zarazhangrui/frontend-slides](https://github.com/zarazhangrui/frontend-slides) (MIT-licensed). This copy trims the upstream 34-template "bold pack" down to the core system (12 presets + the mandatory fixed-stage CSS, HTML template, animation reference, and PPT/deploy/export scripts) and adds an Ask Arthur brand preset. The upstream bold pack can be re-added later under `skills/slide-deck/bold-template-pack/` without changing the orchestrator's core flow.
+
+The `pitch` skill applies one template from that same MIT-licensed pack — "Signal" (a literary intelligence-briefing style) — to Ask Arthur's content as a concise 7-slide brief. `skills/pitch/signal-design.md` is that template's design doc verbatim; `pitch/content.md` holds the Ask-Arthur-specific narrative and facts. Being brand-specific, it intentionally contains project strings the generic `validate_skills.py` no-leaks check flags (same as the `blog` house-persona files).
 
 ## License
 

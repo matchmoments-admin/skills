@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Ask Arthur — Platform Brief</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400;1,8..60,600&family=DM+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ============================================================
+     ASK ARTHUR — PLATFORM BRIEF (concise pitch)
+     Style: "Signal" — a literary intelligence-briefing system from
+     the frontend-slides bold-template-pack (MIT). Source Serif 4
+     carries every headline with a roman/italic mix mid-sentence in
+     antique gold (the "Signal moment"); DM Sans is the body; IBM
+     Plex Mono is all chrome. Dual surface — deep editorial navy
+     (#1C2644) + warm aged cream (#F0ECE3) — one accent only:
+     antique gold (#C8A870), used on rules, italic emphasis and
+     numerals. Flat + 1px hairlines, no shadows, no rounded corners.
+     A near-invisible 80px grid overlays every dark slide.
+
+     Fixed 1920x1080 stage scaled uniformly to the viewport
+     (letterbox/pillarbox — never reflow). Generated with the local
+     `/pitch` skill.
+     ============================================================ */
+
+  :root{
+    --navy:#1C2644; --cream:#F0ECE3;
+    --warm:#E2DCD0;  --mud:#8A96A8;  --hintd:#4E5A6E;
+    --ink:#1A2030;   --mutl:#5A6270; --hintl:#9AA0A8;
+    --gold:#C8A870;  --bd:#2E3D5C;   --bl:#CAC4B4;
+    --serif:'Source Serif 4', Georgia, serif;
+    --sans:'DM Sans', system-ui, sans-serif;
+    --mono:'IBM Plex Mono', monospace;
+  }
+
+  /* === FIXED 16:9 STAGE === */
+  html,body{margin:0;height:100%;overflow:hidden;background:#1C2644;transition:background .35s ease;}
+  *{box-sizing:border-box;}
+  .deck-viewport{position:fixed;inset:0;overflow:hidden;}
+  .deck-stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;}
+  .s{position:absolute;inset:0;width:1920px;height:1080px;overflow:hidden;visibility:hidden;opacity:0;
+     background:var(--navy);color:var(--warm);font-family:var(--sans);
+     display:flex;flex-direction:column;padding:88px 144px;}
+  .s.active{visibility:visible;opacity:1;}
+  .s.cream{background:var(--cream);color:var(--ink);}
+
+  /* 80px grid fingerprint — dark slides only */
+  .s:not(.cream)::before{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;
+    background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);
+    background-size:80px 80px;}
+  .s > *{position:relative;z-index:1;}
+
+  /* === CHROME (standard slides) === */
+  .chrome{display:flex;justify-content:space-between;align-items:baseline;
+    font-family:var(--mono);font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:var(--hintd);
+    border-bottom:1px solid var(--bd);padding-bottom:14px;margin-bottom:40px;}
+  .cream .chrome{color:var(--hintl);border-color:var(--bl);}
+  .foot{display:flex;justify-content:space-between;align-items:baseline;
+    font-family:var(--mono);font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:var(--hintd);
+    border-top:1px solid var(--bd);padding-top:14px;margin-top:40px;}
+  .cream .foot{color:var(--hintl);border-color:var(--bl);}
+  .body{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;}
+
+  /* === KICKER + GOLD RULE === */
+  .kick{font-family:var(--mono);font-size:13px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);}
+  .grule{width:36px;height:1px;background:var(--gold);margin-bottom:20px;}
+
+  /* === TYPE === */
+  h1,h2{font-family:var(--serif);font-weight:600;margin:0;letter-spacing:-.01em;color:inherit;}
+  .display{font-family:var(--serif);font-weight:700;font-size:150px;line-height:.96;letter-spacing:-.02em;margin:0;}
+  .h1{font-size:96px;line-height:1.06;}
+  .h2{font-size:60px;line-height:1.12;}
+  .quote{font-family:var(--serif);font-weight:400;font-size:74px;line-height:1.26;letter-spacing:-.01em;margin:0;}
+  em{font-family:var(--serif);font-style:italic;color:var(--gold);font-weight:inherit;}
+  .lead{font-family:var(--sans);font-weight:400;font-size:27px;line-height:1.55;color:var(--mud);max-width:1180px;}
+  .cream .lead{color:var(--mutl);}
+  .lead em{font-style:italic;}
+
+  /* === EM-DASH BULLET LIST === */
+  .dash{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:16px;}
+  .dash li{display:grid;grid-template-columns:24px 1fr;font-family:var(--sans);font-size:22px;line-height:1.4;color:var(--warm);}
+  .cream .dash li{color:var(--ink);}
+  .dash li::before{content:"—";font-family:var(--mono);color:var(--gold);}
+
+  /* === STAT TILE === */
+  .stat{border-top:1px solid var(--bd);padding-top:20px;}
+  .cream .stat{border-color:var(--bl);}
+  .stat .num{font-family:var(--serif);font-weight:600;font-size:88px;line-height:1;letter-spacing:-.02em;color:var(--gold);}
+  .stat .cap{font-family:var(--sans);font-size:19px;line-height:1.35;color:var(--mud);margin-top:12px;max-width:320px;}
+  .cream .stat .cap{color:var(--mutl);}
+  .stat .note{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--hintd);margin-top:10px;}
+  .cream .stat .note{color:var(--hintl);}
+
+  /* column divider */
+  .divider{border-left:1px solid var(--bd);}
+  .cream .divider{border-color:var(--bl);}
+
+  /* links */
+  .deck-stage a{color:inherit;text-decoration:none;}
+  .cta-link{border-bottom:1px solid rgba(200,168,112,.45);transition:border-color .2s,color .2s;cursor:pointer;}
+  .cta-link:hover{border-color:var(--gold);color:var(--gold);}
+
+  /* === REVEAL (transform-only; static capture stays legible) === */
+  .r,.r2,.r3,.r4{opacity:1;}
+  @keyframes drf{from{transform:translateY(20px);}to{transform:translateY(0);}}
+  @media (prefers-reduced-motion:no-preference){
+    [data-active] .r{animation:drf .55s cubic-bezier(.16,1,.3,1) both;}
+    [data-active] .r2{animation:drf .6s .08s cubic-bezier(.16,1,.3,1) both;}
+    [data-active] .r3{animation:drf .65s .16s cubic-bezier(.16,1,.3,1) both;}
+    [data-active] .r4{animation:drf .7s .24s cubic-bezier(.16,1,.3,1) both;}
+  }
+
+  /* === CHROME OUTSIDE STAGE === */
+  #nav{position:fixed;right:16px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:9px;z-index:50;background:rgba(120,135,160,.16);backdrop-filter:blur(8px);padding:12px 9px;border-radius:22px;}
+  .dot{width:9px;height:9px;border-radius:50%;background:rgba(120,135,160,.5);cursor:pointer;transition:all .25s;border:0;padding:0;}
+  .dot.active{background:var(--gold);transform:scale(1.4);}
+  #hint{position:fixed;top:14px;right:14px;z-index:50;font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:#8A96A8;background:rgba(120,135,160,.12);padding:6px 12px;border-radius:8px;}
+  @media (max-width:700px){#hint{display:none;}#nav{right:8px;padding:9px 7px;}}
+
+  @media print{
+    html,body{overflow:visible;background:#fff;height:auto;}
+    .deck-viewport{position:static;overflow:visible;}
+    .deck-stage{position:static;width:1920px;height:auto;transform:none !important;}
+    .s{position:relative;visibility:visible !important;opacity:1 !important;break-after:page;page-break-after:always;}
+    .s:last-child{break-after:auto;page-break-after:auto;}
+    #nav,#hint{display:none !important;}
+  }
+</style>
+</head>
+<body>
+<div class="deck-viewport">
+<div class="deck-stage" id="stage">
+
+<!-- ============ 01 · COVER (navy, chromeless) ============ -->
+<section class="s" data-label="Cover" data-speaker-notes="Ask Arthur: Australia's scam detection and intelligence platform. Free for everyone, and the upstream intelligence that helps banks, telcos and platforms stop scams at the source.">
+  <div class="r" style="display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono);font-size:15px;letter-spacing:.24em;text-transform:uppercase;">
+    <span style="color:var(--warm);">Ask Arthur</span>
+    <span style="color:var(--hintd);">Platform Brief / 2026</span>
+  </div>
+  <div class="body">
+    <div class="grule r2"></div>
+    <div class="kick r2" style="margin-bottom:34px;">Australia's scam detection &amp; intelligence platform</div>
+    <h1 class="display r3">Stop scams where<br>they <em>start.</em></h1>
+    <p class="lead r4" style="margin:40px 0 0;">Free, instant AI scam-checking for everyone — and the upstream URL, domain and brand-impersonation intelligence that helps banks, telcos and platforms stop scams at the source.</p>
+  </div>
+  <div class="r4" style="display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono);font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:var(--hintd);border-top:1px solid var(--bd);padding-top:16px;">
+    <span>askarthur.au</span><span>A confidential platform brief</span>
+  </div>
+</section>
+
+<!-- ============ 02 · THE PROBLEM (cream) ============ -->
+<section class="s cream" data-label="The Problem" data-speaker-notes="Banks watch transactions, telcos block calls — but nobody systematically watches the origination layer where scams are born. That's the only place a scam can be stopped before a victim sees it. A$2.18B is lost to scams in Australia each year.">
+  <div class="chrome"><span>The problem</span><span>02 / 07</span></div>
+  <div class="body">
+    <div class="grule"></div>
+    <div class="kick r" style="margin-bottom:24px;">The origination layer</div>
+    <h2 class="h1 r">No one watches where<br>scams are <em>born.</em></h2>
+    <p class="lead r2" style="margin:34px 0 0;">Banks monitor transactions. Telcos block calls. But the look-alike domains, phishing sites and fake shops where scams <em>originate</em> go unwatched — the one layer where a scam can be stopped before a victim ever sees it.</p>
+    <div class="stat r3" style="margin-top:56px;max-width:520px;">
+      <div class="num">A$2.18B</div>
+      <div class="cap">Lost to scams in Australia every year — the problem Ask Arthur is built to shrink at the source.</div>
+    </div>
+  </div>
+  <div class="foot"><span>askarthur.au</span><span>Stop scams at the source</span></div>
+</section>
+
+<!-- ============ 03 · WHAT IT IS (navy) ============ -->
+<section class="s" data-label="What it is" data-speaker-notes="One free consumer checker anyone can use through any channel, and one growing intelligence engine. Every PII-scrubbed check enriches a threat corpus that powers brand protection and a B2B API.">
+  <div class="chrome"><span>What it is</span><span>03 / 07</span></div>
+  <div class="body">
+    <div class="grule r"></div>
+    <div class="kick r" style="margin-bottom:24px;">The platform</div>
+    <h2 class="h2 r">One free checker. One compounding<br><em>intelligence engine.</em></h2>
+    <div class="r2" style="display:grid;grid-template-columns:1fr 1fr;gap:0;margin-top:56px;">
+      <div style="padding-right:64px;">
+        <div class="kick" style="margin-bottom:22px;">Consumer · Free</div>
+        <ul class="dash">
+          <li>Check text, links, screenshots, QR codes &amp; emails</li>
+          <li>Instant verdict — SAFE · SUSPICIOUS · HIGH_RISK</li>
+          <li>Across web, bots, browser extension &amp; mobile</li>
+        </ul>
+      </div>
+      <div class="divider" style="padding-left:64px;">
+        <div class="kick" style="margin-bottom:22px;">Intelligence · Compounding</div>
+        <ul class="dash">
+          <li>20+ automated AU &amp; global threat feeds</li>
+          <li>Clone &amp; brand-impersonation monitoring for AU brands</li>
+          <li>B2B Threat Intelligence API for regulated entities</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>askarthur.au</span><span>Consumer product · Intelligence engine</span></div>
+</section>
+
+<!-- ============ 04 · THE MOAT (cream, statement) ============ -->
+<section class="s cream" data-label="The moat" data-speaker-notes="The flywheel and data moat: every PII-scrubbed check feeds a uniquely Australian, real-time scam corpus that gets more valuable with every report and every feed.">
+  <div class="body" style="justify-content:center;">
+    <div class="grule r"></div>
+    <div class="kick r" style="margin-bottom:30px;">Why it compounds</div>
+    <p class="quote r2" style="max-width:1380px;">Every check makes the<br>next one <em>smarter.</em></p>
+    <p class="lead r3" style="margin:44px 0 0;max-width:1200px;">More people checking means richer threat intelligence, which means better protection for everyone. Every PII-scrubbed check feeds a uniquely Australian, real-time scam corpus — a <em>data moat</em> that widens with every report and every feed.</p>
+  </div>
+</section>
+
+<!-- ============ 05 · PROOF (navy) ============ -->
+<section class="s" data-label="Built & operating" data-speaker-notes="A production platform, not a prototype: 20+ live feeds daily, 6+ consumer channels, under a tenth of a cent per check at ~95% gross margin, and the first live brand notification to a major Australian bank sent in May 2026.">
+  <div class="chrome"><span>Built &amp; operating</span><span>05 / 07</span></div>
+  <div class="body">
+    <div class="grule r"></div>
+    <div class="kick r" style="margin-bottom:24px;">Proof</div>
+    <h2 class="h2 r">A production platform,<br><em>not a prototype.</em></h2>
+    <div class="r2" style="display:grid;grid-template-columns:repeat(4,1fr);gap:40px;margin-top:60px;">
+      <div class="stat"><div class="num">20+</div><div class="cap">Live threat feeds — automated, daily</div></div>
+      <div class="stat"><div class="num">6+</div><div class="cap">Consumer channels — web, bots, extension, mobile</div></div>
+      <div class="stat"><div class="num">&lt;$0.001</div><div class="cap">Per AI check — ~95% gross margin at scale</div></div>
+      <div class="stat"><div class="num">May 2026</div><div class="cap">First live brand alert — to a major Australian bank</div></div>
+    </div>
+  </div>
+  <div class="foot"><span>askarthur.au</span><span>Most capabilities already built — the roadmap is sequencing, not invention</span></div>
+</section>
+
+<!-- ============ 06 · THE CLOCK / SPF (cream) ============ -->
+<section class="s cream" data-label="SPF deadline" data-speaker-notes="The SPF Act obliges 200+ banks, telcos and platforms to Prevent, Detect, Disrupt and Report scams by 1 July 2026, with penalties up to A$52.7M per obligation. Ask Arthur maps directly to all four.">
+  <div class="chrome"><span>Scams Prevention Framework</span><span>06 / 07</span></div>
+  <div class="body">
+    <div class="grule r"></div>
+    <div class="kick r" style="margin-bottom:24px;">The clock</div>
+    <h2 class="h1 r">Built for the 1 July 2026<br><em>deadline.</em></h2>
+    <p class="lead r2" style="margin:34px 0 0;">The SPF Act obliges 200+ banks, telcos and digital platforms to <em>Prevent · Detect · Disrupt · Report</em> scams. Ask Arthur maps directly to all four obligations — and ships a free in-product SPF self-assessment any organisation can run today.</p>
+    <div class="stat r3" style="margin-top:52px;max-width:520px;">
+      <div class="num">A$52.7M</div>
+      <div class="cap">Maximum penalty per obligation under the SPF Act.</div>
+      <div class="note">Royal Assent Feb 2025 · in force 1 Jul 2026</div>
+    </div>
+  </div>
+  <div class="foot"><span>askarthur.au</span><span>Prevent · Detect · Disrupt · Report</span></div>
+</section>
+
+<!-- ============ 07 · WORK WITH US (navy, chromeless) ============ -->
+<section class="s" data-label="Work with us" data-speaker-notes="Whether you're a regulated entity preparing for the SPF deadline, a brand worried about impersonation, or a distribution partner — there's a way to work together. Today: try the free checker, run the SPF self-assessment, request a B2B API pilot, or add your brand to clone-watch.">
+  <div class="body" style="justify-content:center;">
+    <div class="grule r"></div>
+    <div class="kick r" style="margin-bottom:30px;">Work with us</div>
+    <h2 class="h1 r2">Let's stop scams<br>at the <em>source.</em></h2>
+    <ul class="dash r3" style="margin-top:44px;gap:18px;font-size:24px;">
+      <li><a class="cta-link" href="https://askarthur.au/" target="_blank" rel="noopener">Try the free scam checker at askarthur.au</a></li>
+      <li><a class="cta-link" href="https://askarthur.au/spf-assessment" target="_blank" rel="noopener">Run the free SPF / DMARC / DKIM self-assessment</a></li>
+      <li><a class="cta-link" href="https://askarthur.au/contact" target="_blank" rel="noopener">Request a B2B Threat Intelligence API pilot</a></li>
+      <li><a class="cta-link" href="https://askarthur.au/clone-watch" target="_blank" rel="noopener">Add your brand's domains to clone-watch</a></li>
+    </ul>
+  </div>
+  <div class="r4" style="display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono);font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--hintd);border-top:1px solid var(--bd);padding-top:18px;">
+    <span style="color:var(--warm);">askarthur.au</span>
+    <a class="cta-link" href="mailto:brendan@askarthur.au" style="color:var(--mud);text-transform:none;letter-spacing:.04em;font-size:16px;">brendan@askarthur.au</a>
+  </div>
+</section>
+
+</div><!-- /deck-stage -->
+</div><!-- /deck-viewport -->
+<div id="nav"></div>
+<div id="hint">← → or click to navigate</div>
+
+<script>
+  /* Fixed 16:9 stage controller — scale whole stage, one slide at a
+     time, page bg follows the active slide's surface (navy/cream). */
+  var stage=document.getElementById('stage');
+  var slides=[].slice.call(document.querySelectorAll('.s'));
+  var nav=document.getElementById('nav');
+  var cur=0;
+  var bgs=slides.map(function(s){return s.classList.contains('cream')?'#F0ECE3':'#1C2644';});
+
+  function fit(){
+    var f=Math.min(window.innerWidth/1920, window.innerHeight/1080);
+    var x=(window.innerWidth-1920*f)/2, y=(window.innerHeight-1080*f)/2;
+    stage.style.transform='translate('+x+'px,'+y+'px) scale('+f+')';
+  }
+  window.addEventListener('resize',fit); fit();
+
+  slides.forEach(function(s,i){
+    var b=document.createElement('button');
+    b.className='dot'+(i===0?' active':'');
+    b.setAttribute('aria-label','Slide '+(i+1));
+    b.onclick=function(ev){ev.stopPropagation();go(i);};
+    nav.appendChild(b);
+  });
+
+  function go(n){
+    slides[cur].classList.remove('active');slides[cur].removeAttribute('data-active');
+    nav.children[cur].classList.remove('active');
+    cur=Math.max(0,Math.min(n,slides.length-1));
+    var el=slides[cur];
+    el.classList.add('active');
+    void el.offsetWidth;
+    el.setAttribute('data-active','');
+    nav.children[cur].classList.add('active');
+    document.documentElement.style.background=bgs[cur];
+    document.body.style.background=bgs[cur];
+  }
+
+  document.addEventListener('keydown',function(e){
+    if(e.key==='ArrowRight'||e.key==='ArrowDown'||e.key===' '){e.preventDefault();go(cur+1);}
+    else if(e.key==='ArrowLeft'||e.key==='ArrowUp'){e.preventDefault();go(cur-1);}
+    else if(e.key==='Home'){go(0);} else if(e.key==='End'){go(slides.length-1);}
+  });
+
+  document.querySelector('.deck-viewport').addEventListener('click',function(e){
+    if(e.target.closest('a'))return;
+    if(e.clientX < window.innerWidth/3) go(cur-1); else go(cur+1);
+  });
+
+  var tx=0;
+  document.addEventListener('touchstart',function(e){tx=e.changedTouches[0].clientX;},{passive:true});
+  document.addEventListener('touchend',function(e){
+    var dx=e.changedTouches[0].clientX-tx;
+    if(Math.abs(dx)>50){ if(dx<0) go(cur+1); else go(cur-1); }
+  },{passive:true});
+
+  go(0);
+</script>
+</body>
+</html>
