@@ -26,9 +26,17 @@ Each category is 0–N where N is its weight. Score is the sum.
 
 ## Workflow
 
-### 1. Read the post
+### 1. Read the post + run the metrics script
 
 Detect format from extension. Strip frontmatter and treat the body as the audit target.
+
+Then shell out to the deterministic metrics script and parse its JSON output:
+
+```bash
+python3 ~/.claude/skills/blog/scripts/audit_metrics.py <post-path> [--persona <name>]
+```
+
+The JSON contains: `word_count`, `sentence_length_mean`, `sentence_length_std`, `burstiness`, `type_token_ratio`, `ai_phrase_hits`, `ai_phrase_detail` (list of `{phrase, position}`), `paragraph_lengths`, `paragraph_max_words`, `paragraph_violations` (count > 150 words), `contraction_freq`, `reading_grade` (Flesch-Kincaid), `forbidden_phrase_hits`, `forbidden_phrase_detail`. Use these values verbatim — do not re-estimate.
 
 ### 2. Run each category check
 
@@ -36,11 +44,13 @@ Implementation notes for each are in `references/quality-scoring.md`. Summary of
 
 #### Content Quality (30)
 
-- **Burstiness** (sentence-length std-dev): ≥ 6 → 6 pts, 4–6 → 3 pts, < 4 → 0 pts (reads as AI).
-- **Type-Token Ratio** (unique words / total words): ≥ 0.50 → 6 pts, 0.40–0.49 → 3 pts, < 0.40 → 0 pts.
-- **AI-phrase density** (matches against `references/ai-phrase-scrubber.json`): 0 → 6 pts, 1–3 → 3 pts, 4+ → 0 pts.
-- **Paragraph length distribution** (no paragraph > 150 words; mix of short + long): all-pass → 6 pts, 1 violation → 3, 2+ → 0.
-- **Original data / experience present**: ≥ 1 first-person experience marker AND ≥ 1 original-data callout → 6 pts, one or the other → 3, neither → 0.
+Map directly from the metrics-script JSON. The LLM does not re-compute these.
+
+- **Burstiness** (`burstiness`): ≥ 6 → 6 pts, 4–6 → 3 pts, < 4 → 0 pts (reads as AI).
+- **Type-Token Ratio** (`type_token_ratio`): ≥ 0.50 → 6 pts, 0.40–0.49 → 3 pts, < 0.40 → 0 pts.
+- **AI-phrase density** (`ai_phrase_hits`): 0 → 6 pts, 1–3 → 3 pts, 4+ → 0 pts. The `ai_phrase_detail` list is what gets dropped into the punch list — quote the offending phrases verbatim.
+- **Paragraph length distribution** (`paragraph_violations` = count of paragraphs > 150 words): 0 → 6 pts, 1 → 3, 2+ → 0.
+- **Original data / experience present**: LLM judgment — ≥ 1 first-person experience marker AND ≥ 1 original-data callout → 6 pts, one or the other → 3, neither → 0.
 
 #### SEO Optimization (25)
 
@@ -75,19 +85,57 @@ Implementation notes for each are in `references/quality-scoring.md`. Summary of
 
 ### 3. Persona drift (only if `--persona` set)
 
-Compute drift against the named persona's declared targets:
+Pull the persona's declared targets from `personas/<name>.md` YAML frontmatter (`writing.sentence_length_mean`, `writing.sentence_length_std`, `writing.contraction_frequency`, `writing.reading_grade_target`). Compare to the script-produced numbers:
 
-- **Sentence-length mean drift**: |observed - declared| / declared. Report as ±N words.
-- **Sentence-length std drift**: ratio of observed/declared (target ≥ 0.7).
-- **Contraction-frequency drift**: observed - declared.
-- **Reading-grade drift**: ±N grades.
-- **Forbidden-phrase hits**: count of phrases from the persona's `forbidden_phrases[]` found in the post.
-- **Do hits**: which of the persona's "do" rules are visibly applied (heuristic check).
-- **Don't hits**: which of the persona's "don't" rules are violated.
+- **Sentence-length mean drift**: `|sentence_length_mean - declared| / declared`. Report as ±N words.
+- **Sentence-length std drift**: `sentence_length_std / declared` (target ≥ 0.7).
+- **Contraction-frequency drift**: `contraction_freq - declared`.
+- **Reading-grade drift**: `reading_grade - midpoint(reading_grade_target)`. Report as ±N grades; flag if outside the declared range.
+- **Forbidden-phrase hits**: `forbidden_phrase_hits` (the script reads the persona's `forbidden_phrases[]` block when `--persona` is set). The detail list is in `forbidden_phrase_detail`.
+- **Do hits**: which of the persona's "do" rules are visibly applied (LLM heuristic check — script can't measure these).
+- **Don't hits**: which of the persona's "don't" rules are violated (LLM heuristic check).
 
 Persona drift is **not** rolled into the 100-point score — it's reported separately as a "voice fit" verdict (good / acceptable / poor) with the underlying numbers.
 
-### 4. Output
+### 4. Editorial discipline (always runs, binary pass/fail)
+
+Two checks that sit outside the 100-point score because they're discipline gates, not quality dials. A post can score 90/100 and still fail one of these — and if it does, it doesn't ship.
+
+#### 4a. Commercial discipline
+
+Classify the post:
+
+- **Consumer / regulatory**: persona is `troy-hunt` or `krebs-investigative`, OR the post structure matches `references/askarthur-consumer-explainer.md`.
+- **B2B / founder-voice**: persona is `askarthur-house`, `patio11-deep-dive`, `cloudflare-engineering`.
+- **Engineering deep-dive (no commercial intent)**: persona is `dan-luu-analysis`, OR template is `deep-dive` / `post-mortem` / `incident-report` without an explicit launch framing.
+- **Announcement**: template is `announcement`. Different rules apply — skip this check.
+
+Then count product / platform / brand mentions in the post body (case-insensitive substring on the product name; for AskArthur posts that's "Ask Arthur", "AskArthur", "askarthur.au"). Locate the **first "pain section"** (an H2 or paragraph whose first sentence contains "problem", "broken", "what went wrong", "the issue", "this is hard because", or similar — LLM judgment).
+
+| Class | Verdict |
+| --- | --- |
+| Consumer / regulatory, mentions = 0 | ✅ pass |
+| Consumer / regulatory, mentions ≥ 1 | ❌ fail — strip mentions, switch close to reader-action |
+| B2B / founder-voice, mentions = 0 | ✅ pass |
+| B2B / founder-voice, mentions = 1 AND mention is after the pain section | ✅ pass |
+| B2B / founder-voice, mentions = 1 BUT before the pain section | ❌ fail — move the mention down |
+| B2B / founder-voice, mentions ≥ 2 | ❌ fail — pick one, drop the rest |
+| Engineering deep-dive, mentions ≥ 1 | ❌ fail — either drop the mentions or switch the post class to B2B |
+| Announcement | (skipped) |
+
+#### 4b. CTA shape
+
+Read the closing 1–3 paragraphs.
+
+- **Consumer / regulatory**: must close with a **reader-action**. Acceptable: "report it here", "the three checks to make tonight", "if this happened to you, here's what to do next". Unacceptable: "try our product", "sign up", "get a demo", "get in touch", marketing-style CTAs.
+- **B2B / founder-voice**: must close with the persona's canonical close (e.g. `askarthur-house` uses "if you want to talk about X, here's how" — a low-friction conversation invite, not a sales pitch).
+- **Engineering deep-dive**: should close with reflection ("what we'd change tomorrow", "what's not in this release", a question to the reader), not a CTA at all.
+
+Verdict: ✅ pass if the close fits the post class; ❌ fail otherwise. The fix is always rewriting the closing paragraph, not the body.
+
+Both 4a and 4b roll into a single "Editorial discipline: pass / fail" line in the report. Failures land at the top of the punch list ahead of the scored items — they block ship regardless of score.
+
+### 5. Output
 
 Write the report to `<report-path>` (default `<post>.audit.md`). Format:
 
@@ -95,6 +143,7 @@ Write the report to `<report-path>` (default `<post>.audit.md`). Format:
 # Audit: <slug>
 
 **Score: 78 / 100**
+**Editorial discipline: ❌ FAIL** — 2 product mentions found in a B2B post (one of them before the pain section). Strip one mention and move the other below the "what was hard" H2. Blocks ship until resolved.
 
 | Category              | Score | Notes |
 | --------------------- | ----- | ----- |
@@ -106,6 +155,7 @@ Write the report to `<report-path>` (default `<post>.audit.md`). Format:
 
 ## Punch list (priority order)
 
+0. **🚫 Editorial discipline:** strip duplicate product mention (line 14), move remaining mention below H2 "Where this got hard". Ship-blocking.
 1. Add meta description (150–160 chars, primary keyword).
 2. Source the unsourced numbers in the "phone enrichment" and "feed coverage" sections.
 3. Inject FAQ schema (3 Q&A pairs added at the bottom).
@@ -131,10 +181,11 @@ Write the report to `<report-path>` (default `<post>.audit.md`). Format:
 If you want to run `/blog rewrite <post>` after this, the highest-leverage targets are: items 1, 2, 5 in the punch list. Items 3, 4, 6 can be batched into a follow-up pass if time-constrained.
 ```
 
-### 5. Exit code
+### 6. Exit code
 
-- Score ≥ 85 — exit 0, "ship-ready"
-- Score 70–84 — exit 0, "ship with the punch-list addressed"
+- Editorial discipline FAIL — exit 1, "do not ship — editorial discipline blocks regardless of score"
+- Score ≥ 85 AND editorial discipline PASS — exit 0, "ship-ready"
+- Score 70–84 AND editorial discipline PASS — exit 0, "ship with the punch-list addressed"
 - Score < 70 — exit 1, "do not ship — fix the punch list and re-audit"
 
 The exit code is useful for CI integration, e.g. running audit on every PR that touches `docs/blog/`.
