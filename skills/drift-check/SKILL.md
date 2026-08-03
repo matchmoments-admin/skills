@@ -39,9 +39,13 @@ can be checked. For each, find primary evidence:
 - **Inventories** — tables of env vars, workflows, agents, scoped guides:
   compare against the actual `.github/workflows/`, `.claude/`, etc.
 
-Classify each finding: **drifted** (the claim is now false — cite the
-file:line that contradicts it) or **unverifiable** (can't be checked from the
-repo; note it, don't count it as drift).
+Classify each finding: **drifted** (the claim is now false or materially
+misleading — a true-but-incomplete description that would steer an agent wrong
+counts; cite the file:line that contradicts it) or **unverifiable** (can't be
+checked from the repo; note it, don't count it as drift). Reverse-check
+findings (existing scripts/workflows the file doesn't mention) don't count
+toward the threshold, but fold them into the fix when you're already editing
+the adjacent line.
 
 Read-only throughout this step. **Never modify code to make a claim true.**
 
@@ -50,12 +54,14 @@ Read-only throughout this step. **Never modify code to make a claim true.**
 **3 or more drifted claims** → fix the file, not the code:
 
 ```bash
-git fetch origin && git worktree add /tmp/drift-<repo>-<date> -b drift/<YYYY-MM-DD> origin/main
+git fetch origin && git worktree add <scratchpad>/drift-<repo> -b drift/<YYYY-MM-DD> origin/main
 ```
 
-In the worktree, correct **only the drifted lines** — no rewrites, no style
-changes, no reorganizing. Commit as `docs(steering): fix <N> drifted claims`,
-push, and `gh pr create` with a body listing each fix as
+(Use the session scratchpad directory, not /tmp.) In the worktree, correct
+**only the drifted lines** — no rewrites, no style changes, no reorganizing.
+Commit as `docs(steering): fix <N> drifted claims` — the target repo's own
+commit conventions (trailers, message format) win over any default. Push, and
+`gh pr create` with a body listing each fix as
 `claim → reality (evidence: file:line)`. Remove the worktree. Do not merge.
 
 **Fewer than 3** → no PR. Report the findings (including zero-drift: say what
@@ -73,3 +79,5 @@ results don't go in memory.
   threshold.
 - If AGENTS.md has drifted from its pointer role (grown its own content),
   that's a finding — the convention is one master file, pointers elsewhere.
+  A repo that hasn't adopted the convention yet (no AGENTS.md at all) is not
+  drift; note it once and move on.

@@ -82,8 +82,10 @@ entry pointing at it.
 Never touch the user's checkout. From the repo:
 
 ```bash
-git worktree add /tmp/dream-<repo>-<date> -b dream/<YYYY-MM-DD> origin/main
+git worktree add <scratchpad>/dream-<repo> -b dream/<YYYY-MM-DD> origin/main
 ```
+
+(Use the session scratchpad directory, not /tmp.)
 
 (Fetch first; fall back to local `main` if there is no remote tracking.)
 Apply the consolidated `memory/` changes inside the worktree. Also write
