@@ -13,6 +13,8 @@ Project-agnostic. Install once on any machine, use across every project.
 | `blog`                         | End-to-end blog workflow with subcommands `plan / persona / outline / brief / write / audit / rewrite / repurpose`. Persona-driven voice modeled on popular bloggers. |
 | `slide-deck`                   | Zero-dependency, animation-rich HTML presentations on a fixed 1920×1080 stage. "Show, don't tell" style discovery (3 visual previews → pick), 12 curated presets + an Ask Arthur brand preset, PPT→web conversion, Vercel deploy + PDF export. |
 | `pitch`                        | Generate/refresh the concise (~7-slide) Ask Arthur platform brief in the "Signal" editorial style (Source Serif 4 + gold-italic emphasis, navy/cream dual surface). Ask-Arthur-specific companion to `slide-deck`; facts in `pitch/content.md`. |
+| `dream`                        | Offline memory consolidation for a repo: reads recent Claude Code transcripts, extracts durable learnings via sub-agents, merges them into the repo's `memory/` directory, and opens a PR for human review. Never merges its own output. |
+| `drift-check`                  | Audits a repo's CLAUDE.md (and directory-scoped variants) against reality — commands, paths, links, conventions. ≥3 drifted claims → PR fixing only the drifted lines; fewer → report. Never touches code. |
 
 ## Install
 
