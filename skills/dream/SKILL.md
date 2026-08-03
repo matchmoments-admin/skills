@@ -31,7 +31,8 @@ replaced by `-` (e.g. `/Users/x/Desktop/projects/citeframe` →
 
 Select transcripts modified since the last dream:
 - Find the last dream commit: `git log -1 --format=%cI --grep="chore(memory): dream" -- memory/`
-- If none, use the last 7 days.
+- If none, this is the repo's first dream: take ALL transcripts, capped at the 20 most
+  recently modified.
 - Exclude the transcript of the session currently running this skill (it will
   be the most recently modified file and still growing).
 
