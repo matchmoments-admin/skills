@@ -106,15 +106,27 @@ Six **content templates** ship: `deep-dive`, `post-mortem`, `how-to`, `compariso
 
 ## Adding your own skill
 
-Drop a `<skill-name>.md` file (the orchestrator) and an optional `<skill-name>/` directory of supporting files into `skills/`. Re-run `./scripts/install.sh`. The new skill is symlinked into `~/.claude/skills/` and immediately available as `/<skill-name>` in Claude Code.
+Create a `skills/<skill-name>/` directory containing a `SKILL.md` orchestrator (YAML frontmatter with `name` matching the directory and a trigger-optimized `description`, then the Markdown body). Re-run `./scripts/install.sh`. The new skill is symlinked into `~/.claude/skills/` and immediately available in Claude Code.
+
+Claude Code only discovers skills as `<dir>/SKILL.md` — a loose `skills/<name>.md` file is inert. (Five older skills still use that flat layout and currently don't load; see the top-level `CLAUDE.md` note.)
 
 Good skills generally have:
 
-- A short, clear orchestrator file that describes when to use the skill, the inputs it takes, and how it dispatches.
-- A subdirectory of supporting files (workflows, references, templates, data) that the orchestrator instructs the agent to read on demand.
+- A short, clear `SKILL.md` that describes when to use the skill, the inputs it takes, and how it dispatches.
+- Supporting files in the same directory (workflows, references, templates, data) that the orchestrator instructs the agent to read on demand.
 - A small Python or shell helper for the deterministic bits (file generation, validation, scoring) so the LLM can offload formatting work.
 
-See `skills/blog/`, `skills/excalidraw-diagram/`, and `skills/gemini-diagram-illustration/` as worked examples of the pattern.
+See `skills/grilling/`, `skills/codebase-design/`, and `skills/dream/` as worked examples of the pattern. Read `skills/writing-great-skills/SKILL.md` before writing one.
+
+## Project-template starter skills
+
+`project-template/` holds six book-derived agentic coding skills (`clean-code`, `refactoring`, `pragmatic-programmer`, `clean-architecture`, `software-architecture`, `data-intensive-design`) distilled from six classic software-engineering books. They are deliberately **not** under `skills/` — installing them globally would clash with the vocabulary skills already installed there (`codebase-design`, `domain-modeling`, `improve-codebase-architecture`, `tdd`). Instead, seed each **new project** with its own copy, committed to that project's repo and adapted to its conventions over time:
+
+```bash
+./scripts/new-project-skills.sh ~/path/to/new-project
+```
+
+See `project-template/README.md` for what each skill covers and how they compose.
 
 ## Acknowledgements
 
