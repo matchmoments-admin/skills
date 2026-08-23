@@ -178,7 +178,7 @@ def build_transcript(words: list[dict], duration: float | None,
     # when punctuation is absent or too sparse to snap against.
     punctuation_density = (duration / len(breaks)) if breaks and duration else None
     need_pauses = punctuation_density is None or punctuation_density > 12
-    thr = 0.0
+    thr = None
     if need_pauses:
         pauses, thr = pause_breaks(words, duration or 0, measured)
         breaks.update(pauses)
@@ -186,6 +186,7 @@ def build_transcript(words: list[dict], duration: float | None,
               else "pauses" if not punctuated else "both")
 
     ordered = sorted(breaks)
+    gaps = [b - a for a, b in zip(ordered, ordered[1:])]
     return {
         "duration": round(duration or 0, 3),
         "punctuated": punctuated,
@@ -193,7 +194,12 @@ def build_transcript(words: list[dict], duration: float | None,
         "word_count": len(words),
         "durations_measured": measured,
         "break_source": source,
+        # None means the pause pass did not run, which is not the same as it
+        # running and finding nothing. Consumers that treat 0.0 as a threshold
+        # end up splitting on every word.
         "pause_threshold": thr,
+        # The average hides a long unpunctuated stretch with no snap points.
+        "max_break_gap_seconds": round(max(gaps), 2) if gaps else None,
         "break_density_seconds": round((duration or 0) / len(ordered), 2)
                                  if ordered else None,
         "words": words,

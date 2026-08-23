@@ -223,8 +223,11 @@ def default_case(punctuated: bool) -> str:
 # ------------------------------------------------------------------ phrasing
 
 
+DEFAULT_PAUSE = 0.45
+
+
 def group_phrases(words: list[TimedWord], breaks: list[float],
-                  pause_threshold: float = 0.45,
+                  pause_threshold: float | None = DEFAULT_PAUSE,
                   max_words: int = MAX_WORDS_PER_LINE,
                   max_chars: int = MAX_CHARS_PER_LINE,
                   max_lines: int = MAX_LINES) -> list[Phrase]:
@@ -241,6 +244,10 @@ def group_phrases(words: list[TimedWord], breaks: list[float],
     """
     if not words:
         return []
+    # transcript.json carries None when the pause pass never ran. Reading that
+    # as 0.0 would make every word its own phrase.
+    if not pause_threshold or pause_threshold <= 0:
+        pause_threshold = DEFAULT_PAUSE
     hard = sorted(breaks)
     phrases: list[Phrase] = []
     lines: list[list[TimedWord]] = [[]]
@@ -272,23 +279,36 @@ def group_phrases(words: list[TimedWord], breaks: list[float],
             flush()
     flush()
 
-    return _merge_flashes(phrases)
+    return _merge_flashes(phrases, hard, pause_threshold)
 
 
-def _merge_flashes(phrases: list[Phrase]) -> list[Phrase]:
-    """Fold away phrases too brief to read — they register as flicker."""
+def _merge_flashes(phrases: list[Phrase], hard: list[float],
+                   pause_threshold: float) -> list[Phrase]:
+    """Fold away phrases too brief to read — they register as flicker.
+
+    Never across a hard boundary. A trailing one-word phrase after a break is
+    short *because* the break is there, and merging it back would put a caption
+    across the very boundary the phrasing exists to respect.
+    """
     out: list[Phrase] = []
     for p in phrases:
-        if out and (p.end - p.start) < MIN_PHRASE_SECONDS:
-            prev = out.pop()
-            merged = list(prev.lines)
-            if len(merged) < MAX_LINES:
-                merged.append(p.words)
-            else:
-                merged[-1] = merged[-1] + p.words
-            out.append(Phrase(lines=tuple(merged)))
-        else:
+        if not out:
             out.append(p)
+            continue
+        prev = out[-1]
+        gap = p.start - prev.end
+        boundary = (gap >= pause_threshold
+                    or any(prev.end <= b <= p.start for b in hard))
+        if boundary or (p.end - p.start) >= MIN_PHRASE_SECONDS:
+            out.append(p)
+            continue
+        out.pop()
+        merged = list(prev.lines)
+        if len(merged) < MAX_LINES:
+            merged.append(p.words)
+        else:
+            merged[-1] = merged[-1] + p.words
+        out.append(Phrase(lines=tuple(merged)))
     return out
 
 

@@ -191,7 +191,9 @@ class TestReviewFixes(unittest.TestCase):
         words = [{"t": i * 2.0, "w": f"sentence{i}."} for i in range(60)]
         t = build_transcript(words, 120.0)
         self.assertEqual(t["break_source"], "punctuation")
-        self.assertEqual(t["pause_threshold"], 0.0)
+        self.assertIsNone(t["pause_threshold"],
+                          "None means the pause pass did not run; 0.0 would be "
+                          "read as a real threshold and split every word")
 
     def test_pauses_are_used_when_there_is_no_punctuation(self):
         words = [{"t": i * 0.4, "w": "word"} for i in range(300)]

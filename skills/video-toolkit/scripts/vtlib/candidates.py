@@ -36,6 +36,9 @@ BOILERPLATE_PENALTY = 0.6
 CONTEXT_SECONDS = 25.0
 
 # Two windows are the same moment if they overlap this much by either measure.
+# Containment is deliberately asymmetric: it measures the *shorter* window, so a
+# 20s clip 60% swallowed by a 58s one is dropped even though that is only 21% of
+# the longer. That is the intent — the shorter clip would be mostly repeat.
 MAX_OVERLAP_IOU = 0.35
 MAX_CONTAINMENT = 0.6
 

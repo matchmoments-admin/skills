@@ -65,6 +65,9 @@ For every candidate you keep:
 - Read `context_after`. If the point lands a beat later, extend `end`.
 - **Only ever move an edge to a value present in the breaks arrays.** Inventing a
   timestamp puts the cut mid-word, which is the most audible defect there is.
+- **Check `edges_on_breaks`.** A `false` means that edge is already an invented
+  timestamp — the length budget beat the break list. Move it to a nearby break,
+  or drop the clip and say why.
 - Re-check the length budget after moving.
 
 A clip must work for someone who joined at second zero. If fixing the opener would
@@ -131,6 +134,17 @@ they haven't said). Structure:
   ]
 }
 ```
+
+**Then validate it before handing it on:**
+
+```bash
+python3 $VT validate-moments moments.json
+```
+
+Zero violations or stop. The checks are the ones this document asks for and
+cannot enforce — edges on breaks, lengths in range, no near-duplicates, and that
+the file describes the video its timestamps came from. Fix by moving an edge to a
+break the error names; never invent a timestamp to satisfy it.
 
 Keep `rejected` with reasons. It's how the ranking gets better later, and it stops
 the next run rediscovering the same junk.

@@ -11,6 +11,7 @@ command is idempotent and writes into a content-keyed cache; re-running is cheap
     vt.py transcript <src> [--whisper] [--model M]
     vt.py signals    <src> [--weights JSON]
     vt.py candidates <src> [--count N] [--min S] [--max S]
+    vt.py validate-moments <moments.json> [--fix OUT] [--strict]
 
 <src> is a URL (anything yt-dlp handles) or a local media path.
 
@@ -34,6 +35,7 @@ import re
 import shutil
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 # install.sh symlinks the skill directory, so resolve before adding to the path —
@@ -42,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from vtlib.candidates import CandidateParams, find_candidates  # noqa: E402
 from vtlib.errors import VtError  # noqa: E402
+from vtlib.moments import ClipConstraints, validate_moments  # noqa: E402
 from vtlib.signals import build_signals, rms_to_spike  # noqa: E402
 from vtlib.transcript import build_transcript, parse_json3, parse_vtt  # noqa: E402
 
@@ -182,7 +185,11 @@ def cmd_fetch(args) -> dict:
         if r.returncode != 0:
             raise VtError(f"yt-dlp failed: {(r.stderr or r.stdout).strip()[-800:]}")
         if args.comments:
-            (d / "comments.attempted").write_text("", encoding="utf-8")
+            ip = info_path(d)
+            got = len((load_json(ip).get("comments") or [])) if ip else 0
+            state = _comment_state(d)
+            save_json(d / COMMENT_STATE,
+                      {"attempts": state.get("attempts", 0) + 1, "count": got})
         ip = info_path(d)
 
     if ip is None:
@@ -209,49 +216,89 @@ def cmd_fetch(args) -> dict:
     }
 
 
-def _comments_attempted(d: Path, ip: Path | None) -> bool:
-    """Whether a comment fetch has already run for this cache entry.
+# yt-dlp exits 0 having extracted nothing when the comment endpoint rate-limits,
+# so one attempt is not proof the video has no comments. Two is enough to stop
+# re-fetching captions forever on a video that genuinely has comments disabled.
+MAX_COMMENT_ATTEMPTS = 2
+COMMENT_STATE = "comments-state.json"
 
-    Inferring from `comments` being non-empty means a video with comments
+
+def _comment_state(d: Path) -> dict:
+    p = d / COMMENT_STATE
+    if p.exists():
+        try:
+            return load_json(p)
+        except (ValueError, OSError):
+            pass
+    return {"attempts": 0, "count": 0}
+
+
+def _comments_attempted(d: Path, ip: Path | None) -> bool:
+    """Whether pulling comments again would be pointless.
+
+    Inferring purely from `comments` being non-empty means a video with comments
     disabled re-runs the whole yt-dlp invocation — captions included — on every
     call, which contradicts the idempotence the CLI advertises and walks into
-    the caption-endpoint 429 this file works hard to avoid.
+    the caption-endpoint 429 this file works hard to avoid. Inferring purely
+    from a marker means one transient 429 permanently costs a documented signal.
     """
-    if (d / "comments.attempted").exists():
-        return True
-    if ip is None or not ip.exists():
-        return False
-    try:
-        return bool(load_json(ip).get("comments"))
-    except (ValueError, OSError):
-        return False
+    if ip is not None and ip.exists():
+        try:
+            if load_json(ip).get("comments"):
+                return True
+        except (ValueError, OSError):
+            pass
+    state = _comment_state(d)
+    return state.get("attempts", 0) >= MAX_COMMENT_ATTEMPTS
 
 
-AUDIO_ONLY_EXT = {".m4a", ".mp3", ".opus", ".webm.audio", ".aac", ".ogg", ".wav"}
+# What we asked yt-dlp for, recorded rather than inferred. Extension sniffing
+# cannot work: `bestaudio` yields media.webm (opus) when m4a is unavailable, and
+# .webm is equally a video container, so the same suffix means both things.
+KIND_MARKER = "media-kind.txt"
 
 
 def has_video_stream(path: Path) -> bool:
-    """Whether a cached media file actually carries a video stream."""
+    """Probe a media file for a video stream. Requires ffprobe."""
     probe = shutil.which("ffprobe")
     if not probe:
-        # Without ffprobe, fall back to the extension yt-dlp chose.
-        return path.suffix.lower() not in AUDIO_ONLY_EXT
+        return False
     r = run([probe, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)])
     return r.returncode == 0 and "video" in r.stdout
 
 
+def cached_media_kind(d: Path, existing: list[Path]) -> str | None:
+    """"video" | "audio" | None. Reads the marker, probing once to backfill it
+    for cache entries written before the marker existed."""
+    marker = d / KIND_MARKER
+    if marker.exists():
+        value = marker.read_text(encoding="utf-8").strip()
+        if value in ("audio", "video"):
+            return value
+    if not existing:
+        return None
+    if shutil.which("ffprobe"):
+        kind = "video" if has_video_stream(existing[0]) else "audio"
+        marker.write_text(kind, encoding="utf-8")
+        return kind
+    return None
+
+
 def fetch_media(d: Path, src: str, want_video: bool, force: bool) -> Path | None:
-    existing = sorted(d.glob("media.*"))
+    existing = [p for p in sorted(d.glob("media.*"))]
     # `fetch --audio` then `fetch --video` share a cache key, so returning
     # whatever is cached made the second call a silent no-op — and the very next
     # documented step, extracting a frame, then failed on a missing file.
     if existing and not force:
-        cached = existing[0]
-        if not want_video or has_video_stream(cached):
-            return cached
-        for stale in existing:
-            stale.unlink()
+        kind = cached_media_kind(d, existing)
+        if not want_video or kind == "video":
+            return existing[0]
+        if kind is None:
+            raise VtError(
+                f"{existing[0].name} is cached but its type is unknown (no "
+                f"ffprobe on PATH). Install ffmpeg, or re-run with --force to "
+                f"replace it.")
     # Prefer H.264: YouTube increasingly serves AV1 as "best", and plenty of
     # ffmpeg builds (conda's 4.x among them) have no AV1 decoder, so frames and
     # renders fail with "Decoder (codec av1) not found".
@@ -259,14 +306,31 @@ def fetch_media(d: Path, src: str, want_video: bool, force: bool) -> Path | None
            "bestvideo[vcodec^=avc1]+bestaudio/best[ext=mp4]/"
            "bestvideo[height<=1080]+bestaudio/best") if want_video \
         else "bestaudio[ext=m4a]/bestaudio/best"
+    # Download into a staging directory first. Replacing the cache before the
+    # new file lands means a throttled or failed fetch destroys a working one.
+    stage = d / ".media-staging"
+    if stage.exists():
+        for old in stage.iterdir():
+            old.unlink()
     cmd = ytdlp_cmd() + ["-f", fmt, "--no-warnings", "--no-progress",
-                         "-P", str(d), "-o", "media.%(ext)s", src]
+                         "-P", str(stage), "-o", "media.%(ext)s", src]
     r = run(cmd)
-    if r.returncode != 0:
+    fetched = sorted(stage.glob("media.*")) if stage.exists() else []
+    if r.returncode != 0 or not fetched:
+        for partial in fetched:
+            partial.unlink()
         raise VtError(
             f"yt-dlp media download failed: {(r.stderr or r.stdout).strip()[-800:]}")
-    hits = sorted(d.glob("media.*"))
-    return hits[0] if hits else None
+
+    for stale in existing:
+        stale.unlink()
+    landed = fetched[0].replace(d / fetched[0].name)
+    for extra in fetched[1:]:
+        extra.replace(d / extra.name)
+    stage.rmdir()
+    (d / KIND_MARKER).write_text("video" if want_video else "audio",
+                                 encoding="utf-8")
+    return landed
 
 
 def media_file(d: Path) -> Path | None:
@@ -494,6 +558,55 @@ def cmd_candidates(args) -> dict:
                 for c in kept]}
 
 
+# ------------------------------------------------------------ validate-moments
+
+
+def cmd_validate_moments(args) -> dict:
+    mpath = Path(args.moments).expanduser()
+    if not mpath.exists():
+        raise VtError(f"{mpath} not found")
+    try:
+        moments = load_json(mpath)
+    except ValueError as e:
+        raise VtError(f"{mpath} is not valid JSON: {e}")
+
+    claimed = (moments.get("source") or {}).get("url")
+    src = args.src or claimed
+    if not src:
+        raise VtError("no --src given and moments.json has no source.url — "
+                      "one of them must say which video these times belong to")
+
+    # Check the file's own claim, not the override. Deriving both from --src
+    # would make the mismatch undetectable, which is the whole point of it.
+    claimed_key = video_key(claimed) if claimed else video_key(src)
+
+    tp = cache_dir(src, create=False) / "transcript.json"
+    if not tp.exists():
+        raise VtError(f"no transcript cached for {src} — "
+                      f"run `vt.py transcript <src>` first")
+
+    report = validate_moments(
+        moments, load_json(tp),
+        ClipConstraints(min_len=args.min, max_len=args.max,
+                        tol=args.tol, strict=args.strict),
+        source_key=claimed_key)
+
+    if args.fix:
+        save_json(Path(args.fix).expanduser(), report.repaired)
+
+    return {
+        "ok": report.ok,
+        "moments": len(moments.get("moments") or []),
+        "violations": [asdict(v) for v in report.violations],
+        "warnings": [asdict(w) for w in report.warnings],
+        "fixed": args.fix or None,
+        # The violation messages are multi-line and meant to be read; JSON
+        # escaping them makes that hard, so hand over a rendered copy too.
+        "report": "\n".join([v.message for v in report.violations]
+                            + [f"warning: {w.message}" for w in report.warnings]),
+    }
+
+
 # -------------------------------------------------------------------- info
 
 
@@ -570,6 +683,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--weights", default=None, help='JSON, e.g. \'{"heatmap":0.5}\'')
     p.set_defaults(fn=cmd_signals)
 
+    p = sub.add_parser("validate-moments")
+    p.add_argument("moments", help="path to a moments.json")
+    p.add_argument("--src", default=None,
+                   help="video URL or path (default: moments.json's source.url)")
+    p.add_argument("--min", type=float, default=15.0)
+    p.add_argument("--max", type=float, default=90.0)
+    p.add_argument("--tol", type=float, default=0.05,
+                   help="how close to a break counts as on it (default 0.05s)")
+    p.add_argument("--strict", action="store_true",
+                   help="require exact equality with a break")
+    p.add_argument("--fix", default=None,
+                   help="write a copy with edges snapped to exact break values")
+    p.set_defaults(fn=cmd_validate_moments)
+
     p = sub.add_parser("candidates")
     p.add_argument("src")
     p.add_argument("--count", type=int, default=12)
@@ -595,7 +722,9 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": str(e)}))
         return 1
     print(json.dumps(result, indent=2))
-    return 0
+    # A command that reports ok:false must not exit 0, so it can gate a chain
+    # like `validate-moments && render`.
+    return 0 if result.get("ok", True) else 1
 
 
 if __name__ == "__main__":

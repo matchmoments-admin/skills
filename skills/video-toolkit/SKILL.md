@@ -38,6 +38,7 @@ vt.py fetch      <src> [--comments] [--audio] [--video]
 vt.py transcript <src> [--whisper] [--model M]
 vt.py signals    <src> [--weights JSON]
 vt.py candidates <src> [--count N] [--min S] [--max S]
+vt.py validate-moments <moments.json> [--src URL] [--fix OUT] [--strict]
 ```
 
 `<src>` is a URL (anything yt-dlp handles) or a local media path. Invoke as
@@ -79,9 +80,12 @@ The output `transcript.json` is the contract:
   "source": "youtube-auto:json3",   // or youtube-manual:json3 | vtt | whisper-mlx:<repo>
   "granularity": "word",            // or "segment" — cue-level, not per word
   "punctuated": false,              // auto captions have NO punctuation
+  "durations_measured": false,      // true only for Whisper's real word times
   "duration": 7412.5,
-  "pause_threshold": 0.52,          // adaptive, see below
+  "break_source": "pauses",         // punctuation | pauses | both
+  "pause_threshold": 0.52,          // null when the pause pass did not run
   "break_density_seconds": 7.99,    // one cut point roughly every 8s
+  "max_break_gap_seconds": 41.2,    // the worst stretch with no cut point
   "words":  [{"t": 12.34, "d": 0.31, "w": "network"}, …],
   "breaks": [15.2, 19.8, …]         // clause boundaries — where a cut can land
 }
@@ -99,6 +103,18 @@ Two fields decide how you treat it downstream:
 `breaks` are clause boundaries: sentence-final punctuation when the transcript is
 punctuated, plus silence. **Clip edges must land on a break** — a cut mid-phrase is
 the single most audible defect in an auto-generated clip.
+
+Sentence ends win when there are enough of them. Pause detection is an estimate,
+and letting it supplement adequate punctuation introduces mid-sentence cut points
+that outrank the real ones — on a real video that moved the top candidate from a
+sentence start to the middle of a clause. So pauses supplement only when
+punctuation is absent or sparser than one per 12s, and `break_source` records
+which happened.
+
+`break_density_seconds` is a whole-video average, so check
+`max_break_gap_seconds` too: a mostly-punctuated transcript with one long
+unpunctuated stretch has no cut points in that stretch, and a clip landing there
+will report `edges_on_breaks: [_, false]`.
 
 Silence detection is subtler than it looks. json3 word timings are *contiguous* —
 each word's start is the previous word's end — so raw intervals contain no pauses at
@@ -159,6 +175,10 @@ Say so rather than presenting the ranking as authoritative.
    sponsors", "the following is a conversation with" — are flagged `boilerplate` and
    scored down, not dropped. Check the flag rather than trusting it blindly.
 
+Each candidate also carries **`edges_on_breaks: [bool, bool]`**. A `false` means
+the length budget beat the break list and that edge is an invented timestamp —
+it will cut mid-word. Move it to a nearby break or drop the clip; do not ship it.
+
 Each candidate carries `context_before` and `context_after` (±25s of transcript) plus
 `breaks_near_start` / `breaks_near_end`. **Use them.** Most shortlisted windows still
 open mid-thought — the signals cannot tell that "NYU and then switching over to…" is
@@ -181,6 +201,8 @@ media.*            audio or video, only if requested
 transcript.json    canonical timed transcript
 signals.json       per-second series + diagnostics + fused
 candidates.json    ranked windows
+media-kind.txt     "audio" or "video" — what was fetched, not guessed
+comments-state.json  attempts + count, so one 429 does not cost the signal
 ```
 
 Nothing is ever auto-deleted. `du -sh ~/.cache/video-toolkit` occasionally; media
@@ -198,6 +220,24 @@ files are the only large ones.
 - **No captions and no audio cached.** `fetch --audio` then retry; ASR needs a file.
 - **Empty heatmap.** Normal for videos under roughly 50k views, and for unlisted or
   private ones. Not an error.
+
+## Validating a moments.json
+
+`vt.py validate-moments <file>` is the front door for anything that renders. It
+checks what the prose asks for and nothing can enforce by hand: edges on breaks,
+lengths in range, ranks a permutation, no near-duplicates, and — the failure that
+is otherwise invisible — that the file's `source.url` is the video the transcript
+actually describes.
+
+Membership is **within `--tol` (default 0.05s)**, not exact: breaks are stored to
+three decimals, so a model writing `9764.9` would fail exact equality on almost
+every real file and the check would be ignored within a week. Inside tolerance
+the moment passes and `--fix` writes a copy carrying the exact break value.
+`--strict` demands equality and is what fixtures use.
+
+Exit status is non-zero on any violation, so `validate-moments && render` chains.
+Warnings — coarse breaks, estimated caption timing, unpunctuated ASR, a
+third-party clip over 60s — are reported but do not fail the run.
 
 ## Scope
 

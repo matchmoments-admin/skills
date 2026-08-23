@@ -15,11 +15,14 @@ from __future__ import annotations
 import bisect
 from dataclasses import dataclass, field
 
-from .candidates import iou
+from .candidates import containment, iou
 
-# Two windows overlapping by more than this are near-duplicates of each other.
-# Same threshold `find_candidates` dedupes at, so the two stages agree.
+# Both measures, matching `find_candidates` exactly. IoU alone misses nesting:
+# a 17s window inside a 51s window scores 0.34 and would validate clean while
+# the candidate stage had already rejected it — so a moments.json could contain
+# a pair that the generator refuses to produce, and render it twice.
 MAX_OVERLAP_IOU = 0.35
+MAX_CONTAINMENT = 0.6
 
 # How wide a window of alternative breaks to offer in an error message.
 SUGGEST_WINDOW = 10.0
@@ -243,11 +246,13 @@ def _check_overlaps(entries: list[dict], rep: Report) -> None:
     for i, (ra, sa, ea) in enumerate(spans):
         for rb, sb, eb in spans[i + 1:]:
             overlap = iou((sa, ea), (sb, eb))
-            if overlap > MAX_OVERLAP_IOU:
+            nested = containment((sa, ea), (sb, eb))
+            if overlap > MAX_OVERLAP_IOU or nested > MAX_CONTAINMENT:
                 rep.violations.append(Violation(
                     rank=ra or 0, field="start", code="overlaps",
-                    message=(f"moments {ra} and {rb} overlap "
-                             f"({overlap:.0%}) — they are near-duplicates"),
+                    message=(f"moments {ra} and {rb} are near-duplicates "
+                             f"(IoU {overlap:.0%}, {nested:.0%} of the shorter "
+                             f"clip sits inside the longer)"),
                     value=sa))
 
 
