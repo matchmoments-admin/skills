@@ -50,7 +50,7 @@ def parse_vtt(text: str) -> list[dict]:
     out: list[dict] = []
     lines = text.splitlines()
     i = 0
-    seen = set()
+    previous = None
     while i < len(lines):
         m = VTT_CUE_RE.search(lines[i])
         if not m:
@@ -64,8 +64,11 @@ def parse_vtt(text: str) -> list[dict]:
             buf.append(re.sub(r"<[^>]+>", "", lines[i]).strip())
             i += 1
         line = " ".join(x for x in buf if x).strip()
-        if line and line not in seen:
-            seen.add(line)
+        # Rolling captions repaint the *previous* cue, so only an immediate
+        # repeat is a duplicate. A global set would silently delete the second
+        # "Thank you." in a talk, taking its timing and its break with it.
+        if line and line != previous:
+            previous = line
             out.append({"t": round(start, 3), "w": line})
     return out
 
@@ -78,19 +81,30 @@ def looks_word_level(words: list[dict]) -> bool:
     return multi / len(sample) < 0.3
 
 
-def spoken_estimate(word: str) -> float:
-    """Roughly how long this word takes to say.
+def spoken_estimate(text: str) -> float:
+    """Roughly how long this text takes to say.
 
-    Needed because json3 word timings are contiguous by construction — each word's
-    start is the previous word's end — so the raw intervals contain no pauses at
-    all. Subtracting a plausible spoken duration is what makes silence visible.
+    Needed because caption timings carry no silence: json3 word starts are
+    contiguous by construction (each word's start is the previous word's end),
+    and a cue's derived duration runs to the next cue. Either way the raw
+    interval is zero and no pause is visible. Subtracting a plausible spoken
+    duration is what makes silence appear.
+
+    Accepts a whole caption cue as well as a single word, so segment-level
+    transcripts get real pause detection instead of none.
     """
-    n = len(re.sub(r"[^\w']", "", word)) or 1
-    return min(0.9, max(0.09, 0.055 * n + 0.055))
+    parts = [p for p in text.split() if p]
+    if not parts:
+        return 0.09
+    total = 0.0
+    for part in parts:
+        n = len(re.sub(r"[^\w']", "", part)) or 1
+        total += min(0.9, max(0.09, 0.055 * n + 0.055))
+    return total
 
 
 def pause_breaks(words: list[dict], duration: float,
-                 word_level: bool) -> tuple[list[float], float]:
+                 measured: bool = False) -> tuple[list[float], float]:
     """Clause boundaries from silence, thresholded adaptively.
 
     A fixed gap threshold fails badly across sources: dense auto-captions yield
@@ -101,7 +115,11 @@ def pause_breaks(words: list[dict], duration: float,
     gaps: list[tuple[float, float]] = []
     for i in range(len(words) - 1):
         w = words[i]
-        spoken = spoken_estimate(w["w"]) if word_level else w.get("d", 0.0)
+        # A measured duration (Whisper) is the truth and must win: estimating
+        # over it can invent a gap where there is none, and place the break
+        # before the word has finished — a cut mid-word, which is the exact
+        # defect this function exists to prevent.
+        spoken = w["d"] if measured else spoken_estimate(w["w"])
         gap = words[i + 1]["t"] - (w["t"] + spoken)
         if gap > 0:
             gaps.append((gap, round(w["t"] + spoken, 3)))
@@ -113,7 +131,8 @@ def pause_breaks(words: list[dict], duration: float,
     return [t for g, t in gaps if g >= thr], round(thr, 3)
 
 
-def build_transcript(words: list[dict], duration: float | None) -> dict:
+def build_transcript(words: list[dict], duration: float | None,
+                     measured: bool | None = None) -> dict:
     """Fill in durations, detect punctuation, and mark clause boundaries.
 
     Clause boundaries are what clip edges must snap to. Auto-generated captions
@@ -122,6 +141,10 @@ def build_transcript(words: list[dict], duration: float | None) -> dict:
     Mutates `words` in place to add `d`, then returns the full transcript dict.
     """
     word_level = looks_word_level(words)
+    # Whisper supplies true per-word durations; caption parsing does not. Decide
+    # before the fill below, which would otherwise make every word look measured.
+    if measured is None:
+        measured = bool(words) and all("d" in w for w in words[:50])
     # A single word is never 1.2s; a caption cue routinely is. Capping cue
     # durations invents a gap after every cue and makes every cue a false break.
     cap = 1.2 if word_level else None
@@ -147,8 +170,20 @@ def build_transcript(words: list[dict], duration: float | None) -> dict:
         for w in words:
             if SENT_END_RE.search(w["w"]):
                 breaks.add(round(w["t"] + w["d"], 3))
-    pauses, thr = pause_breaks(words, duration or 0, word_level)
-    breaks.update(pauses)
+
+    # Sentence ends are authoritative when they exist: a cut there starts a
+    # clip on a sentence, which is what makes it watchable. Pause detection is
+    # an estimate, and letting it supplement adequate punctuation introduces
+    # mid-sentence cut points that outrank the real ones. So supplement only
+    # when punctuation is absent or too sparse to snap against.
+    punctuation_density = (duration / len(breaks)) if breaks and duration else None
+    need_pauses = punctuation_density is None or punctuation_density > 12
+    thr = 0.0
+    if need_pauses:
+        pauses, thr = pause_breaks(words, duration or 0, measured)
+        breaks.update(pauses)
+    source = ("punctuation" if not need_pauses
+              else "pauses" if not punctuated else "both")
 
     ordered = sorted(breaks)
     return {
@@ -156,6 +191,8 @@ def build_transcript(words: list[dict], duration: float | None) -> dict:
         "punctuated": punctuated,
         "granularity": "word" if word_level else "segment",
         "word_count": len(words),
+        "durations_measured": measured,
+        "break_source": source,
         "pause_threshold": thr,
         "break_density_seconds": round((duration or 0) / len(ordered), 2)
                                  if ordered else None,

@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from vtlib.transcript import (  # noqa: E402
     build_transcript, looks_word_level, parse_json3, parse_vtt, pause_breaks,
     spoken_estimate,
-)
+)  # noqa: F401
 
 
 class TestParseJson3(unittest.TestCase):
@@ -132,11 +132,11 @@ class TestBreakDensity(unittest.TestCase):
                         "a break after every cue means the threshold collapsed")
 
     def test_threshold_is_floored_at_a_real_pause(self):
-        _, thr = pause_breaks(self.dense_words(), 600.0, word_level=True)
+        _, thr = pause_breaks(self.dense_words(), 600.0)
         self.assertGreaterEqual(thr, 0.18)
 
     def test_no_words(self):
-        self.assertEqual(pause_breaks([], 0.0, True), ([], 0.0))
+        self.assertEqual(pause_breaks([], 0.0), ([], 0.0))
 
 
 class TestPunctuationDetection(unittest.TestCase):
@@ -153,3 +153,59 @@ class TestPunctuationDetection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReviewFixes(unittest.TestCase):
+    """Regressions found by code review, each with the failure it caused."""
+
+    def test_spoken_estimate_handles_a_whole_cue(self):
+        """Segment transcripts hold a full cue per entry. Estimating only the
+        first word made the cue look instantaneous, so no pause was ever seen."""
+        one = spoken_estimate("hello")
+        many = spoken_estimate("hello there my friend")
+        self.assertGreater(many, one * 3)
+
+    def test_measured_durations_win_over_the_estimate(self):
+        """Whisper supplies a true duration. Estimating over it invents a gap
+        and places the break before the word has finished — a cut mid-word."""
+        words = [{"t": 0.0, "w": "aaaaaaaaaa", "d": 2.0},
+                 {"t": 2.05, "w": "b", "d": 0.1}]
+        breaks, _ = pause_breaks(words, 10.0, measured=True)
+        self.assertEqual(breaks, [], "0.05s is not a pause")
+
+    def test_estimate_is_used_when_durations_are_derived(self):
+        words = [{"t": 0.0, "w": "aaaaaaaaaa"}, {"t": 2.05, "w": "b"}]
+        breaks, _ = pause_breaks(words, 10.0, measured=False)
+        self.assertTrue(breaks)
+
+    def test_build_transcript_detects_measured_durations(self):
+        whisper = [{"t": 0.0, "w": "a", "d": 0.3}, {"t": 1.0, "w": "b", "d": 0.3}]
+        self.assertTrue(build_transcript(whisper, 5.0)["durations_measured"])
+        captions = [{"t": 0.0, "w": "a"}, {"t": 1.0, "w": "b"}]
+        self.assertFalse(build_transcript(captions, 5.0)["durations_measured"])
+
+    def test_punctuation_wins_when_it_is_dense_enough(self):
+        """Sentence ends start a clip on a sentence. Supplementing adequate
+        punctuation with estimated pauses introduced mid-sentence cut points
+        that outranked the real ones."""
+        words = [{"t": i * 2.0, "w": f"sentence{i}."} for i in range(60)]
+        t = build_transcript(words, 120.0)
+        self.assertEqual(t["break_source"], "punctuation")
+        self.assertEqual(t["pause_threshold"], 0.0)
+
+    def test_pauses_are_used_when_there_is_no_punctuation(self):
+        words = [{"t": i * 0.4, "w": "word"} for i in range(300)]
+        self.assertEqual(build_transcript(words, 120.0)["break_source"], "pauses")
+
+    def test_vtt_dedup_is_adjacent_only(self):
+        """A global set silently deleted the second 'Thank you.' in a talk,
+        taking its timing and its break with it."""
+        vtt = ("WEBVTT\n\n"
+               "00:00:00.000 --> 00:00:02.000\nThank you.\n\n"
+               "00:00:02.000 --> 00:00:04.000\nThank you.\n\n"
+               "00:00:10.000 --> 00:00:12.000\nSomething else\n\n"
+               "00:45:00.000 --> 00:45:02.000\nThank you.\n")
+        out = parse_vtt(vtt)
+        self.assertEqual([w["w"] for w in out],
+                         ["Thank you.", "Something else", "Thank you."])
+        self.assertEqual(out[-1]["t"], 2700.0)

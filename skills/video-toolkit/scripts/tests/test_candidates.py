@@ -7,10 +7,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from vtlib.candidates import (  # noqa: E402
-    BOILERPLATE_PENALTY, CandidateParams, chapter_at, find_candidates,
-    find_peaks, iou, mask_head_tail, opener_ok, place_window, snap_window,
-    words_in,
+    BOILERPLATE_PENALTY, CandidateParams, chapter_at, containment,
+    edges_on_breaks, find_candidates, find_peaks, iou, mask_head_tail,
+    opener_ok, place_window, snap_window, words_in,
 )
+from vtlib.errors import VtError  # noqa: E402
 
 BREAKS = [float(x) for x in range(0, 601, 10)]
 
@@ -213,3 +214,74 @@ class TestHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReviewFixes(unittest.TestCase):
+    """Regressions found by code review, each with the failure it caused."""
+
+    def test_opener_check_works_on_a_whole_caption_cue(self):
+        """Stripping spaces collapsed a cue into one token that matches nothing,
+        so the dangling-opener guard never fired on any cue-timed video."""
+        self.assertFalse(opener_ok([{"t": 0, "w": "It works fine"}])[0])
+        self.assertFalse(opener_ok([{"t": 0, "w": "and then we went to NYU"}])[0])
+        self.assertTrue(opener_ok([{"t": 0, "w": "Nobody talks about this"}])[0])
+
+    def test_opener_reports_only_the_first_token(self):
+        self.assertEqual(opener_ok([{"t": 0, "w": "and then we went"}])[1], "and")
+
+    def test_opener_handles_leading_whitespace(self):
+        self.assertFalse(opener_ok([{"t": 0, "w": "   so anyway"}])[0])
+
+    def test_edges_on_breaks_reports_an_unsnapped_edge(self):
+        """When breaks are sparse the length budget wins and an edge stays put.
+        Such an edge cuts mid-word, so the caller has to be told."""
+        breaks = [0.0, 100.0]
+        s, e = snap_window(10.0, 90.0, breaks, 20, 58)
+        self.assertEqual(edges_on_breaks(s, e, breaks), (True, False))
+
+    def test_edges_on_breaks_when_both_land(self):
+        self.assertEqual(edges_on_breaks(10.0, 40.0, BREAKS), (True, True))
+
+    def test_containment_catches_a_nested_window(self):
+        """A 17s window sharing a start with a 51s window scores IoU 0.34 and
+        survived a 0.35 threshold — two candidates for the same moment."""
+        a, b = (531.44, 548.72), (531.44, 582.78)
+        self.assertLess(iou(a, b), 0.35)
+        self.assertEqual(containment(a, b), 1.0)
+
+    def test_containment_of_disjoint_windows(self):
+        self.assertEqual(containment((0, 10), (20, 30)), 0.0)
+
+    def test_nested_candidates_are_deduped(self):
+        signals, transcript = synthetic(duration=600, spikes=[(200, 320, 1.0)])
+        out = find_candidates(signals, transcript, [],
+                              CandidateParams(count=8, min_len=20, max_len=58))
+        for i, a in enumerate(out["candidates"]):
+            for b in out["candidates"][i + 1:]:
+                self.assertLessEqual(
+                    containment((a["start"], a["end"]), (b["start"], b["end"])),
+                    0.6)
+
+    def test_words_in_bisect_matches_the_linear_scan(self):
+        words = [{"t": i * 0.5, "w": "w"} for i in range(400)]
+        starts = [w["t"] for w in words]
+        for s, e in ((0, 10), (12.25, 63.75), (190, 400), (-5, 3)):
+            self.assertEqual(words_in(words, s, e),
+                             words_in(words, s, e, starts))
+
+    def test_short_video_explains_itself_instead_of_returning_nothing(self):
+        """30s head + 15s tail leaves no room in a 60s video. Returning
+        ok:true with an empty list gave the caller nothing to act on."""
+        signals, transcript = synthetic(duration=60, spikes=[(20, 40, 1.0)])
+        with self.assertRaises(VtError) as cm:
+            find_candidates(signals, transcript, [],
+                            CandidateParams(count=5, min_len=20, max_len=58))
+        self.assertIn("--skip-head 0", str(cm.exception))
+
+    def test_short_video_works_with_head_and_tail_disabled(self):
+        signals, transcript = synthetic(duration=60, spikes=[(20, 40, 1.0)])
+        out = find_candidates(
+            signals, transcript, [],
+            CandidateParams(count=5, min_len=20, max_len=58,
+                            skip_head=0, skip_tail=0))
+        self.assertTrue(out["candidates"])

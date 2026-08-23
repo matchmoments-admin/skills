@@ -7,8 +7,11 @@ supplies the judgement.
 
 from __future__ import annotations
 
+import bisect
 import re
 from dataclasses import dataclass
+
+from .errors import VtError
 
 # A clip that opens on one of these has no antecedent and reads as mid-thought.
 BAD_OPENERS = {
@@ -32,6 +35,10 @@ BOILERPLATE_PENALTY = 0.6
 # so the ranking pass can move a boundary without re-reading the transcript.
 CONTEXT_SECONDS = 25.0
 
+# Two windows are the same moment if they overlap this much by either measure.
+MAX_OVERLAP_IOU = 0.35
+MAX_CONTAINMENT = 0.6
+
 
 @dataclass(frozen=True)
 class CandidateParams:
@@ -54,7 +61,12 @@ class CandidateParams:
 
 def snap_window(start: float, end: float, breaks: list[float],
                 min_len: float, max_len: float) -> tuple[float, float]:
-    """Pull edges out to clause boundaries without blowing the length budget."""
+    """Pull edges out to clause boundaries without blowing the length budget.
+
+    Both edges land on a break whenever one is reachable. When breaks are too
+    sparse the length budget wins and an edge stays where it is — use
+    `edges_on_breaks` to find out which, because such an edge will cut mid-word.
+    """
     before = [b for b in breaks if b <= start]
     after = [b for b in breaks if b >= end]
     s = before[-1] if before else max(0.0, start)
@@ -77,15 +89,43 @@ def snap_window(start: float, end: float, breaks: list[float],
     return round(s, 3), round(e, 3)
 
 
-def words_in(words: list[dict], s: float, e: float) -> list[dict]:
-    return [w for w in words if s <= w["t"] < e]
+def edges_on_breaks(start: float, end: float,
+                    breaks: list[float]) -> tuple[bool, bool]:
+    """Whether each edge actually landed on a clause boundary."""
+    bs = set(breaks)
+    return start in bs, end in bs
+
+
+def words_in(words: list[dict], s: float, e: float,
+             starts: list[float] | None = None) -> list[dict]:
+    """Words with `s <= t < e`.
+
+    `starts` is the pre-extracted, sorted list of word start times; passing it
+    turns each lookup into a binary search. Without it this is a full scan, and
+    it runs several times per peak — on a five-hour podcast that is a ~60k-word
+    list walked hundreds of times.
+    """
+    if starts is None:
+        return [w for w in words if s <= w["t"] < e]
+    lo = bisect.bisect_left(starts, s)
+    hi = bisect.bisect_left(starts, e)
+    return words[lo:hi]
 
 
 def opener_ok(words: list[dict]) -> tuple[bool, str]:
-    """A clip has to work for someone who joined at second zero."""
+    """A clip has to work for someone who joined at second zero.
+
+    Takes the first whitespace-delimited token, not the whole entry: on a
+    segment-level transcript an entry is a full caption cue, and stripping
+    spaces from "and then we went to NYU" yields one long token that matches
+    nothing, silently disabling this check for every cue-timed video.
+    """
     if not words:
         return False, ""
-    first = re.sub(r"[^\w']", "", words[0]["w"]).lower()
+    head = str(words[0]["w"]).split()
+    if not head:
+        return False, ""
+    first = re.sub(r"[^\w']", "", head[0]).lower()
     return first not in BAD_OPENERS, first
 
 
@@ -95,6 +135,21 @@ def iou(a: tuple[float, float], b: tuple[float, float]) -> float:
     inter = max(0.0, hi - lo)
     union = (a[1] - a[0]) + (b[1] - b[0]) - inter
     return inter / union if union > 0 else 0.0
+
+
+def containment(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Fraction of the *shorter* window that sits inside the longer one.
+
+    IoU alone misses nesting: a 17s window sharing a start with a 51s window
+    scores 0.34 and survives a 0.35 threshold, yielding two candidates that are
+    the same moment at two lengths. Measuring against the shorter span catches
+    it — that pair scores 1.0.
+    """
+    lo = max(a[0], b[0])
+    hi = min(a[1], b[1])
+    inter = max(0.0, hi - lo)
+    shortest = min(a[1] - a[0], b[1] - b[0])
+    return inter / shortest if shortest > 0 else 0.0
 
 
 def chapter_at(chapters: list[dict], t: float) -> str | None:
@@ -170,7 +225,21 @@ def find_candidates(signals: dict, transcript: dict, chapters: list[dict],
 
     skip_head = params.resolved_head(duration)
     skip_tail = params.resolved_tail(duration)
+
+    # A short video can have no legal region at all once head and tail are
+    # excluded. Returning an empty list with ok:true gives the caller nothing
+    # to act on, so say what happened and what would fix it.
+    usable = duration - skip_head - skip_tail
+    if usable < min_len:
+        raise VtError(
+            f"video is {duration:.0f}s: excluding {skip_head:.0f}s of intro and "
+            f"{skip_tail:.0f}s of outro leaves {max(0.0, usable):.0f}s, which "
+            f"cannot hold a {min_len:.0f}s clip. Lower --min, or pass "
+            f"--skip-head 0 --skip-tail 0 if this video has no intro.")
+
     fused = mask_head_tail(fused_full, skip_head, skip_tail)
+    # One sorted index of word start times, reused by every windowed lookup.
+    starts = [w["t"] for w in words]
 
     series = signals.get("series") or {}
     available = signals.get("available") or sorted(series.keys())
@@ -187,14 +256,15 @@ def find_candidates(signals: dict, transcript: dict, chapters: list[dict],
             continue
         if e - s < min_len * 0.6:
             continue
-        ws = words_in(words, s, e)
+        ws = words_in(words, s, e, starts)
         ok, first = opener_ok(ws)
         if not ok:
             later = [b for b in breaks if s < b < e - min_len * 0.6]
             if later:
                 s = later[0]
-                ws = words_in(words, s, e)
+                ws = words_in(words, s, e, starts)
                 ok, first = opener_ok(ws)
+        start_snapped, end_snapped = edges_on_breaks(s, e, breaks)
         text = " ".join(w["w"] for w in ws).strip()
         boilerplate = bool(BOILERPLATE_RE.search(text))
         raw.append({
@@ -210,6 +280,9 @@ def find_candidates(signals: dict, transcript: dict, chapters: list[dict],
             },
             "opener": first,
             "opener_ok": ok,
+            # False means the length budget beat the break list. Such an edge
+            # cuts mid-word; the ranking pass should move it or drop the clip.
+            "edges_on_breaks": [start_snapped, end_snapped],
             "boilerplate": boilerplate,
             "chapter": chapter_at(chapters, s),
             "text": text,
@@ -217,9 +290,11 @@ def find_candidates(signals: dict, transcript: dict, chapters: list[dict],
             # transcript. Most shortlisted windows still open mid-thought;
             # fixing that is a judgement call the signals cannot make.
             "context_before": " ".join(
-                w["w"] for w in words_in(words, s - CONTEXT_SECONDS, s)).strip(),
+                w["w"] for w in
+                words_in(words, s - CONTEXT_SECONDS, s, starts)).strip(),
             "context_after": " ".join(
-                w["w"] for w in words_in(words, e, e + CONTEXT_SECONDS)).strip(),
+                w["w"] for w in
+                words_in(words, e, e + CONTEXT_SECONDS, starts)).strip(),
             "breaks_near_start": [b for b in breaks
                                   if s - CONTEXT_SECONDS <= b <= s + 15],
             "breaks_near_end": [b for b in breaks
@@ -230,7 +305,9 @@ def find_candidates(signals: dict, transcript: dict, chapters: list[dict],
     raw.sort(key=lambda c: -c["fused_mean"])
     kept: list[dict] = []
     for c in raw:
-        if any(iou((c["start"], c["end"]), (k["start"], k["end"])) > 0.35
+        span = (c["start"], c["end"])
+        if any(iou(span, (k["start"], k["end"])) > MAX_OVERLAP_IOU
+               or containment(span, (k["start"], k["end"])) > MAX_CONTAINMENT
                for k in kept):
             continue
         kept.append(c)

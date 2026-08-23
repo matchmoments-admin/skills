@@ -138,7 +138,7 @@ def probe_local(path: Path) -> dict:
                 pj = json.loads(r.stdout)
                 info["duration"] = float(
                     pj.get("format", {}).get("duration", 0)) or None
-            except (ValueError, KeyError):
+            except (ValueError, KeyError, TypeError, AttributeError):
                 pass
     return info
 
@@ -159,7 +159,7 @@ def cmd_fetch(args) -> dict:
 
     ip = info_path(d)
     need_meta = ip is None or args.force
-    need_comments = args.comments and not _has_comments(ip)
+    need_comments = args.comments and not _comments_attempted(d, ip)
 
     if need_meta or need_comments:
         cmd = ytdlp_cmd() + [
@@ -181,6 +181,8 @@ def cmd_fetch(args) -> dict:
         r = run(cmd)
         if r.returncode != 0:
             raise VtError(f"yt-dlp failed: {(r.stderr or r.stdout).strip()[-800:]}")
+        if args.comments:
+            (d / "comments.attempted").write_text("", encoding="utf-8")
         ip = info_path(d)
 
     if ip is None:
@@ -207,7 +209,16 @@ def cmd_fetch(args) -> dict:
     }
 
 
-def _has_comments(ip: Path | None) -> bool:
+def _comments_attempted(d: Path, ip: Path | None) -> bool:
+    """Whether a comment fetch has already run for this cache entry.
+
+    Inferring from `comments` being non-empty means a video with comments
+    disabled re-runs the whole yt-dlp invocation — captions included — on every
+    call, which contradicts the idempotence the CLI advertises and walks into
+    the caption-endpoint 429 this file works hard to avoid.
+    """
+    if (d / "comments.attempted").exists():
+        return True
     if ip is None or not ip.exists():
         return False
     try:
@@ -216,10 +227,31 @@ def _has_comments(ip: Path | None) -> bool:
         return False
 
 
+AUDIO_ONLY_EXT = {".m4a", ".mp3", ".opus", ".webm.audio", ".aac", ".ogg", ".wav"}
+
+
+def has_video_stream(path: Path) -> bool:
+    """Whether a cached media file actually carries a video stream."""
+    probe = shutil.which("ffprobe")
+    if not probe:
+        # Without ffprobe, fall back to the extension yt-dlp chose.
+        return path.suffix.lower() not in AUDIO_ONLY_EXT
+    r = run([probe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)])
+    return r.returncode == 0 and "video" in r.stdout
+
+
 def fetch_media(d: Path, src: str, want_video: bool, force: bool) -> Path | None:
     existing = sorted(d.glob("media.*"))
+    # `fetch --audio` then `fetch --video` share a cache key, so returning
+    # whatever is cached made the second call a silent no-op — and the very next
+    # documented step, extracting a frame, then failed on a missing file.
     if existing and not force:
-        return existing[0]
+        cached = existing[0]
+        if not want_video or has_video_stream(cached):
+            return cached
+        for stale in existing:
+            stale.unlink()
     # Prefer H.264: YouTube increasingly serves AV1 as "best", and plenty of
     # ffmpeg builds (conda's 4.x among them) have no AV1 decoder, so frames and
     # renders fail with "Decoder (codec av1) not found".
@@ -362,18 +394,24 @@ def decode_rms(media: Path, sample_rate: int = 8000) -> list[float] | None:
     rms: list[float] = []
     chunk_bytes = sample_rate * 2
     assert proc.stdout is not None
-    while True:
-        buf = proc.stdout.read(chunk_bytes)
-        if not buf:
-            break
-        if len(buf) % 2:
-            buf = buf[:-1]
-        a = array.array("h")
-        a.frombytes(buf)
-        if not a:
-            continue
-        rms.append(math.sqrt(sum(float(v) * v for v in a) / len(a)))
-    proc.wait()
+    with proc.stdout:
+        while True:
+            buf = proc.stdout.read(chunk_bytes)
+            if not buf:
+                break
+            if len(buf) % 2:
+                buf = buf[:-1]
+            a = array.array("h")
+            a.frombytes(buf)
+            if not a:
+                continue
+            rms.append(math.sqrt(sum(float(v) * v for v in a) / len(a)))
+    if proc.wait() != 0:
+        # A truncated decode would be zero-padded to full length, and the
+        # rolling median would then read that fabricated silence as baseline —
+        # distorting spike detection across the whole timeline. Better no
+        # energy signal than a quietly wrong one.
+        return None
     return rms or None
 
 
