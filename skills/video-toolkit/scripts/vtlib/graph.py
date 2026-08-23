@@ -121,14 +121,18 @@ def compile_video_graph(plan: ReframePlan, target: TargetSpec,
     scale = f"scale={target.width}:{target.height}:flags=lanczos"
 
     if plan.layout == "fit":
-        # Crops nothing, so it can never decapitate an off-centre subject.
+        # Constrain both axes. `scale=W:-2` only bounds width, so any source
+        # taller than 9:16 — phone video, a Shorts re-upload — overflows the
+        # canvas and overlay silently clips equal slices off the top and
+        # bottom, which is exactly what this layout exists to avoid.
         return (
             f"[0:v]setpts=PTS-STARTPTS,split=2[bg][fg];"
             f"[bg]scale={target.width}:{target.height}"
             f":force_original_aspect_ratio=increase,"
             f"crop={target.width}:{target.height},gblur=sigma=40,"
             f"eq=brightness=-0.08[bgb];"
-            f"[fg]scale={target.width}:-2[fgs];"
+            f"[fg]scale={target.width}:{target.height}"
+            f":force_original_aspect_ratio=decrease:force_divisible_by=2[fgs];"
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,{tail}[v]")
 
     if plan.layout == "split":

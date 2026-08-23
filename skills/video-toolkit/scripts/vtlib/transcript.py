@@ -186,7 +186,11 @@ def build_transcript(words: list[dict], duration: float | None,
               else "pauses" if not punctuated else "both")
 
     ordered = sorted(breaks)
-    gaps = [b - a for a, b in zip(ordered, ordered[1:])]
+    # Include the head and tail runs: a video whose punctuation stops at the
+    # ten-minute mark has fifty minutes with no cut point, and measuring only
+    # between breaks reports a small gap and hides exactly that.
+    edges = [0.0] + ordered + ([duration] if duration else [])
+    gaps = [b - a for a, b in zip(edges, edges[1:])]
     return {
         "duration": round(duration or 0, 3),
         "punctuated": punctuated,

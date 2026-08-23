@@ -17,7 +17,7 @@ from vtlib.reframe import (  # noqa: E402
     SpeakerTrack, TrackSample, apply_deadzone, compile_crop_expr,
     dominant_speaker, evaluate_crop_expr, even, even_round, limit_slew,
     parse_track, plan_reframe, portrait_crop, smooth_path, split_panes,
-)
+)  # noqa: F401
 
 HD = SourceInfo(width=1920, height=1080, fps=30, duration=600)
 
@@ -257,3 +257,54 @@ class TestParseTrack(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTrackScaling(unittest.TestCase):
+    """A detector normally runs on a downscaled copy — that is why frame_w is
+    in the schema. Applying its coordinates raw puts every crop at roughly half
+    the correct x, silently."""
+
+    def half_res_track(self, n=20):
+        return SpeakerTrack(fps=2, frame_w=960, frame_h=540, samples=tuple(
+            TrackSample(t=i * 0.5, faces=(
+                Face(x=700, y=150, w=100, h=100, id="A", speaking=0.9),))
+            for i in range(n)))
+
+    def test_scale_factor(self):
+        self.assertEqual(self.half_res_track().scale_to(1920), 2.0)
+
+    def test_missing_frame_width_is_a_no_op(self):
+        tr = SpeakerTrack(fps=2, frame_w=0, frame_h=0, samples=())
+        self.assertEqual(tr.scale_to(1920), 1.0)
+
+    def test_centre_crop_uses_full_resolution_coordinates(self):
+        scaled = plan_reframe("center", 0, 10, HD, self.half_res_track())
+        raw = plan_reframe("center", 0, 10, HD, SpeakerTrack(
+            fps=2, frame_w=1920, frame_h=1080,
+            samples=self.half_res_track().samples))
+        self.assertNotEqual(scaled.rect.x, raw.rect.x)
+        # 700 in a 960-wide track is 1400 in a 1920-wide frame: right of centre.
+        self.assertGreater(scaled.rect.x, portrait_crop(HD).x)
+
+
+class TestCropExprPrecision(unittest.TestCase):
+    def test_a_sub_millisecond_interval_does_not_divide_by_zero(self):
+        """dt was guarded unrounded but printed rounded, so a 4ms interval
+        emitted '/0.00' and the crop x became nan for the whole clip."""
+        kf = [(0.0, 100.0), (0.004, 400.0), (1.0, 500.0)]
+        self.assertNotIn("/0.00", compile_crop_expr(kf))
+
+    def test_evaluator_skips_the_same_terms_as_the_compiler(self):
+        kf = [(i * 0.5, 100.0 + i * 0.001) for i in range(50)]
+        self.assertEqual(compile_crop_expr(kf).count("clip("), 0)
+        self.assertAlmostEqual(evaluate_crop_expr(kf, 25.0), 100.0, places=6)
+
+
+class TestFacelessSamples(unittest.TestCase):
+    def test_a_dropout_holds_the_current_speaker(self):
+        """A head turn or a cutaway drops the detection. Letting 'nobody' claim
+        the streak resets the crop to per-sample jitter."""
+        samples = list(two_speakers(n=10, speaking_left=True))
+        samples[5] = TrackSample(t=samples[5].t, faces=())
+        samples[6] = TrackSample(t=samples[6].t, faces=())
+        self.assertTrue(all(w == "A" for w in dominant_speaker(samples, 2.0)))

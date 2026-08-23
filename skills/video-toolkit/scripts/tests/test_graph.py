@@ -244,3 +244,29 @@ class TestArgv(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFitDoesNotClip(unittest.TestCase):
+    """`scale=W:-2` only bounds width, so a source taller than 9:16 overflowed
+    the canvas and overlay clipped equal slices off top and bottom — precisely
+    what this layout exists to avoid."""
+
+    def graph_for(self, w, h):
+        return compile_video_graph(
+            plan_reframe("fit", 0, 30, SourceInfo(width=w, height=h)), TARGET)
+
+    def test_foreground_is_constrained_on_both_axes(self):
+        g = self.graph_for(1080, 2400)
+        self.assertIn("force_original_aspect_ratio=decrease", g)
+        self.assertNotIn(f"scale={TARGET.width}:-2", g)
+
+    def test_output_stays_even_for_yuv420p(self):
+        self.assertIn("force_divisible_by=2", self.graph_for(1080, 2400))
+
+    def test_background_still_fills_the_canvas(self):
+        g = self.graph_for(1080, 2400)
+        self.assertIn("force_original_aspect_ratio=increase", g)
+
+    def test_wide_source_is_unaffected(self):
+        g = self.graph_for(1920, 1080)
+        self.assertIn("force_original_aspect_ratio=decrease", g)

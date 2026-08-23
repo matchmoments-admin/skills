@@ -109,6 +109,17 @@ class SpeakerTrack:
     def between(self, start: float, end: float) -> list[TrackSample]:
         return [s for s in self.samples if start <= s.t < end]
 
+    def scale_to(self, source_width: int) -> float:
+        """Factor mapping track coordinates onto the source frame.
+
+        Detectors normally run on a downscaled copy — that is why the schema
+        carries frame_w at all. Applying its coordinates raw puts every crop at
+        roughly half the correct x, silently.
+        """
+        if not self.frame_w or not source_width:
+            return 1.0
+        return source_width / self.frame_w
+
 
 def parse_track(data: dict) -> SpeakerTrack:
     """Build a SpeakerTrack from the on-disk JSON shape."""
@@ -202,6 +213,12 @@ def dominant_speaker(samples: list[TrackSample], fps: float,
     streak_id, streak = current, 0
     for s in samples:
         loudest = _loudest(s)
+        if not loudest:
+            # No face this sample — a head turn, a cutaway, a dropped
+            # detection. Hold, rather than letting "nobody" claim the streak
+            # and reset the crop to per-sample jitter.
+            out.append(current)
+            continue
         if loudest == streak_id:
             streak += 1
         else:
@@ -275,8 +292,11 @@ def compile_crop_expr(keyframes: list[tuple[float, float]],
     pts = sorted(keyframes)
     terms = [f"{pts[0][1]:.{precision}f}"]
     for (t0, x0), (t1, x1) in zip(pts, pts[1:]):
-        dt = t1 - t0
-        dx = x1 - x0
+        # Guard the rounded value, not the raw one: a 4ms interval passes
+        # `dt > 0` but prints as "/0.00", and ffmpeg then divides by zero and
+        # the crop x becomes nan for the whole clip.
+        dt = round(t1 - t0, precision)
+        dx = round(x1 - x0, precision)
         if dt <= 0 or abs(dx) < 10 ** -precision:
             continue
         terms.append(
@@ -285,15 +305,21 @@ def compile_crop_expr(keyframes: list[tuple[float, float]],
     return "+".join(terms)
 
 
-def evaluate_crop_expr(keyframes: list[tuple[float, float]], t: float) -> float:
-    """The same maths in Python, so a test can check ffmpeg's expression."""
+def evaluate_crop_expr(keyframes: list[tuple[float, float]], t: float,
+                       precision: int = 2) -> float:
+    """The same maths in Python, so a test can check ffmpeg's expression.
+
+    Must skip exactly the terms `compile_crop_expr` skips, or the two drift
+    apart on a long path made of sub-0.01px steps and the check is worthless.
+    """
     pts = sorted(keyframes)
     value = pts[0][1]
     for (t0, x0), (t1, x1) in zip(pts, pts[1:]):
-        dt = t1 - t0
-        if dt <= 0:
+        dt = round(t1 - t0, precision)
+        dx = round(x1 - x0, precision)
+        if dt <= 0 or abs(dx) < 10 ** -precision:
             continue
-        value += (x1 - x0) * min(1.0, max(0.0, (t - t0) / dt))
+        value += dx * min(1.0, max(0.0, (t - t0) / dt))
     return value
 
 
@@ -309,6 +335,8 @@ def plan_reframe(layout: str, start: float, end: float, source: SourceInfo,
                       f"Choose from: {', '.join(LAYOUTS)}")
 
     samples = track.between(start, end) if track else []
+    # Detectors normally run on a downscaled copy of the video.
+    scale = track.scale_to(source.displayed[0]) if track else 1.0
 
     if layout == "auto":
         layout, reason = _auto_layout(source, samples)
@@ -319,7 +347,7 @@ def plan_reframe(layout: str, start: float, end: float, source: SourceInfo,
         return ReframePlan(layout="fit", reason=reason)
 
     if layout == "split":
-        centres = _pane_centres(samples)
+        centres = _pane_centres(samples, scale)
         return ReframePlan(layout="split",
                            panes=split_panes(source, centres),
                            reason=reason)
@@ -328,9 +356,9 @@ def plan_reframe(layout: str, start: float, end: float, source: SourceInfo,
         if not samples:
             return ReframePlan(layout="center", rect=portrait_crop(source),
                                reason="no speaker track for this clip")
-        return _plan_path(start, source, track, samples, reason)
+        return _plan_path(start, source, track, samples, reason, scale)
 
-    cx = _mean_face_centre(samples)
+    cx = _mean_face_centre(samples, scale)
     return ReframePlan(layout="center", rect=portrait_crop(source, cx),
                        reason=reason)
 
@@ -348,14 +376,16 @@ def _auto_layout(source: SourceInfo, samples: list[TrackSample]) -> tuple[str, s
     return "split", "no track; wide source, keeping both halves on screen"
 
 
-def _mean_face_centre(samples: list[TrackSample]) -> float | None:
+def _mean_face_centre(samples: list[TrackSample],
+                      scale: float = 1.0) -> float | None:
     faces = [f for s in samples for f in s.faces]
     if not faces:
         return None
-    return sum(f.cx for f in faces) / len(faces)
+    return scale * sum(f.cx for f in faces) / len(faces)
 
 
-def _pane_centres(samples: list[TrackSample]) -> tuple[float, float] | None:
+def _pane_centres(samples: list[TrackSample],
+                  scale: float = 1.0) -> tuple[float, float] | None:
     """Centre each pane on a real face rather than a blind half."""
     by_id: dict[str, list[float]] = {}
     for s in samples:
@@ -363,12 +393,13 @@ def _pane_centres(samples: list[TrackSample]) -> tuple[float, float] | None:
             by_id.setdefault(f.id, []).append(f.cx)
     if len(by_id) < 2:
         return None
-    means = sorted(sum(v) / len(v) for v in by_id.values())
+    means = sorted(scale * sum(v) / len(v) for v in by_id.values())
     return means[0], means[-1]
 
 
 def _plan_path(start: float, source: SourceInfo, track: SpeakerTrack,
-               samples: list[TrackSample], reason: str) -> ReframePlan:
+               samples: list[TrackSample], reason: str,
+               scale: float = 1.0) -> ReframePlan:
     rect = portrait_crop(source)
     w, _ = source.displayed
     speakers = dominant_speaker(samples, track.fps)
@@ -377,7 +408,7 @@ def _plan_path(start: float, source: SourceInfo, track: SpeakerTrack,
         face = next((f for f in sample.faces if f.id == who), None)
         if face is None:
             face = max(sample.faces, key=lambda f: f.speaking, default=None)
-        centres.append(face.cx if face else w / 2)
+        centres.append(scale * face.cx if face else w / 2)
 
     xs = [max(0.0, min(w - rect.w, c - rect.w / 2)) for c in centres]
     xs = smooth_path(xs, track.fps, w)

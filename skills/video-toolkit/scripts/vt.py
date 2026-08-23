@@ -269,19 +269,24 @@ def has_video_stream(path: Path) -> bool:
 
 
 def cached_media_kind(d: Path, existing: list[Path]) -> str | None:
-    """"video" | "audio" | None. Reads the marker, probing once to backfill it
-    for cache entries written before the marker existed."""
-    marker = d / KIND_MARKER
-    if marker.exists():
-        value = marker.read_text(encoding="utf-8").strip()
-        if value in ("audio", "video"):
-            return value
+    """"video" | "audio" | None.
+
+    Probes when ffprobe is available, because the marker records what was
+    *requested* and the audio format string ends in a bare `/best` fallback —
+    on a source with no audio-only format that yields a muxed video file
+    labelled "audio". The marker is the fallback, not the authority.
+    """
     if not existing:
         return None
+    marker = d / KIND_MARKER
     if shutil.which("ffprobe"):
         kind = "video" if has_video_stream(existing[0]) else "audio"
         marker.write_text(kind, encoding="utf-8")
         return kind
+    if marker.exists():
+        value = marker.read_text(encoding="utf-8").strip()
+        if value in ("audio", "video"):
+            return value
     return None
 
 
@@ -309,27 +314,35 @@ def fetch_media(d: Path, src: str, want_video: bool, force: bool) -> Path | None
     # Download into a staging directory first. Replacing the cache before the
     # new file lands means a throttled or failed fetch destroys a working one.
     stage = d / ".media-staging"
-    if stage.exists():
-        for old in stage.iterdir():
-            old.unlink()
+    shutil.rmtree(stage, ignore_errors=True)
     cmd = ytdlp_cmd() + ["-f", fmt, "--no-warnings", "--no-progress",
                          "-P", str(stage), "-o", "media.%(ext)s", src]
     r = run(cmd)
     fetched = sorted(stage.glob("media.*")) if stage.exists() else []
     if r.returncode != 0 or not fetched:
-        for partial in fetched:
-            partial.unlink()
+        shutil.rmtree(stage, ignore_errors=True)
         raise VtError(
             f"yt-dlp media download failed: {(r.stderr or r.stdout).strip()[-800:]}")
+    if len(fetched) > 1:
+        # yt-dlp exits 0 and leaves both parts when it cannot merge
+        # bestvideo+bestaudio, and --no-warnings hides why. Taking the first
+        # alphabetically hands back media.f140.m4a — an audio-only track
+        # labelled "video", which is the exact failure this staging exists to
+        # prevent.
+        names = ", ".join(p.name for p in fetched)
+        shutil.rmtree(stage, ignore_errors=True)
+        raise VtError(
+            f"yt-dlp left {len(fetched)} unmerged files ({names}) — it could "
+            f"not mux video and audio together. Install ffmpeg and retry.")
 
     for stale in existing:
         stale.unlink()
     landed = fetched[0].replace(d / fetched[0].name)
-    for extra in fetched[1:]:
-        extra.replace(d / extra.name)
-    stage.rmdir()
+    # Marker before cleanup: if removing the staging directory fails, the cache
+    # must still know what it is holding.
     (d / KIND_MARKER).write_text("video" if want_video else "audio",
                                  encoding="utf-8")
+    shutil.rmtree(stage, ignore_errors=True)
     return landed
 
 
@@ -576,9 +589,13 @@ def cmd_validate_moments(args) -> dict:
         raise VtError("no --src given and moments.json has no source.url — "
                       "one of them must say which video these times belong to")
 
-    # Check the file's own claim, not the override. Deriving both from --src
-    # would make the mismatch undetectable, which is the whole point of it.
+    # Check the file's own claim, not the override — deriving both from --src
+    # would make the mismatch undetectable. But a legitimate override exists
+    # (moments.json naming a YouTube URL while the transcript was built from a
+    # local copy), so the check is suppressible rather than absolute.
     claimed_key = video_key(claimed) if claimed else video_key(src)
+    if args.allow_source_mismatch:
+        claimed_key = None
 
     tp = cache_dir(src, create=False) / "transcript.json"
     if not tp.exists():
@@ -693,6 +710,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="how close to a break counts as on it (default 0.05s)")
     p.add_argument("--strict", action="store_true",
                    help="require exact equality with a break")
+    p.add_argument("--allow-source-mismatch", action="store_true",
+                   dest="allow_source_mismatch",
+                   help="skip the check that moments.json's source.url names "
+                        "the same video as the transcript (use when the "
+                        "transcript was built from a local copy)")
     p.add_argument("--fix", default=None,
                    help="write a copy with edges snapped to exact break values")
     p.set_defaults(fn=cmd_validate_moments)
