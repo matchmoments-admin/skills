@@ -14,6 +14,17 @@ only text, images and PDFs. Everything here works by turning a video into things
 model *can* read: a timed transcript, extracted frames, and numeric signal series.
 Anyone claiming Claude Code natively ingests MP4 is describing a different product.
 
+## Layout
+
+`scripts/vt.py` owns every side effect — argparse, the filesystem, yt-dlp, ffmpeg.
+The algorithms live in `scripts/vtlib/`, which imports no I/O module at all (a
+test enforces this). That split is why the pipeline can be tested without a
+network or a media file, and why the signals and candidates stages will port to a
+Worker where the cache is R2 rather than a directory.
+
+Anticipated failures raise `VtError`; `main()` is the only place that turns one
+into the `{"ok": false, "error": …}` envelope and an exit code.
+
 ## The tool
 
 `scripts/vt.py` — one CLI, five commands, all idempotent, all writing into a
@@ -106,13 +117,15 @@ rather than fails.
 
 | Series | Source | Default weight | Notes |
 |---|---|---|---|
-| `heatmap` | YouTube most-replayed, 100 buckets | 0.40 | **Revealed** engagement, not predicted. Only on public videos with enough views. The strongest signal by far when present. Stored as *prominence over a local baseline*, not the raw curve — see below. `heatmap_raw` is carried alongside at weight 0 for inspection. |
+| `heatmap` | YouTube most-replayed, 100 buckets | 0.40 | **Revealed** engagement, not predicted. Only on public videos with enough views. The strongest signal by far when present. Stored as *prominence over a local baseline*, not the raw curve — see below. The raw curve is kept under `diagnostics` in `signals.json`, deliberately outside the fusable set. |
 | `comments` | timestamp mentions in top comments, weighted by likes | 0.30 | Needs `fetch --comments`. Viewers literally timestamp the good bits. Gaussian-blurred ±5s. |
 | `energy` | per-second RMS above a 60s rolling median | 0.20 | Needs ffmpeg + `fetch --audio`. Spikes ≈ laughter, applause, raised voice. |
 | `density` | words per second, blurred | 0.10 | Weak on its own; a useful tiebreak. |
 
 Override with `--weights '{"heatmap":0.6,"comments":0.4}'`. Set a weight to 0 to
-drop a series.
+drop a series. Naming a signal that isn't fusable is an error rather than a
+silent no-op — `heatmap_raw` lives under `diagnostics` precisely so weighting it
+cannot double-count the heatmap.
 
 **The heatmap needs two corrections before it is usable.** Raw, its global maximum
 is essentially always at t=0 — it measures "pressed play", not "rewatched this" — and
@@ -166,7 +179,7 @@ src.info.json      full yt-dlp metadata: chapters, heatmap, comments
 src.en.json3       captions as fetched
 media.*            audio or video, only if requested
 transcript.json    canonical timed transcript
-signals.json       per-second series + fused
+signals.json       per-second series + diagnostics + fused
 candidates.json    ranked windows
 ```
 

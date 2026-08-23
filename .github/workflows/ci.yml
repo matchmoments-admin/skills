@@ -19,6 +19,14 @@ jobs:
       - name: Validate skills
         run: python3 scripts/validate_skills.py
 
+      # stdlib unittest, no pip install — same constraint as validate_skills.py,
+      # which hand-rolls a YAML parser to keep CI runnable on a stock image.
+      - name: Video toolkit tests
+        run: |
+          python3 -m unittest discover \
+            -s skills/video-toolkit/scripts/tests \
+            -t skills/video-toolkit/scripts
+
       - name: Verify install scripts are executable
         run: |
           test -x scripts/install.sh

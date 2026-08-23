@@ -104,7 +104,7 @@ they haven't said). Structure:
   "source": { "url": "…", "title": "…", "channel": "…", "duration": 18900 },
   "rights": "owned",              // owned | licensed | third-party
   "generated": "2026-08-23",
-  "signals_available": ["heatmap", "comments", "density"],
+  "signals_available": ["comments", "density", "heatmap"],
   "confidence": "medium",         // see below
   "moments": [
     {
