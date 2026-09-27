@@ -15,6 +15,8 @@ Project-agnostic. Install once on any machine, use across every project.
 | `pitch`                        | Generate/refresh the concise (~7-slide) Ask Arthur platform brief in the "Signal" editorial style (Source Serif 4 + gold-italic emphasis, navy/cream dual surface). Ask-Arthur-specific companion to `slide-deck`; facts in `pitch/content.md`. |
 | `dream`                        | Offline memory consolidation for a repo: reads recent Claude Code transcripts, extracts durable learnings via sub-agents, merges them into the repo's `memory/` directory, and opens a PR for human review. Never merges its own output. |
 | `drift-check`                  | Audits a repo's CLAUDE.md (and directory-scoped variants) against reality — commands, paths, links, conventions. ≥3 drifted claims → PR fixing only the drifted lines; fewer → report. Never touches code. |
+| `salesforce-report-create`     | Create Salesforce reports by API (Analytics REST or Metadata). Covers the `__c` suffix on custom report type names, the auto-generated types that expose `CUST_OWNER_NAME`, and why running a report is a cheap assertion over production data. |
+| `salesforce-dashboard-create`  | Create Salesforce dashboards as deployable metadata. The four attributes that each fail a deploy on their own, and why `LoggedInUser` is how a dashboard ships broken. |
 
 ## Install
 
