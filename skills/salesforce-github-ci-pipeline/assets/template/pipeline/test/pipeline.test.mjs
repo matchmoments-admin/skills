@@ -8,8 +8,9 @@ import * as verdict from "../src/verdict.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
 import { orgRegistry } from "../src/org.mjs";
-import { summarize, toMarkdown } from "../src/metrics.mjs";
+import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
+import { storyCard, CARD_MARK } from "../src/card.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -418,4 +419,37 @@ test("review triage: code and access changes always reviewed; only confident low
   const high = fakeJev({ risk: { type: "score", score: 2.6, confidence: 0.8 } });
   assert.equal((await triageReview(high, { files: ["force-app/main/default/objects/Account/fields/X__c.field-meta.xml"], diff: "" })).review, true);
   assert.equal((await triageReview(typesafeJev(""), { files: ["force-app/main/default/objects/Account/fields/X__c.field-meta.xml"], diff: "" })).review, true);
+});
+
+test("AI cost: per role from transcripts, totals rounded to cents", () => {
+  const c = aiCost([
+    { role: "review", total_cost_usd: 0.0896, num_turns: 6, duration_ms: 60000 },
+    { role: "review", total_cost_usd: 0.11, num_turns: 8, duration_ms: 120000 },
+    { role: "implement", total_cost_usd: 1.234, num_turns: 42, duration_ms: 600000 },
+  ]);
+  assert.deepEqual(c.byRole.review, { runs: 2, usd: 0.2, perRunUsd: 0.1, medianTurns: 7, medianMinutes: 1.5 });
+  assert.deepEqual(c.total, { runs: 3, usd: 1.43 });
+  const md = toMarkdown(summarize({ days: 7, prs: [], releases: [], runs: [], transcripts: [{ role: "review", total_cost_usd: 0.09, num_turns: 6, duration_ms: 1 }] }));
+  assert.match(md, /\| review \| 1 \| \$0\.09 \|/);
+});
+
+// ---------------------------------------------------------------- story card
+test("story card: before the PR it says how to build; with a PR it tracks each stage and links the approval", () => {
+  const base = { key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/2026-w41" };
+  const before = storyCard({ ...base, ai: { implement: true } });
+  assert.ok(before.startsWith(CARD_MARK));
+  assert.match(before, /\*\*Next:\*\* Build it, or add the label \*\*ai:implement\*\*/);
+
+  const f = { ...open(fixture(23)), ai: {}, statuses: [], reviews: [] };
+  const pr = { ...f.pr, title: "Escalate cases" };
+  const waiting = storyCard({ ...base, pr, facts: f, decision: gate.evaluate(f) });
+  assert.match(waiting, /\*\*Next:\*\* \*\*\[Approve here\]\(https:\/\/github.com\/o\/r\/pull\/\d+\/files\)\*\*: everything else is green/);
+  assert.match(waiting, /➖ \| AI review \| off: your approval is the review/);
+
+  const failedReview = { ...f, ai: { review: true, fix: true }, statuses: [{ ...ok(f.pr.headRefOid, gate.STATUS.review), state: "failure" }] };
+  assert.match(storyCard({ ...base, ai: failedReview.ai, pr, facts: failedReview, decision: gate.evaluate(failedReview) }), /Address the review comments .*\*\*ai:fix\*\*/);
+
+  const shipped = storyCard({ ...base, pr: { ...pr, state: "MERGED" }, facts: f, shipped: { tag: "v1", url: "https://x/v1" } });
+  assert.match(shipped, /Done: live in production since \[v1\]/);
+  assert.doesNotMatch(shipped, /⬜/);
 });

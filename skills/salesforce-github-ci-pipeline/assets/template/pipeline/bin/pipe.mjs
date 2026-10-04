@@ -13,6 +13,7 @@
 //   closeout  plan|run --tag <tag>
 //   triage    ui --log file [--story file] · review --base B --head H   (Jev, behind AI_TRIAGE; falls back safely)
 //   verdict   model <role>                              the model for an AI role (AI_MODEL overrides)
+//   story     card <key> [--base B] [--tag T]                refresh the story card on the issue / ticket
 //   metrics   [--days N] [--out file]                   DORA and pipeline telemetry as markdown
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { io } from "../src/io.mjs";
@@ -22,10 +23,11 @@ import * as verdict from "../src/verdict.mjs";
 import * as closeout from "../src/closeout.mjs";
 import * as metrics from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
+import { storyCard, CARD_MARK, CARD_TITLE } from "../src/card.mjs";
 import { orgRegistry } from "../src/org.mjs";
 import { tracker as makeTracker } from "../src/tracker.mjs";
 
-const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story"]);
+const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "tag"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -57,6 +59,25 @@ function openRelease() {
 }
 
 const orgs = () => orgRegistry({ sf: io.sf, log });
+
+/** Rebuild the story card from the same facts the gate uses, and put it on the story. Never fails the caller. */
+async function refreshCard(key, { base = null, tag = null } = {}) {
+  try {
+    const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
+    const repoUrl = `${process.env.GITHUB_SERVER_URL || "https://github.com"}/${repo}`;
+    const branch = names.storyBranch(key);
+    const pr = (io.gh(["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "number,state,title,baseRefName,headRefOid"]) || [])[0] || null;
+    const ai = names.aiFeatures();
+    const openRel = openRelease();
+    const facts = pr ? gate.gather(pr.number, io, { openReleaseBranch: openRel, ai }) : null;
+    const body = storyCard({
+      key, repoUrl, branch, ai, pr, facts, decision: facts ? gate.evaluate(facts) : null,
+      base: pr?.baseRefName || base || names.context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main",
+      shipped: tag ? { tag, url: `${repoUrl}/releases/tag/${tag}` } : null,
+    });
+    await makeTracker(io).card(key, body, CARD_MARK, CARD_TITLE);
+  } catch (e) { log(`::warning::story card for ${key} not updated: ${e.message}`); }
+}
 
 async function main() {
   if (cmd === "metrics") {
@@ -146,17 +167,22 @@ async function main() {
       return say(state.map(([n, c]) => `${n}: ${c}`).join("\n"));
     }
     case "gate nudge": {
+      // Runs after every check or verdict lands: re-run the gate if a person signed off, and refresh the story card.
       const pr = arg(0);
       const n = gate.nudge(pr, io);
-      if (n.action === "dispatch") { io.gh(["workflow", "run", "gate.yml", "-f", `pr=${pr}`]); return say(`re-ran the gate for approved PR #${pr}`); }
-      if (n.action === "tell-reset") {
+      let said;
+      if (n.action === "dispatch") { io.gh(["workflow", "run", "gate.yml", "-f", `pr=${pr}`]); said = `re-ran the gate for approved PR #${pr}`; }
+      else if (n.action === "tell-reset") {
         io.gh(["pr", "comment", String(pr), "--body", `Your approval was reset because new commits arrived after it (an approval covers only the code you saw). **Approve again here:** ${n.url}`]);
-        return say("told the approver their approval was reset");
-      }
-      return say(`nothing to do: ${n.why}`);
+        said = "told the approver their approval was reset";
+      } else said = `nothing to do: ${n.why}`;
+      const key = names.storyOf(io.gh(["pr", "view", String(pr), "--json", "headRefName"], { allowFail: true })?.headRefName || "");
+      if (key) await refreshCard(key);
+      return say(said);
     }
 
     case "verdict model": return say(verdict.modelFor(arg(0)));
+    case "story card": { await refreshCard(arg(0), { base: flag("base"), tag: flag("tag") }); return say(`card updated for ${arg(0)}`); }
     case "triage ui": {
       const read = (f) => (f ? readFileSync(f, "utf8") : "");
       const t = await triageUiFailure(typesafeJev(process.env.TYPESAFE_API_KEY), { log: read(flag("log")), story: read(flag("story")) });
@@ -218,7 +244,10 @@ async function main() {
       const facts = await closeout.gather(io, t);
       const p = closeout.plan(facts);
       log(JSON.stringify(p));
-      if (sub === "run") await closeout.apply(p, { tag: flag("tag"), tracker: t, orgs: orgs(), git: io.git, gh: io.gh, log });
+      if (sub === "run") {
+        await closeout.apply(p, { tag: flag("tag"), tracker: t, orgs: orgs(), git: io.git, gh: io.gh, log });
+        for (const key of [...p.ship, ...p.hotfix.map((h) => h.key)]) await refreshCard(key, { tag: flag("tag") });
+      }
       return;
     }
   }

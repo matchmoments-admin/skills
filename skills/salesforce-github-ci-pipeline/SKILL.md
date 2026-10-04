@@ -58,13 +58,15 @@ Prove the whole path with one small real story before anyone relies on it. Drive
 
 1. Push a commit to `main` and wait for **CI on main** to go green (release branches are cut only from commits with green required checks).
 2. Actions → `sprint-start` with the sprint name.
-3. Create an issue with acceptance criteria that say **what the user sees** ("the record page shows…"), label `start`, then build it on the branch (or label `ai:implement` if `AI_IMPLEMENT` is on).
+3. Create the story with the **New story** issue form (acceptance criteria say **what the user sees**), label `start`, and follow the **Pipeline status** card it gets. Build on the branch and push (the pipeline opens the PR), or label `ai:implement` if `AI_IMPLEMENT` is on.
 4. CI (and `ai-review`, if on) start by themselves. For the UI test, commit `e2e/story-<key>.spec.ts` and label `test`, or label `ai:test` if `AI_UI_TEST` is on. Approve the PR; the gate waits for whatever is still running.
    Run the tracer twice if the user wants AI: once with every switch off, once with their chosen switches.
 5. The gate merges into the release branch and starts the staging regression.
 6. Actions → `release-cut`; approve the release PR.
 
-Done when: a GitHub Release tag exists, the change is visible in production Setup, the story is closed, the milestone is closed, and `sf data query -o <prod> -q "SELECT Description FROM ScratchOrgInfo WHERE Status='Active'"` returns no orgs from that sprint.
+Then a hotfix with every AI switch off (**Urgent production fix** form; it starts on submit), built by hand.
+
+Done when: a GitHub Release tag exists for both, the change is visible in production Setup, the story is closed, the milestone is closed, and `sf data query -o <prod> -q "SELECT Description FROM ScratchOrgInfo WHERE Status='Active'"` returns no orgs from that sprint.
 
 ## Operating it
 

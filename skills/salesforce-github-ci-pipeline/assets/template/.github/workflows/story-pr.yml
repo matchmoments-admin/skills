@@ -1,0 +1,74 @@
+name: story-pr
+# Push to a story branch (issue-N or a Jira key) and the pipeline opens the pull request for you, as the pipeline App:
+# the right base (release branch, or main for a hotfix), "Closes #N", the sprint milestone. Because the App is the
+# author, the person who built it can approve it (GitHub never lets an author approve their own PR).
+on:
+  push:
+    branches: ["issue-*", "[A-Z]+-[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Story branch (issue-N or a Jira key)
+        required: true
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: read
+  statuses: read
+env:                    # the AI switches (repository variables); the story card reads them
+  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
+  AI_REVIEW: ${{ vars.AI_REVIEW }}
+  AI_FIX: ${{ vars.AI_FIX }}
+  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
+  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
+  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: story-pr-${{ inputs.branch || github.ref_name }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ inputs.branch || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Which story, which base, is a PR already open?
+        id: s
+        run: |
+          [[ "$BRANCH" =~ ^(issue-[0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story branch: $BRANCH"; exit 1; }
+          KEY=$(node pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
+          git fetch -q origin "$BRANCH"
+          # A hotfix branch was cut from main; a story branch from the open release branch.
+          REL=$(node pipeline/bin/pipe.mjs context | sed -n 's/^RELEASE_BRANCH=//p')
+          if [ -n "$REL" ] && git fetch -q origin "$REL" && git merge-base --is-ancestor "origin/$REL" "origin/$BRANCH"; then BASE="$REL"; else BASE=main; fi
+          OPEN=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          AHEAD=$(git rev-list --count "origin/$BASE..origin/$BRANCH")
+          { echo "key=$KEY"; echo "base=$BASE"; echo "open=$OPEN"; echo "ahead=$AHEAD"; } >> "$GITHUB_OUTPUT"
+          echo "story $KEY, base $BASE, open PR '${OPEN}', $AHEAD commit(s) ahead"
+      - id: app
+        if: steps.s.outputs.open == '' && steps.s.outputs.ahead != '0'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: Open the pull request as the pipeline
+        if: steps.s.outputs.open == '' && steps.s.outputs.ahead != '0'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          KEY: ${{ steps.s.outputs.key }}
+          BASE: ${{ steps.s.outputs.base }}
+        run: |
+          if [[ "$KEY" =~ ^[0-9]+$ ]]; then CLOSES="Closes #$KEY"; else CLOSES="Story $KEY"; fi
+          TITLE=$(git log -1 --format=%s "origin/$BRANCH")
+          MILESTONE=""; [ "$BASE" = main ] || MILESTONE=$(gh api "repos/$GH_REPO/milestones?state=open" --jq "[.[] | select(.title | endswith(\"${BASE#release/}\"))][0].title // empty")
+          printf '%s\n\nOpened by the pipeline when `%s` was pushed. Approve it when the story card says so.\n' "$CLOSES" "$BRANCH" > body.md
+          gh pr create --base "$BASE" --head "$BRANCH" --title "$TITLE" --body-file body.md ${MILESTONE:+--milestone "$MILESTONE"} \
+            || echo "::warning::could not open the PR (one may have just been opened by ai-implement)"
+      - name: Story card
+        if: steps.s.outputs.key != ''
+        run: node pipeline/bin/pipe.mjs story card "${{ steps.s.outputs.key }}"

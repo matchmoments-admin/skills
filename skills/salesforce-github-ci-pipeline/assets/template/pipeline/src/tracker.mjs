@@ -15,6 +15,12 @@ export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || proce
       return { key: String(i.number), title: i.title, body: i.body, state: i.state, labels: i.labels.map((l) => l.name), url: i.url, sprint: i.milestone?.title || null };
     },
     async comment(key, text) { gh(["issue", "comment", String(key), "--body", text]); },
+    /** Create or update the one story card comment (found by its marker). */
+    async card(key, body, mark) {
+      const mine = list(`repos/${repo}/issues/${key}/comments?per_page=100`).find((c) => String(c.body || "").includes(mark));
+      if (mine) gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${mine.id}`, "-f", `body=${body}`]);
+      else gh(["issue", "comment", String(key), "--body", body]);
+    },
     async done(key, text) {
       if (text) gh(["issue", "comment", String(key), "--body", text]);
       gh(["issue", "close", String(key), "--reason", "completed"], { allowFail: true });
@@ -70,6 +76,13 @@ export function jiraTracker({ fetch = globalThis.fetch, base = process.env.JIRA_
       return { key: i.key, title: i.fields.summary, body: adfToText(i.fields.description).trim(), state: isDone(i.fields.status) ? "CLOSED" : "OPEN", labels: i.fields.labels || [], url: `${base.replace(/\/$/, "")}/browse/${i.key}` };
     },
     async comment(key, text) { await call("POST", `/rest/api/3/issue/${key}/comment`, { body: adfDoc(text) }); },
+    async card(key, body, mark, title) {
+      const text = body.replace(mark, "").trim();   // Jira shows HTML comments as text; find the card by its title instead
+      const all = (await call("GET", `/rest/api/3/issue/${key}/comment?maxResults=100`))?.comments || [];
+      const mine = all.find((c) => adfToText(c.body).includes(title));
+      if (mine) await call("PUT", `/rest/api/3/issue/${key}/comment/${mine.id}`, { body: adfDoc(text) });
+      else await this.comment(key, text);
+    },
     async done(key, text) {
       if (text) await this.comment(key, text);
       const { transitions } = await call("GET", `/rest/api/3/issue/${key}/transitions`);

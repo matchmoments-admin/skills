@@ -62,6 +62,9 @@ Every entry happened in a real run. Search this file for the error text you see.
 
 - **A long-lived branch runs old pipeline code** → `pull_request` workflows run the workflow file from the PR's merge result. → Every job runs `main`'s `pipeline/` from a `.pipeline/` checkout, but workflow *files* reach an open sprint only through `back-merge` (merges itself on green CI).
 - **A maintenance PR that adds a `pipe` command fails its own CI** → CI runs `main`'s copy, which lacks the command. → Admin-merge (squash) pipeline maintenance PRs; their CI afterwards fails on the vanished `refs/pull/N/merge`, harmlessly.
+- **The release PR never gets "staging regression"** → a dispatched workflow's check lands on the commit of the ref it runs on. → Dispatch `staging-deploy` with `--ref <release branch>`.
+- **`gh release create` → 403 "Resource not accessible by integration"** after a good deploy → a tag on a commit that changes workflows needs the `workflows` permission, which the Actions token never has. → Tag as the App. Recover by tagging by hand and re-running `release` (it skips deploy and tag, still closes out).
+- **A person can never approve their own hotfix PR** → GitHub forbids self-approval and `main` needs one. → `story-pr` opens story PRs on push, as the App.
 - **`git fetch` returns nothing inside `.pipeline/`** → it is checked out with `persist-credentials: false` (so PR code cannot read the token). → Look things up through the GitHub API (`gh api`), not git.
 - **PR code can forge a verdict** if it runs on the same runner as the step that posts the status (it can edit `.pipeline/`). → Run specs in their own read-only job; post statuses from a fresh runner, from the step `outcome`.
 - **`no JSON in command output`** after `gh issue comment` → it prints a URL. → `io.gh` returns text when the output is not JSON.

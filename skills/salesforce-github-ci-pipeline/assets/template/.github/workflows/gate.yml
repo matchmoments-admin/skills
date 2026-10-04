@@ -17,10 +17,17 @@ on:
 permissions:
   contents: write
   checks: read
-  issues: read
+  issues: write         # the story card
   pull-requests: write
   actions: write
   statuses: read
+env:                    # the AI switches (repository variables); the gate and the story card read them
+  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
+  AI_REVIEW: ${{ vars.AI_REVIEW }}
+  AI_FIX: ${{ vars.AI_FIX }}
+  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
+  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
+  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
 jobs:
   decide:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready' || github.event.review.state == 'approved'
@@ -33,8 +40,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       PR: ${{ github.event.pull_request.number || inputs.pr }}
-      AI_REVIEW: ${{ vars.AI_REVIEW }}       # which AI verdicts the gate requires (pipeline/src/gate.mjs requiredVerdicts)
-      AI_UI_TEST: ${{ vars.AI_UI_TEST }}
     outputs:
       route: ${{ steps.gate.outputs.route }}
       mergeable: ${{ steps.gate.outputs.mergeable }}
@@ -62,6 +67,9 @@ jobs:
           case "$REASONS" in *"not approved"*|*"no sign-off"*|*"approve again"*) BODY=$(printf '%s\n\n**Approve here:** %s (Review changes > Approve > Submit review)' "$BODY" "$URL");; esac
           LAST=$(gh pr view "$PR" --json comments --jq '[.comments[] | select(.body | startswith("Not merged yet"))] | last | .body // ""')
           if [ "$LAST" = "$BODY" ]; then echo "already said so"; else gh pr comment "$PR" --body "$BODY"; fi
+      - name: Story card
+        if: steps.gate.outputs.story != ''
+        run: node pipeline/bin/pipe.mjs story card "${{ steps.gate.outputs.story }}"
   ship:
     needs: decide
     if: needs.decide.outputs.mergeable == 'true'
@@ -123,10 +131,11 @@ jobs:
         run: |
           for step in $AFTER; do
             case "$step" in
-              staging) gh workflow run staging-deploy.yml ;;                     # deploys the open release branch
+              staging) gh workflow run staging-deploy.yml --ref "$BASE" ;;      # on the release branch, so the check lands on the release PR's head
               release) gh workflow run release.yml -f validated_job="$JOB" ;;   # quick-deploys exactly what was validated
             esac
           done
+          [ -z "$STORY" ] || node pipeline/bin/pipe.mjs story card "$STORY"
           for step in $AFTER; do
             case "$step" in
               delete-story-org) [ -z "$STORY" ] || node pipeline/bin/pipe.mjs org remove "story:$STORY" || echo "::warning::could not delete the story org; the janitor will";;

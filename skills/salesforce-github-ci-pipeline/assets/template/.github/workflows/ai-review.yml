@@ -20,6 +20,14 @@ permissions:
   issues: write
   statuses: write
   id-token: write
+  checks: read   # the story card reads checks and verdicts
+env:                    # the AI switches (repository variables); the gate and the story card read them
+  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
+  AI_REVIEW: ${{ vars.AI_REVIEW }}
+  AI_FIX: ${{ vars.AI_FIX }}
+  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
+  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
+  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
 jobs:
   off:
     if: github.event.label.name == 'ai:review' && vars.AI_REVIEW != 'true'

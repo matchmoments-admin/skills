@@ -1,0 +1,39 @@
+name: New story
+description: Something users should be able to see or do in Salesforce. It becomes a branch, a scratch org and a pull request.
+title: "Story: "
+labels: [feature]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write it the way a user would check it. When you submit, add the label **start**; the pipeline then posts a
+        **Pipeline status** card on this story with the next step and a link for every stage.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Who needs what, and why.
+      placeholder: Account managers need to see how long an Account has been a customer, to prioritise long-standing customers.
+    validations: { required: true }
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance criteria
+      description: One line each. Say what a user sees, not how to build it.
+      placeholder: |
+        - A Customer Since date field exists on Account
+        - Customer Years shows whole years since Customer Since, blank when it is blank
+        - Both fields are on the Account record page
+    validations: { required: true }
+  - type: textarea
+    id: where
+    attributes:
+      label: Where to see it in the UI
+      description: The clicks a tester follows. The UI test is written from this.
+      placeholder: Open an Account, set Customer Since to a date three years ago and save. Customer Years shows 3.
+    validations: { required: true }
+  - type: textarea
+    id: out
+    attributes:
+      label: Out of scope
+      value: Anything not listed above.

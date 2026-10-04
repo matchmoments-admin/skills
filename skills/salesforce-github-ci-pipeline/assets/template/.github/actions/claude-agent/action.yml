@@ -52,5 +52,5 @@ runs:
       with:
         name: claude-transcript-${{ inputs.role }}-${{ github.run_id }}
         path: ${{ runner.temp }}/claude-execution-output.json
-        retention-days: 7
+        retention-days: 30   # the weekly metrics read cost and turns from these
         if-no-files-found: ignore
