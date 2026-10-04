@@ -1,0 +1,42 @@
+name: back-merge
+# After a release ships, bring main into the open release branch (if any) so a hotfix is not undone by the next
+# release. Always a PR: release/* only changes through PRs with green CI. It merges by itself when CI is green (the code is already approved and in production).
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write        # starts CI without the App
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }   # pipeline code from main, whatever ref this was started on
+      - id: id
+        uses: ./.github/actions/pipeline-identity
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: main
+      - name: The open sprint
+        id: ctx
+        run: node pipeline/bin/pipe.mjs context
+      - name: Open a back-merge PR if main has something the release branch lacks
+        env:
+          REL: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
+        run: |
+          [ -n "$REL" ] || { echo "no open sprint: nothing to back-merge"; exit 0; }
+          git fetch -q origin "$REL"
+          [ "$(git rev-list --count "origin/$REL..origin/main")" != "0" ] || { echo "$REL already has main"; exit 0; }
+          # A shipped sprint (its release PR merged) is closed out by the release job; nothing to bring back.
+          [ -z "$(gh pr list --head "$REL" --base main --state merged --json number --jq '.[0].number // empty')" ] || { echo "$REL has shipped"; exit 0; }
+          BR="backmerge-$GITHUB_RUN_ID"
+          git push origin "origin/main:refs/heads/$BR"
+          if git merge-tree --write-tree "origin/$REL" origin/main >/dev/null 2>&1; then NOTE="Merges cleanly; it merges by itself once CI is green."; else NOTE="Has conflicts: resolve them on $BR first."; fi
+          gh pr create --base "$REL" --head "$BR" --title "Back-merge main into $REL" --body "Brings production fixes into the open release so the next release does not undo them. $NOTE"
+          [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$BR" -f ref="$BR"

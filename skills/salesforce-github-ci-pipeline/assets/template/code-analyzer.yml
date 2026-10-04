@@ -1,0 +1,4 @@
+# Static analysis rules (PMD for Apex, ESLint for LWC). Run: sf code-analyzer run --workspace force-app --severity-threshold 2
+engines:
+  pmd: { disable_engine: false }
+  eslint: { disable_engine: false }

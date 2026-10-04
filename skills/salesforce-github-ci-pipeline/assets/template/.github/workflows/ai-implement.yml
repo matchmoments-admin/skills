@@ -1,0 +1,113 @@
+name: ai-implement
+# FLAG: repository variable AI_IMPLEMENT=true (off by default: a person builds on the story branch and opens the PR).
+# BUTTON: label a story `ai:implement` (or, with Jira, move it to AI Build: repository_dispatch jira-implement).
+# Claude builds it in the story's scratch org and opens the PR. Pipeline code comes from main (.pipeline/);
+# the agent never holds production access.
+on:
+  issues:
+    types: [labeled]
+  repository_dispatch:
+    types: [jira-implement]
+permissions:
+  actions: write        # starts ci and ai-review when not acting as the App
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+jobs:
+  off:
+    if: github.event.label.name == 'ai:implement' && vars.AI_IMPLEMENT != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          gh issue comment "${{ github.event.issue.number }}" --body "AI implement is off (repository variable \`AI_IMPLEMENT\`). Build it on the story branch and open a PR, or turn it on in Settings > Secrets and variables > Actions > Variables."
+          gh issue edit "${{ github.event.issue.number }}" --remove-label ai:implement || true
+  implement:
+    if: vars.AI_IMPLEMENT == 'true' && (github.event_name == 'repository_dispatch' || github.event.label.name == 'ai:implement')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ format('org-{0}', github.event.client_payload.key || format('issue-{0}', github.event.issue.number)) }}   # the story's org; PR jobs derive the same key from the branch
+      cancel-in-progress: false
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KEY: ${{ github.event.client_payload.key || github.event.issue.number }}
+      LABELS: ${{ github.event.client_payload.labels || join(github.event.issue.labels.*.name, ',') }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - run: echo ".pipeline/" >> .git/info/exclude
+      - name: Names for this story
+        id: ctx
+        run: |
+          [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
+          node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
+      - name: The story branch exists (start ran) and matches its route
+        env:
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+          BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
+        run: |
+          git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null || { echo "::error::Start the story first (label start) so its branch and scratch org exist"; exit 1; }
+          git fetch -q origin "$BRANCH" "$BASE"
+          # A hotfix label added after start would aim a branch cut from the sprint at main: refuse.
+          git merge-base --is-ancestor "origin/$BASE" "origin/$BRANCH" || { echo "::error::$BRANCH was not cut from $BASE (was hotfix added or removed after start?). Start the story again."; exit 1; }
+      - id: id
+        uses: ./.pipeline/.github/actions/pipeline-identity
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: ${{ steps.ctx.outputs.STORY_BRANCH }}
+      - uses: ./.pipeline/.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Attach the story's org and fetch the story
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs org attach "story:$KEY"
+          node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story.md"
+      - run: npm install --no-audit --no-fund
+      - uses: ./.pipeline/.github/actions/claude-agent
+        with:
+          role: implement
+          key: ${{ env.KEY }}
+          model: ${{ vars.AI_MODEL }}
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ steps.id.outputs.token }}
+          max-turns: "60"   # a story with trigger, handler, field, permission set, layout and four test categories took 42
+          allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(sf:*),Bash(git:*),Bash(npm run:*),Bash(npm install:*),Bash(npx prettier:*),Bash(npx sfdx-lwc-jest:*),Bash(ls:*),Bash(jq:*),Bash(gh pr create:*),Bash(gh pr view:*)"
+          prompt: |
+            You are the implementer for story ${{ env.KEY }}. The story, with its acceptance criteria, is in ${{ runner.temp }}/story.md (read it with the Read tool), and the rules are in CLAUDE.md. The acceptance criteria are the scope.
+            You are on branch ${{ steps.ctx.outputs.STORY_BRANCH }}. The scratch org alias is ${{ steps.ctx.outputs.ORG_ALIAS }} and is already authenticated.
+            Build the change in force-app, with Apex tests covering positive, negative, permission and bulk cases, a permission set entry for any new field or object, and any layout or record page users need to see it (CLAUDE.md).
+            Deploy with `sf project deploy start -o ${{ steps.ctx.outputs.ORG_ALIAS }} -d force-app --ignore-conflicts`, run `sf apex run test -o ${{ steps.ctx.outputs.ORG_ALIAS }} --test-level RunLocalTests --code-coverage --result-format human --wait 20`, and fix failures until they pass. Run `npm run format` before committing.
+            Then open a pull request into ${{ steps.ctx.outputs.BASE_BRANCH }} with `gh pr create --base ${{ steps.ctx.outputs.BASE_BRANCH }} --fill`, its body naming story ${{ env.KEY }} and a short test plan. Stop after opening the PR.
+      - name: Make sure the work is pushed and a PR exists
+        if: always() && steps.ctx.outcome == 'success'   # plumbing holds even when the agent step reports an error
+        env:
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+          BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
+          MILESTONE: ${{ steps.ctx.outputs.HOTFIX == 'true' && '' || steps.ctx.outputs.MILESTONE }}
+        run: |
+          git fetch -q origin "$BRANCH" "$BASE"
+          [ "$(git rev-list --count "origin/$BASE..origin/$BRANCH")" -gt 0 ] || { node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "The AI run finished without pushing to \`$BRANCH\`. See the run's transcript artifact."; exit 1; }
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')" ]; then
+            if [[ "$KEY" =~ ^[0-9]+$ ]]; then CLOSES="Closes #$KEY"; else CLOSES="Story $KEY"; fi
+            printf '%s\n\nBuilt by ai-implement in scratch org `%s`.\n' "$CLOSES" "$BRANCH" > pr-body.md
+            gh pr create --base "$BASE" --head "$BRANCH" --title "$(git log -1 --format=%s "origin/$BRANCH")" --body-file pr-body.md ${MILESTONE:+--milestone "$MILESTONE"}
+          fi
+      - name: Start CI and the review (only needed without the App)
+        if: steps.id.outputs.is-app != 'true'
+        env:
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+        run: |
+          gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
+          gh workflow run ai-review.yml -f pr="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"

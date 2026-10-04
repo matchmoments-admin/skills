@@ -1,0 +1,137 @@
+{
+ "pr": {
+  "number": 23,
+  "state": "MERGED",
+  "isDraft": false,
+  "mergeable": "CONFLICTING",
+  "baseRefName": "release/2026-w42",
+  "headRefName": "issue-2",
+  "headRefOid": "ed353271cd6e3fa3eb10b4a9ee95e2a0fb001272",
+  "labels": [
+   {
+    "name": "review:pass"
+   },
+   {
+    "name": "ui:pass"
+   }
+  ],
+  "author": {
+   "login": "app/__owner__-pipeline",
+   "is_bot": true
+  },
+  "commits": [
+   {
+    "oid": "277257f8ac7775af774ef6da3bc331efd809309e",
+    "messageHeadline": "feat(case): flag urgent phone cases as Escalated (#2)",
+    "committedDate": "2026-10-04T10:43:51Z"
+   },
+   {
+    "oid": "ed353271cd6e3fa3eb10b4a9ee95e2a0fb001272",
+    "messageHeadline": "test(e2e): story 2",
+    "committedDate": "2026-10-04T10:49:49Z"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   },
+   "state": "COMMENTED",
+   "commit_id": "277257f8ac7775af774ef6da3bc331efd809309e",
+   "submitted_at": "2026-10-04T10:44:46Z"
+  },
+  {
+   "user": {
+    "login": "matchmoments-admin",
+    "type": "User"
+   },
+   "state": "APPROVED",
+   "commit_id": "ed353271cd6e3fa3eb10b4a9ee95e2a0fb001272",
+   "submitted_at": "2026-10-04T10:58:39Z"
+  }
+ ],
+ "checkRuns": [
+  {
+   "name": "gate",
+   "conclusion": "success",
+   "started_at": "2026-10-04T10:58:44Z"
+  },
+  {
+   "name": "deploy and Apex tests (scratch org)",
+   "conclusion": "success",
+   "started_at": "2026-10-04T10:51:03Z"
+  },
+  {
+   "name": "fix",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T10:50:35Z"
+  },
+  {
+   "name": "review",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T10:50:34Z"
+  },
+  {
+   "name": "gate",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T10:50:29Z"
+  },
+  {
+   "name": "ui",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T10:50:28Z"
+  },
+  {
+   "name": "static checks (no org)",
+   "conclusion": "success",
+   "started_at": "2026-10-04T10:50:02Z"
+  }
+ ],
+ "labelEvents": [
+  {
+   "event": "labeled",
+   "label": {
+    "name": "review:pass"
+   },
+   "created_at": "2026-10-04T10:44:56Z",
+   "actor": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "event": "labeled",
+   "label": {
+    "name": "ai:test"
+   },
+   "created_at": "2026-10-04T10:45:05Z",
+   "actor": {
+    "login": "matchmoments-admin",
+    "type": "User"
+   }
+  },
+  {
+   "event": "labeled",
+   "label": {
+    "name": "ui:pass"
+   },
+   "created_at": "2026-10-04T10:50:26Z",
+   "actor": {
+    "login": "__owner__-pipeline[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "statuses": [],
+ "diffsToHead": {
+  "277257f8ac7775af774ef6da3bc331efd809309e": [
+   "e2e/story-2.spec.ts"
+  ]
+ },
+ "compare": {
+  "headInMain": false,
+  "forceAppChanged": true
+ }
+}

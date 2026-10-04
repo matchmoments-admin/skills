@@ -1,0 +1,134 @@
+name: gate
+# BUTTON: approve the PR (or label it `ready` if you wrote it yourself; GitHub will not let you approve your own).
+# One gate for every route (pipeline/src/gate.mjs): feature -> release branch (squash), hotfix -> main (squash, then
+# release), release -> main (merge commit, then release), back-merge -> release branch (merge commit).
+# If inputs are still missing, it says which, and runs again when the last one lands (gate nudge).
+# Runs only main's code: the PR is checked out to a side directory purely as data to validate.
+on:
+  pull_request:
+    types: [labeled]
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+permissions:
+  contents: write
+  checks: read
+  issues: read
+  pull-requests: write
+  actions: write
+  statuses: read
+jobs:
+  decide:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready' || github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gate-${{ github.event.pull_request.number || inputs.pr }}   # one decision per PR at a time
+      cancel-in-progress: false
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number || inputs.pr }}
+      AI_REVIEW: ${{ vars.AI_REVIEW }}       # which AI verdicts the gate requires (pipeline/src/gate.mjs requiredVerdicts)
+      AI_UI_TEST: ${{ vars.AI_UI_TEST }}
+    outputs:
+      route: ${{ steps.gate.outputs.route }}
+      mergeable: ${{ steps.gate.outputs.mergeable }}
+      story: ${{ steps.gate.outputs.story }}
+      head: ${{ steps.gate.outputs.head }}
+      merge: ${{ steps.gate.outputs.merge }}
+      validate: ${{ steps.gate.outputs.validate }}
+      after: ${{ steps.gate.outputs.after }}
+      lock: ${{ steps.gate.outputs.lock }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: Decide
+        id: gate
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::not a PR number: $PR"; exit 1; }
+          node pipeline/bin/pipe.mjs gate evaluate "$PR"
+      - name: Explain what is missing (once per distinct reason list, open PRs only)
+        if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != '' && steps.gate.outputs.mergeable != 'true'
+        env:
+          REASONS: ${{ steps.gate.outputs.reasons }}
+        run: |
+          URL="${{ github.server_url }}/${{ github.repository }}/pull/$PR/files"
+          BODY=$(printf 'Not merged yet. Waiting on:\n%s\n\nIt merges by itself when these pass.' "$REASONS")
+          case "$REASONS" in *"not approved"*|*"no sign-off"*|*"approve again"*) BODY=$(printf '%s\n\n**Approve here:** %s (Review changes > Approve > Submit review)' "$BODY" "$URL");; esac
+          LAST=$(gh pr view "$PR" --json comments --jq '[.comments[] | select(.body | startswith("Not merged yet"))] | last | .body // ""')
+          if [ "$LAST" = "$BODY" ]; then echo "already said so"; else gh pr comment "$PR" --body "$BODY"; fi
+  ship:
+    needs: decide
+    if: needs.decide.outputs.mergeable == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ship-${{ needs.decide.outputs.lock }}   # everything that lands on main ships one at a time
+      cancel-in-progress: false
+    timeout-minutes: 50
+    env:
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number || inputs.pr }}
+      HEAD_SHA: ${{ needs.decide.outputs.head }}
+      ROUTE: ${{ needs.decide.outputs.route }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - id: id
+        uses: ./.github/actions/pipeline-identity   # merges as the App, so the push to main starts CI (main stays green)
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: main
+      - name: The candidate (exactly what the base will contain), as data
+        if: needs.decide.outputs.validate == 'true'
+        uses: actions/checkout@v4
+        with: { ref: "refs/pull/${{ env.PR }}/merge", path: candidate, fetch-depth: 0, persist-credentials: false }   # tags: deletions since the last release
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Validate against production (check-only, all tests)
+        id: prod
+        if: needs.decide.outputs.validate == 'true'
+        working-directory: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if JOB=$("$GITHUB_WORKSPACE/scripts/ci/validate-prod.sh" 2> "$RUNNER_TEMP/prod-errors.txt"); then echo "job=$JOB" >> "$GITHUB_OUTPUT"; echo "validated as $JOB"; exit 0; fi
+          cat "$RUNNER_TEMP/prod-errors.txt"
+          gh pr comment "$PR" --body "$(printf 'Not merged: production rejected this change.\n\n```\n%s\n```' "$(cat "$RUNNER_TEMP/prod-errors.txt")")"
+          exit 1
+      - name: Merge (only the head the gate decided on)
+        id: merge
+        env:
+          METHOD: ${{ needs.decide.outputs.merge }}
+        run: |
+          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          if [ "$ROUTE" = "release" ]; then gh pr merge "$PR" --merge --match-head-commit "$HEAD_SHA"
+          else gh pr merge "$PR" "--$METHOD" --delete-branch --match-head-commit "$HEAD_SHA"; fi
+      - name: Follow-ups (start the next workflows first; org cleanup cannot fail the merge)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AFTER: ${{ needs.decide.outputs.after }}
+          STORY: ${{ needs.decide.outputs.story }}
+          BASE: ${{ steps.merge.outputs.base }}
+          JOB: ${{ steps.prod.outputs.job }}
+        run: |
+          for step in $AFTER; do
+            case "$step" in
+              staging) gh workflow run staging-deploy.yml ;;                     # deploys the open release branch
+              release) gh workflow run release.yml -f validated_job="$JOB" ;;   # quick-deploys exactly what was validated
+            esac
+          done
+          for step in $AFTER; do
+            case "$step" in
+              delete-story-org) [ -z "$STORY" ] || node pipeline/bin/pipe.mjs org remove "story:$STORY" || echo "::warning::could not delete the story org; the janitor will";;
+            esac
+          done

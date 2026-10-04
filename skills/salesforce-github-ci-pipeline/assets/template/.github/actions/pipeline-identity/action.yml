@@ -1,0 +1,38 @@
+name: pipeline-identity
+description: >-
+  Act as the pipeline's GitHub App when it is configured, so the pipeline's PRs and pushes trigger CI like a person's.
+  Falls back to the Actions token (whose PRs need "Approve workflows to run" and whose pushes start nothing).
+  Sets GH_TOKEN for later steps, re-checks out the repository with that identity (so git pushes are the App's),
+  and outputs the token for Claude. Callers check out the change, then main's pipeline code into .pipeline/, then use this action from there.
+inputs:
+  app-id: { required: false, default: "", description: "secrets.PIPELINE_APP_ID" }
+  private-key: { required: false, default: "", description: "secrets.PIPELINE_APP_PRIVATE_KEY" }
+  ref: { required: false, default: "", description: "Branch or ref to check out (default the event's)" }
+outputs:
+  token: { description: "Token to act with", value: "${{ steps.pick.outputs.token }}" }
+  is-app: { description: "'true' when acting as the App (events then start CI by themselves)", value: "${{ steps.pick.outputs.is-app }}" }
+runs:
+  using: composite
+  steps:
+    - id: app
+      if: inputs.app-id != ''
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+    - id: pick
+      shell: bash
+      env:
+        APP_TOKEN: ${{ steps.app.outputs.token }}
+        FALLBACK: ${{ github.token }}
+      run: |
+        if [ -n "$APP_TOKEN" ]; then T="$APP_TOKEN"; echo "is-app=true" >> "$GITHUB_OUTPUT"; else T="$FALLBACK"; echo "is-app=false" >> "$GITHUB_OUTPUT"; fi
+        echo "::add-mask::$T"
+        echo "token=$T" >> "$GITHUB_OUTPUT"
+        echo "GH_TOKEN=$T" >> "$GITHUB_ENV"
+    - uses: actions/checkout@v4
+      with:
+        token: ${{ steps.pick.outputs.token }}
+        ref: ${{ inputs.ref }}
+        fetch-depth: 0
+        clean: false          # keep .pipeline/ (main's trusted pipeline code, outside the change's git)

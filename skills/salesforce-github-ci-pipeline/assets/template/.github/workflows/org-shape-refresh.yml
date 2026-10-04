@@ -1,0 +1,26 @@
+name: org-shape-refresh
+# Re-captures production's org shape (edition, features, settings) so new scratch orgs match production.
+# Also runs after every production release (release.yml). Weekly catches Setup changes made by hand
+# and Salesforce's seasonal upgrades. Layouts, code and other metadata are not part of the shape: they come from git.
+on:
+  schedule:
+    - cron: "0 20 * * 0"     # Sunday 20:00 UTC (Monday morning AEST)
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }   # pipeline code from main, whatever ref this was started on
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Capture production's shape
+        run: |
+          sf org create shape -o devhub
+          sf org list shape

@@ -1,0 +1,56 @@
+name: sf-auth
+description: Install the Salesforce CLI (cached weekly) and, unless login is false, log in to the Dev Hub with the CI certificate (JWT, no password)
+inputs:
+  login:        { required: false, default: "true", description: "'false' installs the CLI only (static checks)" }
+  consumer-key: { required: false, default: "", description: "Connected app consumer key" }
+  username:     { required: false, default: "", description: "Dev Hub user the app is pre-authorized for" }
+  private-key:  { required: false, default: "", description: "PEM private key matching the app certificate" }
+outputs:
+  devhub-alias: { description: "Alias of the logged-in Dev Hub (production)", value: devhub }
+  key-file: { description: "Path of the CI private key; later logins to scratch orgs use it (also exported as SF_CI_KEY_FILE)", value: "${{ steps.login.outputs.key-file }}" }
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Cache key (weekly, so the CLI stays current)
+      id: week
+      shell: bash
+      run: |
+        echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+        echo "$HOME/.sf-cli/bin" >> "$GITHUB_PATH"
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.sf-cli
+          ~/.local/share/sf
+        key: sf-cli-${{ runner.os }}-${{ steps.week.outputs.week }}
+    - name: Install Salesforce CLI and tools (cache miss only)
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        npm install --global --prefix "$HOME/.sf-cli" @salesforce/cli
+        echo y | "$HOME/.sf-cli/bin/sf" plugins install sfdx-git-delta
+    - name: jq
+      shell: bash
+      run: command -v jq >/dev/null || sudo apt-get install -y jq >/dev/null 2>&1 || true
+    - name: Log in to the Dev Hub (JWT)
+      id: login
+      if: inputs.login != 'false'
+      shell: bash
+      env:
+        KEY: ${{ inputs.private-key }}
+        CLIENT_ID: ${{ inputs.consumer-key }}
+        USERNAME: ${{ inputs.username }}
+      run: |
+        umask 077
+        printf '%s\n' "$KEY" > "$RUNNER_TEMP/ci.key"
+        sf org login jwt --client-id "$CLIENT_ID" --jwt-key-file "$RUNNER_TEMP/ci.key" \
+          --username "$USERNAME" --alias devhub --set-default-dev-hub --instance-url https://login.salesforce.com
+        # The key file stays for the rest of the job: later `sf org create scratch` and `sf data query`
+        # calls re-authenticate to the Dev Hub with it, and the org registry logs in to scratch orgs with it.
+        # The runner is destroyed when the job ends.
+        echo "key-file=$RUNNER_TEMP/ci.key" >> "$GITHUB_OUTPUT"
+        echo "SF_CI_KEY_FILE=$RUNNER_TEMP/ci.key" >> "$GITHUB_ENV"

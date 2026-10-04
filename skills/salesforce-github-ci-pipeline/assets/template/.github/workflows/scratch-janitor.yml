@@ -1,0 +1,29 @@
+name: scratch-janitor
+# Weekly: delete the scratch orgs of closed stories (the Dev Hub is the registry), and report the allocation.
+on:
+  schedule:
+    - cron: "17 18 * * 1"   # Monday; run by hand any time
+  workflow_dispatch:
+permissions:
+  issues: read
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: scratch-orgs   # deletes orgs
+      cancel-in-progress: false
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }   # pipeline code from main, whatever ref this was started on
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - run: |
+          node pipeline/bin/pipe.mjs org sweep
+          node pipeline/bin/pipe.mjs org limits

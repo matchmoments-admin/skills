@@ -1,0 +1,238 @@
+name: ui-test
+# BUTTONS on a PR:
+#   `test`     runs the PR's committed story spec (e2e/story-<key>.spec.ts). No AI. Works with every AI flag off.
+#   `ai:test`  FLAG AI_UI_TEST=true: Claude writes that spec from the story and pushes it, then it runs as above.
+# The spec runs in its own job, after production access is gone; its result travels only as the step's outcome. A
+# separate job on a fresh runner posts the commit status pipeline/ui-test on that exact commit (the gate trusts
+# only that). With AI_TRIAGE=true, a failure is classified by Jev; a likely flake is re-run once.
+on:
+  pull_request:
+    types: [labeled]
+permissions:
+  actions: write        # starts ci without the App
+  contents: write
+  pull-requests: write
+  issues: write
+  statuses: write
+  id-token: write
+jobs:
+  off:
+    if: github.event.label.name == 'ai:test' && vars.AI_UI_TEST != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body "AI UI test is off (repository variable \`AI_UI_TEST\`). Commit \`e2e/story-<key>.spec.ts\` yourself and label the PR \`test\`, or turn it on in Settings > Secrets and variables > Actions > Variables."
+          gh pr edit "${{ github.event.pull_request.number }}" --remove-label ai:test || true
+  write:
+    if: github.event.label.name == 'ai:test' && vars.AI_UI_TEST == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: org-${{ github.event.pull_request.head.ref }}   # the story's org (org-issue-N); only AI jobs share it
+      cancel-in-progress: false
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      BRANCH: ${{ github.event.pull_request.head.ref }}
+    outputs:
+      is-app: ${{ steps.id.outputs.is-app }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.ref }}", fetch-depth: 0 }
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - run: echo ".pipeline/" >> .git/info/exclude
+      - id: id
+        uses: ./.pipeline/.github/actions/pipeline-identity
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: ./.pipeline/.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Attach, deploy this head and prepare the story's org; fetch the story
+        id: org
+        run: |
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH")
+          node .pipeline/pipeline/bin/pipe.mjs org deploy "$ALIAS"
+          node .pipeline/pipeline/bin/pipe.mjs org prepare "$ALIAS"
+          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "SCRATCH_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+          node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story.md"
+      - uses: ./.pipeline/.github/actions/playwright
+      - uses: ./.pipeline/.github/actions/claude-agent
+        with:
+          role: ui-test
+          key: ${{ steps.org.outputs.key }}
+          model: ${{ vars.AI_MODEL }}
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ steps.id.outputs.token }}
+          allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots (auto-chain labels as the App); empty = none
+          max-turns: "40"
+          allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(npx playwright test:*),Bash(git:*)"
+          prompt: |
+            You are the UI tester for story ${{ steps.org.outputs.key }} (pull request #${{ env.PR }}). The story is in ${{ runner.temp }}/story.md: its acceptance criteria and "Where to see it" are your test plan.
+            Write ONE Playwright spec at e2e/story-${{ steps.org.outputs.key }}.spec.ts. Call `login(page)` from e2e/support/login.ts, then navigate with `openPath(page, "/lightning/...")` from the same file (there is no baseURL). SCRATCH_ALIAS is already set, so login needs no arguments.
+            Use getByRole / getByLabel locators only. Cover the happy path and one negative case from the criteria.
+            Test the feature as a user sees it. Never configure the org through the UI (no Lightning App Builder, no Setup pages); if the feature is not visible where the story says, that is a failure of the feature, not something to build in the test.
+            Run it with `npx playwright test e2e/story-${{ steps.org.outputs.key }}.spec.ts`. If it fails because the feature is wrong, say so; if the test is wrong, fix the test (at most 3 attempts).
+      - name: Remove the button label
+        if: always()
+        run: gh pr edit "$PR" --remove-label ai:test || true
+  run:
+    # Runs the committed spec against the PR's head, on its own runner, with a read-only token. Production access is
+    # dropped before any of the PR's code runs. The result is the step outcome, which the spec cannot write.
+    needs: write
+    if: always() && ((github.event.label.name == 'ai:test' && needs.write.result != 'skipped') || github.event.label.name == 'test')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: org-${{ github.event.pull_request.head.ref }}
+      cancel-in-progress: false
+    timeout-minutes: 25
+    env:
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      BRANCH: ${{ github.event.pull_request.head.ref }}
+    outputs:
+      head: ${{ steps.head.outputs.sha }}
+      key: ${{ steps.spec.outputs.key }}
+      has-spec: ${{ steps.spec.outputs.exists }}
+      outcome: ${{ steps.test.outcome }}
+    steps:
+      - name: The PR's head now (after any spec commit)
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "sha=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with: { ref: "${{ steps.head.outputs.sha }}", persist-credentials: false }
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - name: Which spec?
+        id: spec
+        run: |
+          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "KEY=$KEY" >> "$GITHUB_ENV"
+          if [ -n "$KEY" ] && [ -f "e2e/story-$KEY.spec.ts" ]; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: ./.pipeline/.github/actions/sf-auth
+        if: steps.spec.outputs.exists == 'true'
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Deploy this exact head to the story's org and prepare it
+        if: steps.spec.outputs.exists == 'true'
+        run: |
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH")
+          node .pipeline/pipeline/bin/pipe.mjs org deploy "$ALIAS"
+          node .pipeline/pipeline/bin/pipe.mjs org prepare "$ALIAS"
+          echo "SCRATCH_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+      - name: Drop production access before running the PR's spec code
+        if: steps.spec.outputs.exists == 'true'
+        run: |
+          sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
+          rm -f "${SF_CI_KEY_FILE:-}" "$RUNNER_TEMP/ci.key"
+      - uses: ./.pipeline/.github/actions/playwright
+        if: steps.spec.outputs.exists == 'true'
+      - name: Run the committed spec
+        id: test
+        if: steps.spec.outputs.exists == 'true'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          mkdir -p ui-out
+          npx playwright test "e2e/story-$KEY.spec.ts" --reporter=line 2>&1 | tee ui-out/playwright.log
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.spec.outputs.exists == 'true'
+        with:
+          name: playwright-report
+          path: |
+            ui-out
+            playwright-report
+            test-results
+            !test-results/**/trace.zip
+            !test-results/**/*.webm
+            !playwright-report/data/*.zip
+            !playwright-report/data/*.webm
+  report:
+    # Fresh runner, main's code only: triage (optional), commit status, labels, CI and gate follow-ups.
+    needs: [write, run]
+    if: always() && needs.run.result != 'skipped' && needs.run.outputs.head != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      BRANCH: ${{ github.event.pull_request.head.ref }}
+      HEAD_SHA: ${{ needs.run.outputs.head }}
+      KEY: ${{ needs.run.outputs.key }}
+      HAS_SPEC: ${{ needs.run.outputs.has-spec }}
+      OUTCOME: ${{ needs.run.outputs.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - uses: actions/download-artifact@v4
+        if: env.OUTCOME == 'failure' && vars.AI_TRIAGE == 'true'
+        continue-on-error: true
+        with: { name: playwright-report, path: art }
+      - name: Why did it fail? (Jev triage)
+        id: triage
+        if: env.OUTCOME == 'failure' && vars.AI_TRIAGE == 'true'
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          node pipeline/bin/pipe.mjs tracker story "$KEY" --out story.md || true
+          LOG=$(find art -name playwright.log | head -1)
+          node pipeline/bin/pipe.mjs triage ui --log "${LOG:-/dev/null}" --story story.md
+      - name: Verdict to a commit status (and a label people can read)
+        env:
+          KIND: ${{ steps.triage.outputs.kind }}
+          WHY: ${{ steps.triage.outputs.why }}
+        run: |
+          gh pr edit "$PR" --remove-label ui:pass --remove-label ui:fail --remove-label test 2>/dev/null || true
+          if [ "$HAS_SPEC" != "true" ]; then
+            node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "no spec e2e/story-$KEY.spec.ts committed"; gh pr edit "$PR" --add-label ui:fail
+          elif [ "$OUTCOME" = "success" ]; then
+            node pipeline/bin/pipe.mjs status set pipeline/ui-test success "$HEAD_SHA" "UI test passed"; gh pr edit "$PR" --add-label ui:pass
+          else
+            node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "the spec failed${KIND:+ (Jev: $KIND)}"; gh pr edit "$PR" --add-label ui:fail
+            if [ -n "$KIND" ] && [ "$KIND" != "unknown" ]; then gh pr comment "$PR" --body "UI test failed. Jev triage: **$KIND**: $WHY"; fi
+          fi
+      - name: A likely flake gets one re-run
+        id: retry
+        if: steps.triage.outputs.kind == 'flake'
+        run: |
+          N=$(gh pr view "$PR" --json comments --jq "[.comments[].body | select(startswith(\"Re-running the UI test once ($HEAD_SHA)\"))] | length")
+          if [ "$N" = "0" ]; then gh pr comment "$PR" --body "Re-running the UI test once ($HEAD_SHA): Jev judged the failure a flake."; echo "go=true" >> "$GITHUB_OUTPUT"; fi
+      - id: app
+        if: steps.retry.outputs.go == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: Re-run (as the App, so the label starts the workflow)
+        if: steps.retry.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh pr edit "$PR" --add-label test
+      - name: CI on the spec commit (only needed without the App)
+        if: needs.write.result == 'success' && needs.write.outputs.is-app != 'true'
+        run: gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
+      - name: Merge now if a person already approved
+        run: node pipeline/bin/pipe.mjs gate nudge "$PR"

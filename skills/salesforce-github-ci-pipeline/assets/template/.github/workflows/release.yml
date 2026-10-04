@@ -1,0 +1,75 @@
+name: release
+# Started by the gate after a release or hotfix merges into main. Quick-deploys the gate's production validation
+# (no second test run), smoke-checks, refreshes the org shape, tags, closes out, then checks for a back-merge.
+# Re-runnable: an already-tagged commit skips the deploy and tag, but close-out and back-merge still run.
+on:
+  workflow_dispatch:      # no push trigger, so nothing runs twice
+    inputs:
+      validated_job:
+        description: Production validation ID from the gate; empty = validate here
+        required: false
+permissions:
+  actions: write          # starts back-merge
+  contents: write
+  issues: write
+  pull-requests: write    # close-out closes leftover PRs on the shipped release branch
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production    # deploys only from main (environment rule)
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Already released?
+        id: skip
+        run: |
+          TAG=$(git tag --points-at HEAD | head -1)
+          if [ -n "$TAG" ]; then echo "already released as $TAG"; echo "skip=true" >> "$GITHUB_OUTPUT"; echo "tag=$TAG" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Production validation (the gate's, or here)
+        if: steps.skip.outputs.skip == 'false'
+        id: validate
+        env:
+          GATE_JOB: ${{ inputs.validated_job }}
+        run: |
+          if [ -n "$GATE_JOB" ]; then
+            [[ "$GATE_JOB" =~ ^0Af[A-Za-z0-9]{12,15}$ ]] || { echo "::error::not a deploy ID: $GATE_JOB"; exit 1; }
+            echo "job=$GATE_JOB" >> "$GITHUB_OUTPUT"; echo "using the gate's validation $GATE_JOB"; exit 0
+          fi
+          echo "job=$(./scripts/ci/validate-prod.sh)" >> "$GITHUB_OUTPUT"
+      - name: Quick deploy the validated change
+        if: steps.skip.outputs.skip == 'false'
+        env:
+          JOB: ${{ steps.validate.outputs.job }}
+        run: sf project deploy quick -o devhub --job-id "$JOB" --wait 30
+      - name: Smoke check
+        if: steps.skip.outputs.skip == 'false'
+        run: sf data query -o devhub -q "SELECT COUNT() FROM Account" >/dev/null && echo "production responds"
+      - name: Refresh the production org shape (non-blocking)
+        if: steps.skip.outputs.skip == 'false'
+        run: sf org create shape -o devhub || echo "::warning::Org shape refresh failed; scratch orgs use the previous shape"
+      - name: Tag and publish release notes
+        if: steps.skip.outputs.skip == 'false'
+        id: tag
+        run: |
+          TAG="v$(date -u +%Y.%m.%d)-${{ github.run_number }}"
+          gh release create "$TAG" --target "$(git rev-parse HEAD)" --generate-notes
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Close out (stories, sprint, orgs, release branch)
+        env:
+          TAG: ${{ steps.tag.outputs.tag || steps.skip.outputs.tag }}
+        run: node pipeline/bin/pipe.mjs closeout run --tag "$TAG"
+      - name: Bring main into an open release branch if one exists (after a hotfix)
+        if: always()
+        run: gh workflow run back-merge.yml --ref main

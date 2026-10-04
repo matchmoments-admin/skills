@@ -1,0 +1,38 @@
+name: metrics
+# Weekly delivery telemetry (DORA + AI + workflow health) from GitHub data: written to the run summary and kept
+# current in one issue titled "Delivery metrics". Run by hand any time (days = window).
+on:
+  schedule:
+    - cron: "0 21 * * 0"   # Sunday 21:00 UTC (Monday morning AEST)
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Window in days
+        required: false
+        default: "28"
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DAYS: ${{ inputs.days || '28' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: Measure
+        run: |
+          [[ "$DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "::error::days must be a number"; exit 1; }
+          node pipeline/bin/pipe.mjs metrics --days "$DAYS" --out metrics.md
+          cat metrics.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the "Delivery metrics" issue current
+        run: |
+          printf '%s\n\n_Updated %s by the metrics workflow._\n' "$(cat metrics.md)" "$(date -u +%Y-%m-%d)" > body.md
+          N=$(gh issue list --state open --search 'in:title "Delivery metrics"' --json number,title --jq '[.[] | select(.title == "Delivery metrics")][0].number // empty')
+          if [ -n "$N" ]; then gh issue edit "$N" --body-file body.md; else gh issue create --title "Delivery metrics" --body-file body.md; fi

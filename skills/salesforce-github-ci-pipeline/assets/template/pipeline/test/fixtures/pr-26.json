@@ -1,0 +1,132 @@
+{
+ "pr": {
+  "number": 26,
+  "state": "MERGED",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "baseRefName": "main",
+  "headRefName": "release/2026-w42",
+  "headRefOid": "0e400bdfb4f525b0966dfe6fd32759062b2848a5",
+  "labels": [
+   {
+    "name": "review:pass"
+   },
+   {
+    "name": "release"
+   }
+  ],
+  "author": {
+   "login": "app/__owner__-pipeline",
+   "is_bot": true
+  },
+  "commits": [
+   {
+    "oid": "e355fc37a9ae025cd5b46010f5932aa12f95606d",
+    "messageHeadline": "Merge pull request #22 from __OWNER__/backmerge-37195929265",
+    "committedDate": "2026-10-04T10:38:32Z"
+   },
+   {
+    "oid": "0e400bdfb4f525b0966dfe6fd32759062b2848a5",
+    "messageHeadline": "feat(case): flag urgent phone cases as Escalated (#2) (#23)",
+    "committedDate": "2026-10-04T11:05:22Z"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "user": {
+    "login": "matchmoments-admin",
+    "type": "User"
+   },
+   "state": "APPROVED",
+   "commit_id": "0e400bdfb4f525b0966dfe6fd32759062b2848a5",
+   "submitted_at": "2026-10-04T11:12:24Z"
+  },
+  {
+   "user": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   },
+   "state": "COMMENTED",
+   "commit_id": "0e400bdfb4f525b0966dfe6fd32759062b2848a5",
+   "submitted_at": "2026-10-04T11:14:04Z"
+  }
+ ],
+ "checkRuns": [
+  {
+   "name": "deploy and Apex tests (scratch org)",
+   "conclusion": "success",
+   "started_at": "2026-10-04T11:14:37Z"
+  },
+  {
+   "name": "static checks (no org)",
+   "conclusion": "success",
+   "started_at": "2026-10-04T11:13:25Z"
+  },
+  {
+   "name": "review",
+   "conclusion": "success",
+   "started_at": "2026-10-04T11:13:25Z"
+  },
+  {
+   "name": "review",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T11:12:48Z"
+  },
+  {
+   "name": "ui",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T11:12:48Z"
+  },
+  {
+   "name": "gate",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T11:12:48Z"
+  },
+  {
+   "name": "fix",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T11:12:48Z"
+  },
+  {
+   "name": "gate",
+   "conclusion": "success",
+   "started_at": "2026-10-04T11:12:30Z"
+  },
+  {
+   "name": "staging regression",
+   "conclusion": "success",
+   "started_at": "2026-10-04T11:05:46Z"
+  }
+ ],
+ "labelEvents": [
+  {
+   "event": "labeled",
+   "label": {
+    "name": "release"
+   },
+   "created_at": "2026-10-04T11:11:33Z",
+   "actor": {
+    "login": "__owner__-pipeline[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "event": "labeled",
+   "label": {
+    "name": "review:pass"
+   },
+   "created_at": "2026-10-04T11:14:18Z",
+   "actor": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "statuses": [],
+ "diffsToHead": {},
+ "compare": {
+  "headInMain": true,
+  "forceAppChanged": false
+ }
+}

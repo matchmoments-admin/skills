@@ -1,0 +1,18 @@
+{
+  "name": "__APP_NAME__",
+  "url": "https://github.com/__OWNER__/__REPO__",
+  "description": "Identity of the delivery pipeline: opens and updates PRs so CI runs on them.",
+  "hook_attributes": { "url": "https://github.com/__OWNER__/__REPO__", "active": false },
+  "redirect_url": "https://github.com/__OWNER__/__REPO__",
+  "public": false,
+  "default_permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "issues": "write",
+    "actions": "write",
+    "workflows": "write",
+    "checks": "read",
+    "metadata": "read"
+  },
+  "default_events": []
+}

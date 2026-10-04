@@ -1,0 +1,95 @@
+name: staging-deploy
+# After a story merges into the release branch (started by the gate): deploy the whole release branch to the
+# staging org and run the full regression. The job name is the "staging regression" check the release gate needs.
+# Pipeline code comes from main (.pipeline/); the release branch's own specs run only after production access is gone.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  staging:
+    name: staging regression
+    runs-on: ubuntu-latest
+    concurrency:
+      group: org-staging   # the one staging org
+      cancel-in-progress: false
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    outputs:
+      release: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - name: The open sprint
+        id: ctx
+        working-directory: .pipeline
+        run: |
+          node pipeline/bin/pipe.mjs context
+          node pipeline/bin/pipe.mjs context | grep -q '^RELEASE_BRANCH=.' || { echo "::error::No open sprint"; exit 1; }
+      - uses: actions/checkout@v4
+        with: { ref: "${{ steps.ctx.outputs.RELEASE_BRANCH }}", path: candidate, persist-credentials: false }
+      - uses: ./.pipeline/.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Deploy the release branch to staging and prepare it
+        working-directory: candidate
+        run: |
+          node ../.pipeline/pipeline/bin/pipe.mjs org attach "sprint:${{ steps.ctx.outputs.SPRINT }}"
+          node ../.pipeline/pipeline/bin/pipe.mjs org deploy staging
+          node ../.pipeline/pipeline/bin/pipe.mjs org prepare staging
+      - name: Full Apex regression with coverage gate
+        working-directory: candidate
+        run: mkdir -p test-results && ../.pipeline/scripts/ci/coverage-gate.sh staging
+      - name: Drop production access before running the branch's specs
+        run: |
+          sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
+          rm -f "${SF_CI_KEY_FILE:-}"
+      - uses: ./.pipeline/.github/actions/playwright
+        if: hashFiles('candidate/e2e/*.spec.ts') != ''
+        with: { working-directory: candidate }
+      - name: UI regression (every spec in e2e/)
+        working-directory: candidate
+        env:
+          GH_TOKEN: ""
+        run: |
+          if ls e2e/*.spec.ts >/dev/null 2>&1; then
+            SCRATCH_ALIAS=staging npx playwright test
+          else
+            echo "No UI specs yet"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: staging-results
+          path: |
+            candidate/test-results
+            candidate/playwright-report
+            !candidate/**/trace.zip
+            !candidate/**/*.webm
+  nudge:
+    # Separate job: the write permissions never sit next to the release branch's code.
+    needs: staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write        # re-runs the gate if the release PR is already approved
+      contents: read
+      checks: read
+      issues: write
+      pull-requests: write
+      statuses: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REL: ${{ needs.staging.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: Ship now if the release PR is already approved
+        run: |
+          RPR=$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')
+          [ -z "$RPR" ] || node pipeline/bin/pipe.mjs gate nudge "$RPR"

@@ -1,0 +1,20 @@
+name: playwright
+description: Install the project's npm packages and Playwright's Chromium, with the browser cached by lockfile
+inputs:
+  working-directory: { required: false, default: ".", description: "Where package.json is" }
+runs:
+  using: composite
+  steps:
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.working-directory)) }}
+    - name: npm packages and browser
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: |
+        npm ci --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 || npm install --ignore-scripts --no-audit --no-fund >/dev/null   # the change's install scripts never run
+        if [ "$HIT" = "true" ]; then npx playwright install-deps chromium >/dev/null; else npx playwright install --with-deps chromium >/dev/null; fi

@@ -1,0 +1,53 @@
+name: sprint-start
+# BUTTON: Actions > sprint-start > Run workflow (or, with Jira, sprint started: repository_dispatch jira-sprint-start).
+# Opens a sprint: tracker sprint (GitHub milestone), release branch from a green main, staging org. Re-running adopts
+# what already exists.
+on:
+  workflow_dispatch:
+    inputs:
+      sprint:
+        description: Sprint name, for example 2026-w43
+        required: true
+  repository_dispatch:
+    types: [jira-sprint-start]
+permissions:
+  contents: write
+  issues: write
+  checks: read          # main's CI must be green before a release branch is cut from it
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SPRINT: ${{ inputs.sprint || github.event.client_payload.sprint }}
+    steps:
+      - name: A valid sprint name
+        run: '[[ "$SPRINT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$ ]] || { echo "::error::Sprint names use letters, digits, dot, dash or underscore"; exit 1; }'
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Names (is another sprint open?)
+        id: ctx
+        run: node pipeline/bin/pipe.mjs context
+      - name: Open the sprint (tracker and release branch)
+        env:
+          OPEN: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
+        run: |
+          if [ -n "$OPEN" ] && [ "$OPEN" != "release/$SPRINT" ]; then echo "::error::$OPEN is still open. Ship it first."; exit 1; fi
+          # The release branch rules require green CI on the commit a release branch starts from.
+          if ! git ls-remote --exit-code --heads origin "release/$SPRINT" >/dev/null; then
+            node pipeline/bin/pipe.mjs gate checks HEAD > checks.txt; cat checks.txt
+            if grep -qv ": success" checks.txt; then echo "::error::CI on main's latest commit is not green yet (see above). Try again in a few minutes."; exit 1; fi
+          fi
+          node pipeline/bin/pipe.mjs tracker open-sprint "$SPRINT"
+          if git ls-remote --exit-code --heads origin "release/$SPRINT" >/dev/null; then echo "release/$SPRINT exists"; else git push origin "HEAD:refs/heads/release/$SPRINT"; fi
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Staging org (adopts the sprint's live one on a re-run)
+        run: |
+          node pipeline/bin/pipe.mjs org ensure "sprint:$SPRINT"
+          node pipeline/bin/pipe.mjs org limits

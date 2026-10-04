@@ -1,0 +1,8 @@
+{
+  "trailingComma": "none",
+  "plugins": ["prettier-plugin-apex"],
+  "overrides": [
+    { "files": "**/*.{cls,trigger}", "options": { "parser": "apex" } },
+    { "files": "**/lwc/**/*.html", "options": { "parser": "lwc" } }
+  ]
+}

@@ -1,0 +1,96 @@
+name: ai-fix
+# FLAG: repository variable AI_FIX=true (off by default: a person pushes the fixes). Works on human review
+# comments too, so it does not need AI_REVIEW.
+# BUTTON: label a PR `ai:fix`. Claude fixes the blockers and majors from the review, pushes, and the review runs again.
+# At most two rounds per PR. Pipeline code comes from main (.pipeline/); the agent never holds production access.
+on:
+  pull_request:
+    types: [labeled]
+permissions:
+  actions: write        # re-starts the review (and ci without the App)
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+jobs:
+  off:
+    if: github.event.label.name == 'ai:fix' && vars.AI_FIX != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body "AI fix is off (repository variable \`AI_FIX\`). Push the fix yourself, or turn it on in Settings > Secrets and variables > Actions > Variables."
+          gh pr edit "${{ github.event.pull_request.number }}" --remove-label ai:fix || true
+  fix:
+    if: github.event.label.name == 'ai:fix' && vars.AI_FIX == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: org-${{ github.event.pull_request.head.ref }}   # the story's org (org-issue-N); only AI jobs share it
+      cancel-in-progress: false
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      BRANCH: ${{ github.event.pull_request.head.ref }}
+      BASE: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.ref }}", fetch-depth: 0 }
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - run: echo ".pipeline/" >> .git/info/exclude
+      - id: id
+        uses: ./.pipeline/.github/actions/pipeline-identity
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Enforce the round limit (rounds counted since the PR's own base)
+        id: rounds
+        run: |
+          git fetch -q origin "$BASE"
+          node .pipeline/pipeline/bin/pipe.mjs verdict rounds --base "origin/$BASE"
+      - name: Stop at the limit
+        if: steps.rounds.outputs.over == 'true'
+        run: |
+          gh pr comment "$PR" --body "Already ran ${{ steps.rounds.outputs.limit }} AI fix rounds. A person needs to look at this one."
+          gh pr edit "$PR" --remove-label ai:fix --add-label blocked
+          exit 1
+      - uses: ./.pipeline/.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Attach the story's org and collect the review feedback
+        id: org
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH"
+          {
+            echo "# Review feedback on PR #$PR"
+            gh pr view "$PR" --json comments --jq '.comments[] | "\n## Comment by \(.author.login)\n\(.body)"'
+            gh api --paginate "repos/$GH_REPO/pulls/$PR/comments" --jq '.[] | "\n## Inline on \(.path) line \(.line // .original_line)\n\(.body)"'
+          } > "$RUNNER_TEMP/review-feedback.md"
+      - run: npm install --no-audit --no-fund
+      - uses: ./.pipeline/.github/actions/claude-agent
+        with:
+          role: fix
+          model: ${{ vars.AI_MODEL }}
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ steps.id.outputs.token }}
+          allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots (auto-chain labels as the App); empty = none
+          max-turns: "40"
+          allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(sf:*),Bash(git:*),Bash(npm run:*),Bash(npm install:*),Bash(npx prettier:*),Bash(npx sfdx-lwc-jest:*),Bash(ls:*),Bash(jq:*)"
+          prompt: |
+            Fix the review findings on pull request #${{ env.PR }}. All review feedback (summary and inline comments) is in ${{ runner.temp }}/review-feedback.md.
+            Address every [blocker] and [major]; ignore [minor] unless trivial. The latest comments win if they disagree.
+            The scratch org alias is ${{ steps.org.outputs.alias }}: deploy with `sf project deploy start -o ${{ steps.org.outputs.alias }} -d force-app --ignore-conflicts`, run the Apex tests until they pass, and run `npm run format` before committing.
+      - name: Review again (and CI, without the App)
+        run: |
+          gh pr edit "$PR" --remove-label ai:fix || true
+          [ "${{ vars.AI_REVIEW }}" != "true" ] || gh workflow run ai-review.yml -f pr="$PR"
+          [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
