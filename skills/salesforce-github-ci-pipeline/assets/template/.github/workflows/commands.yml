@@ -1,0 +1,64 @@
+name: commands
+# Comment commands, so nobody has to find labels. On a story (issue): /start, /build, /hotfix.
+# On a pull request: /test, /review, /fix, /ship, /help. Only people with write access; the pipeline reacts with 👀,
+# applies the matching label as the App (so the label's workflow starts), and the story card shows what happens.
+# /ship is a sign-off on story PRs into the release branch (the gate reads it); PRs into main need a GitHub approval.
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  actions: write         # /ship re-runs the gate
+  issues: write
+  pull-requests: write
+jobs:
+  run:
+    if: startsWith(github.event.comment.body, '/') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      N: ${{ github.event.issue.number }}
+      IS_PR: ${{ github.event.issue.pull_request != null }}
+      BODY: ${{ github.event.comment.body }}
+      CID: ${{ github.event.comment.id }}
+    steps:
+      - name: Which command?
+        id: c
+        run: |
+          CMD=$(printf '%s' "$BODY" | head -1 | awk '{print $1}' | tr -d '\r')
+          if [ "$IS_PR" = "true" ]; then
+            case "$CMD" in
+              /test) LABEL=test ;; /review) LABEL=ai:review ;; /fix) LABEL=ai:fix ;; /ship) LABEL=ship ;; /help) LABEL=help ;; *) LABEL="" ;;
+            esac
+          else
+            case "$CMD" in
+              /start) LABEL=start ;; /build) LABEL=ai:implement ;; /hotfix) LABEL="hotfix start" ;; /help) LABEL=help ;; *) LABEL="" ;;
+            esac
+          fi
+          echo "label=$LABEL" >> "$GITHUB_OUTPUT"; echo "cmd=$CMD" >> "$GITHUB_OUTPUT"
+          [ -z "$LABEL" ] || gh api -X POST "repos/$GH_REPO/issues/comments/$CID/reactions" -f content=eyes >/dev/null
+      - name: Help
+        if: steps.c.outputs.label == 'help' || (steps.c.outputs.label == '' && steps.c.outputs.cmd != '')
+        run: |
+          if [ "$IS_PR" = "true" ]; then T='**On a pull request:** `/test` runs the story'"'"'s UI test · `/review` AI review · `/fix` AI fixes the review comments · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**).'
+          else T='**On a story:** `/start` creates its branch and scratch org · `/build` has the AI build it · `/hotfix` starts it as an urgent production fix.'; fi
+          gh issue comment "$N" --body "$T"
+      - id: app
+        if: steps.c.outputs.label != '' && steps.c.outputs.label != 'help' && steps.c.outputs.label != 'ship'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: Apply the label as the pipeline (labels the Actions token adds start nothing)
+        if: steps.app.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          LABELS: ${{ steps.c.outputs.label }}
+        run: for l in $LABELS; do gh issue edit "$N" --add-label "$l"; done
+      - name: /ship is a sign-off; let the gate decide
+        if: steps.c.outputs.label == 'ship'
+        run: |
+          BASE=$(gh pr view "$N" --json baseRefName --jq .baseRefName)
+          if [ "$BASE" = "main" ]; then gh pr comment "$N" --body "PRs into main need a GitHub approval: **[Approve here](${{ github.server_url }}/$GH_REPO/pull/$N/files)** (Review changes > Approve)."
+          else gh workflow run gate.yml -f pr="$N"; fi

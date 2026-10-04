@@ -71,7 +71,7 @@ export async function triageUiFailure(jev, { log, story = "" }) {
 
 // ---- Review triage ------------------------------------------------------------------------------------------
 // Deterministic first: these always get the full AI review, whatever Jev says.
-const ALWAYS_REVIEW = [/\/classes\//, /\/triggers\//, /\/permissionsets\//, /\/profiles\//, /\/sharingRules\//, /\/permissionsetgroups\//,
+const ALWAYS_REVIEW = [/\/classes\//, /\/triggers\//, /\/flows\//, /\/workflows\//, /\/approvalProcesses\//, /\/permissionsets\//, /\/profiles\//, /\/sharingRules\//, /\/permissionsetgroups\//,
   /\/lwc\//, /\/aura\//, /\/namedCredentials\//, /\/connectedApps\//, /\/remoteSiteSettings\//];
 export const RISK_LEVELS = ["trivial: text, labels or descriptions only", "low: simple declarative metadata", "medium: behaviour changes users will notice", "high: logic, data or access changes"];
 const MAX_SKIP_SCORE = 1.0;

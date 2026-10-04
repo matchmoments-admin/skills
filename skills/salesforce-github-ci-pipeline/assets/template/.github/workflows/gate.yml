@@ -69,6 +69,10 @@ jobs:
           if [ "$LAST" = "$BODY" ]; then echo "already said so"; else gh pr comment "$PR" --body "$BODY"; fi
       - name: Story card
         if: steps.gate.outputs.story != ''
+        env:
+          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: node pipeline/bin/pipe.mjs story card "${{ steps.gate.outputs.story }}"
   ship:
     needs: decide
@@ -123,6 +127,9 @@ jobs:
           else gh pr merge "$PR" "--$METHOD" --delete-branch --match-head-commit "$HEAD_SHA"; fi
       - name: Follow-ups (start the next workflows first; org cleanup cannot fail the merge)
         env:
+          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
           AFTER: ${{ needs.decide.outputs.after }}
           STORY: ${{ needs.decide.outputs.story }}

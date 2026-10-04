@@ -71,4 +71,8 @@ jobs:
             || echo "::warning::could not open the PR (one may have just been opened by ai-implement)"
       - name: Story card
         if: steps.s.outputs.key != ''
+        env:
+          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: node pipeline/bin/pipe.mjs story card "${{ steps.s.outputs.key }}"

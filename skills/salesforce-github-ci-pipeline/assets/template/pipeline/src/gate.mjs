@@ -66,9 +66,14 @@ export function humanApproval({ reviews = [], head, diffsToHead = {} }) {
 }
 
 /** `ready` counts if a person applied it after the head commit was pushed (first check on the head, server time). */
-export function readyAfterPush({ labelEvents = [], checkRuns = [] }) {
+export const SIGN_OFF_COMMENT = /^\/ship\b/;
+const CAN_SIGN_OFF = ["OWNER", "MEMBER", "COLLABORATOR"];
+export function readyAfterPush({ labelEvents = [], checkRuns = [], comments = [] }) {
   const pushedAt = checkRuns.map((c) => c.started_at).filter(Boolean).sort()[0];
-  const ready = labelEvents.filter((e) => e.event === "labeled" && e.label?.name === "ready" && e.actor?.type !== "Bot").map((e) => e.created_at).sort().pop();
+  const label = labelEvents.filter((e) => e.event === "labeled" && e.label?.name === "ready" && e.actor?.type !== "Bot").map((e) => e.created_at);
+  // `/ship` in a comment by a person with write access counts the same as the `ready` label.
+  const ship = comments.filter((c) => SIGN_OFF_COMMENT.test(String(c.body || "").trim()) && c.user?.type !== "Bot" && CAN_SIGN_OFF.includes(c.author_association)).map((c) => c.created_at);
+  const ready = [...label, ...ship].sort().pop();
   return Boolean(pushedAt && ready && ready >= pushedAt);
 }
 
@@ -119,7 +124,7 @@ export function evaluate(facts) {
   const approved = humanApproval(ctx);
   const staleApproval = !approved && (facts.reviews || []).some((x) => x.user?.type === "User" && x.state === "APPROVED");
   if (rules.approval === "review" && !approved) reasons.push(staleApproval ? "your approval was for an older commit; approve again" : "not approved (Review changes > Approve)");
-  if (rules.approval === "sign-off" && !approved && !readyAfterPush(facts)) reasons.push(staleApproval ? "your approval was for an older commit; approve again" : "no sign-off (approve it, or label it ready if you wrote it)");
+  if (rules.approval === "sign-off" && !approved && !readyAfterPush(facts)) reasons.push(staleApproval ? "your approval was for an older commit; approve again" : "no sign-off (approve it, or comment /ship)");
 
   const forceApp = Boolean(compare.forceAppChanged);
   const validate = rules.validate === true || (rules.validate === "if-force-app" && forceApp);
@@ -135,6 +140,7 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
   const reviews = ghPages(`repos/${repo}/pulls/${prNumber}/reviews?per_page=100`);
   const checkRuns = ghPages(`repos/${repo}/commits/${head}/check-runs?per_page=100`, "check_runs");
   const labelEvents = ghPages(`repos/${repo}/issues/${prNumber}/events?per_page=100`);
+  const comments = ghPages(`repos/${repo}/issues/${prNumber}/comments?per_page=100`).map((c) => ({ body: c.body, created_at: c.created_at, author_association: c.author_association, user: { type: c.user?.type } }));
   const statuses = [];
   for (const c of pr.commits || []) {
     for (const s of ghPages(`repos/${repo}/commits/${c.oid}/statuses?per_page=100`)) {
@@ -160,7 +166,7 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
       compare.unreleasedSprintCommits = (vsMain.commits || []).filter((c) => unreleased.has(c.sha)).length;
     }
   }
-  return { pr, reviews, checkRuns, labelEvents, statuses, diffsToHead, compare, ai };
+  return { pr, reviews, checkRuns, labelEvents, comments, statuses, diffsToHead, compare, ai };
 }
 
 /** Re-run the gate when a person has signed off (or the PR needs no sign-off), so it merges when its last input lands.

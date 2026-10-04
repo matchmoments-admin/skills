@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Flow settings for production. Deployed once by hand, like the Dev Hub settings:
+     sf project deploy start -o <prod> -d devhub-setup/main/default/settings
+     enableFlowDeployAsActiveEnabled: Flows committed as Active arrive active. Without it, every deployed Flow is
+     inactive in production and the automation silently does nothing. With it, deploys need Apex tests that run
+     the active Flows (CLAUDE.md, Flows). -->
+<FlowSettings xmlns="http://soap.sforce.com/2006/04/metadata">
+    <enableFlowDeployAsActiveEnabled>true</enableFlowDeployAsActiveEnabled>
+</FlowSettings>

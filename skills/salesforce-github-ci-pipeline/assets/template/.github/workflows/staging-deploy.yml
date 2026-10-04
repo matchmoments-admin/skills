@@ -51,6 +51,9 @@ jobs:
       - name: Full Apex regression with coverage gate
         working-directory: candidate
         run: mkdir -p test-results && ../.pipeline/scripts/ci/coverage-gate.sh staging
+      - name: Flow tests
+        working-directory: candidate
+        run: ../.pipeline/scripts/ci/flow-tests.sh staging
       - name: Drop production access before running the branch's specs
         run: |
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true

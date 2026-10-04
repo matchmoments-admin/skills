@@ -22,8 +22,12 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
 5. **Claude auth in CI** (only if any Claude switch is on). Subscription token (`claude setup-token`) or an API key. Subscription usage counts against the user's plan limits; the template already uses Haiku for review and UI test.
 6. **Jev** (only with `AI_TRIAGE`): a TypeSafe key (`apik…`) as secret `TYPESAFE_API_KEY`. Reuse an existing one from another project by piping it into `gh secret set` without printing it.
 7. **Sprint naming** (e.g. `2026-w42`).
+8. **Existing org?** A fresh org follows the phases as written. An established Enterprise/Unlimited org (Flows,
+   managed packages, no source control) first follows [`references/enterprise.md`](references/enterprise.md):
+   Dev Hub and integration user, production into source, `config/packages.json`, Flow settings.
+9. **CI runner.** GitHub Actions (the template) or the company's Buildkite ([`references/buildkite.md`](references/buildkite.md)).
 
-Done when: all seven answers are written down.
+Done when: all nine answers are written down.
 
 ## Phase 1 — Repo from the template
 
@@ -72,6 +76,10 @@ Done when: a GitHub Release tag exists for both, the change is visible in produc
 
 - The user's actions are only: `sprint-start`, label `start`, build (or `ai:implement`), label `test` (or `ai:test`), **Approve**, `release-cut`, **Approve**. Hotfix: labels `hotfix` + `start`. Undo: Actions → `rollback` with a tag.
 - When a gate does not merge, its PR comment names every missing input; fix that input, the gate re-runs itself.
+- People follow the **story card** on each issue (next step, a link per stage, a live flow diagram) and can use
+  comment commands (`/start`, `/build`, `/test`, `/review`, `/fix`, `/ship`, `/help`). Optional delivery board:
+  create a Project with a Status field (Ready, Building, In review, Approved, In staging, Live), give the App
+  organisation **Projects: Read and write**, and set `BOARD_PROJECT` to the project number.
 - Telemetry: the weekly `metrics` workflow keeps a "Delivery metrics" issue (DORA, AI first-pass rate, workflow health); transcripts of every AI run are artifacts (`claude-transcript-*`).
 - A fix to `.github/` or `pipeline/` reaches an open release branch only after `gh workflow run back-merge.yml` (PR workflows run the merge result's copy).
 - When something fails, look it up in [`references/gotchas.md`](references/gotchas.md) by its error text first.

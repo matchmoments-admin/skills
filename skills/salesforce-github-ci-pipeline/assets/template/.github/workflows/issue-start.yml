@@ -62,5 +62,8 @@ jobs:
         run: node .pipeline/pipeline/bin/pipe.mjs org ensure "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}
       - name: The story card (one comment, kept up to date at every stage)
         env:
+          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --base "$BASE"

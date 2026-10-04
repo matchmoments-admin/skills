@@ -1,13 +1,22 @@
 // The org registry: find, create, prepare and delete scratch orgs (see CONTEXT.md: Issue org, Staging org,
 // Org registry). The Dev Hub's ScratchOrgInfo records are the registry, matched on Description, so a deleted
 // org can never look alive. Logins use the CI certificate (JWT) with the Dev Hub's connected app.
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { orgFor } from "./conventions.mjs";
 import { PIPELINE_ROOT } from "./io.mjs";
 
 // Scratch definitions come from the trusted pipeline checkout, so a PR cannot change its own org's shape.
 const definitionPath = (d) => join(PIPELINE_ROOT, d);
+
+/** Managed packages production has, which Org Shape does not copy: config/packages.json,
+ *  [{ "name": "DocuSign", "id": "04t...", "keyEnv": "DOCUSIGN_KEY" }] (keyEnv names an env var holding an install key). */
+export function packageList(file = join(PIPELINE_ROOT, "config/packages.json")) {
+  if (!existsSync(file)) return [];
+  const list = JSON.parse(readFileSync(file, "utf8"));
+  for (const p of list) if (!/^04t[A-Za-z0-9]{12,15}$/.test(p.id || "")) throw new Error(`config/packages.json: ${p.name || "?"} needs a package version id (04t...)`);
+  return list;
+}
 
 const DEVHUB = "devhub";
 
@@ -31,7 +40,7 @@ export function permissionSets(dir = "force-app") {
   return out.sort();
 }
 
-export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key` }) {
+export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key`, packages = packageList(), env = process.env }) {
   const active = () =>
     (sf(["data", "query", "-o", DEVHUB, "-q", "SELECT SignupUsername, LoginUrl, Description, ExpirationDate FROM ScratchOrgInfo WHERE Status = 'Active' ORDER BY CreatedDate DESC"]).records || []);
 
@@ -65,9 +74,19 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
       sf(["org", "create", "scratch", "--definition-file", definitionPath(org.definition), "--alias", org.alias, "--description", org.description,
         "--duration-days", String(org.days), "--target-dev-hub", DEVHUB, "--wait", "25"]);
+      self.installPackages(org.alias);
       self.deploy(org.alias);
       self.prepare(org.alias);
       return { ...org, created: true };
+    },
+
+    /** Install production's managed packages, in order, before the source that depends on them. */
+    installPackages(alias) {
+      for (const p of packages) {
+        log(`installing ${p.name || p.id} in ${alias}`);
+        const key = p.keyEnv ? env[p.keyEnv] : null;
+        sf(["package", "install", "--package", p.id, "--target-org", alias, "--wait", "30", "--publish-wait", "10", "--no-prompt", "--security-type", "AdminsOnly", ...(key ? ["--installation-key", key] : [])]);
+      }
     },
 
     /** Fail with a clear message instead of a half-made org when the Dev Hub has no room. */
@@ -82,6 +101,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       self.assertCapacity();
       const org = { kind: "temp", alias: name, description: name, definition: "config/scratch-dev.json", days: 1 };
       sf(["org", "create", "scratch", "--definition-file", definitionPath(org.definition), "--alias", name, "--description", name, "--duration-days", "1", "--target-dev-hub", DEVHUB, "--wait", "25"]);
+      self.installPackages(name);
       return { ...org, created: true };
     },
 

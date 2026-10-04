@@ -77,7 +77,7 @@ export function jiraTracker({ fetch = globalThis.fetch, base = process.env.JIRA_
     },
     async comment(key, text) { await call("POST", `/rest/api/3/issue/${key}/comment`, { body: adfDoc(text) }); },
     async card(key, body, mark, title) {
-      const text = body.replace(mark, "").trim();   // Jira shows HTML comments as text; find the card by its title instead
+      const text = body.replace(mark, "").replace(/```mermaid[\s\S]*?```\n*/g, "").trim();   // Jira draws no Mermaid and shows HTML comments as text
       const all = (await call("GET", `/rest/api/3/issue/${key}/comment?maxResults=100`))?.comments || [];
       const mine = all.find((c) => adfToText(c.body).includes(title));
       if (mine) await call("PUT", `/rest/api/3/issue/${key}/comment/${mine.id}`, { body: adfDoc(text) });

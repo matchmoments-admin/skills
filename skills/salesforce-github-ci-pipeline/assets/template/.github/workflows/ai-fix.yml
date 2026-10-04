@@ -1,45 +1,64 @@
 name: ai-fix
 # FLAG: repository variable AI_FIX=true (off by default: a person pushes the fixes). Works on human review
-# comments too, so it does not need AI_REVIEW.
-# BUTTON: label a PR `ai:fix`. Claude fixes the blockers and majors from the review, pushes, and the review runs again.
-# At most two rounds per PR. Pipeline code comes from main (.pipeline/); the agent never holds production access.
+# comments and failed CI checks, so it does not need AI_REVIEW.
+# BUTTON: label a PR `ai:fix` or comment /fix. Claude fixes the blockers and majors from the review and the errors of
+# a failed CI run, pushes, and the review runs again. At most two rounds per PR.
+# The label only dispatches the real job with --ref main: a labelled PR runs the workflow file from GitHub's test merge
+# commit, which can lag behind main, so fixes to this file would otherwise not reach open PRs.
 on:
-  pull_request:
+  pull_request_target:   # runs the base branch's own copy of this file (never the PR's code), so routing is never stale
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
 permissions:
-  actions: write        # re-starts the review (and ci without the App)
+  actions: write        # dispatches itself on main; re-starts the review (and ci without the App)
   contents: write
   pull-requests: write
   issues: write
   id-token: write
 jobs:
-  off:
-    if: github.event.label.name == 'ai:fix' && vars.AI_FIX != 'true'
+  route:
+    if: github.event_name == 'pull_request_target' && github.event.label.name == 'ai:fix'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
     steps:
       - run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --body "AI fix is off (repository variable \`AI_FIX\`). Push the fix yourself, or turn it on in Settings > Secrets and variables > Actions > Variables."
-          gh pr edit "${{ github.event.pull_request.number }}" --remove-label ai:fix || true
+          if [ "${{ vars.AI_FIX }}" != "true" ]; then
+            gh pr comment "$PR" --body "AI fix is off (repository variable \`AI_FIX\`). Push the fix yourself, or turn it on in Settings > Secrets and variables > Actions > Variables."
+            gh pr edit "$PR" --remove-label ai:fix || true
+          else
+            gh workflow run ai-fix.yml --ref main -f pr="$PR"
+          fi
   fix:
-    if: github.event.label.name == 'ai:fix' && vars.AI_FIX == 'true'
+    if: github.event_name == 'workflow_dispatch' && vars.AI_FIX == 'true'
     runs-on: ubuntu-latest
     concurrency:
-      group: org-${{ github.event.pull_request.head.ref }}   # the story's org (org-issue-N); only AI jobs share it
+      group: ai-pr-${{ inputs.pr }}   # one AI job per PR at a time (ui-test shares it: same story org)
       cancel-in-progress: false
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      PR: ${{ github.event.pull_request.number }}
-      BRANCH: ${{ github.event.pull_request.head.ref }}
-      BASE: ${{ github.event.pull_request.base.ref }}
+      PR: ${{ inputs.pr }}
     steps:
+      - name: The PR (validated)
+        id: pr
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::not a PR number"; exit 1; }
+          J=$(gh pr view "$PR" --json headRefName,baseRefName,state)
+          [ "$(jq -r .state <<<"$J")" = "OPEN" ] || { echo "::error::PR #$PR is not open"; exit 1; }
+          echo "BRANCH=$(jq -r .headRefName <<<"$J")" >> "$GITHUB_ENV"
+          echo "BASE=$(jq -r .baseRefName <<<"$J")" >> "$GITHUB_ENV"
+          echo "branch=$(jq -r .headRefName <<<"$J")" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
-        with: { ref: "${{ github.event.pull_request.head.ref }}", fetch-depth: 0 }
+        with: { ref: "${{ steps.pr.outputs.branch }}", fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
@@ -49,7 +68,7 @@ jobs:
         with:
           app-id: ${{ secrets.PIPELINE_APP_ID }}
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ steps.pr.outputs.branch }}
       - name: Enforce the round limit (rounds counted since the PR's own base)
         id: rounds
         run: |
@@ -66,15 +85,27 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
-      - name: Attach the story's org and collect the review feedback
+      - name: Attach the story's org and collect the feedback (review comments and failed CI)
         id: org
+        env:
+          READ_TOKEN: ${{ github.token }}   # reading run logs needs actions: read, which the Actions token has
         run: |
           node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH"
           {
-            echo "# Review feedback on PR #$PR"
-            gh pr view "$PR" --json comments --jq '.comments[] | "\n## Comment by \(.author.login)\n\(.body)"'
+            echo "# Feedback on PR #$PR"
+            gh pr view "$PR" --json comments --jq '.comments[] | select(.body | startswith("/") | not) | "\n## Comment by \(.author.login)\n\(.body)"'
             gh api --paginate "repos/$GH_REPO/pulls/$PR/comments" --jq '.[] | "\n## Inline on \(.path) line \(.line // .original_line)\n\(.body)"'
+            # the newest failed CI run, preferring the PR's current head (a newer run may still be in progress)
+            HEAD_SHA=$(git rev-parse HEAD)
+            RUN=$(GH_TOKEN="$READ_TOKEN" gh run list --branch "$BRANCH" --workflow ci.yml --limit 10 --json databaseId,conclusion,headSha \
+              --jq "([.[] | select(.conclusion==\"failure\" and .headSha==\"$HEAD_SHA\")] + [.[] | select(.conclusion==\"failure\")])[0].databaseId // empty")
+            if [ -n "$RUN" ]; then
+              echo; echo "## Failed CI checks (run $RUN): fix these first"
+              GH_TOKEN="$READ_TOKEN" gh run view "$RUN" --log-failed | sed -E 's/\x1b\[[0-9;]*m//g; s/^[^\t]*\t[^\t]*\t[0-9TZ:.-]+ //' \
+                | grep -vE 'completion|Executing rules|Selecting rules|^\s*$|##\[(group|endgroup)\]' | tail -60
+            fi
           } > "$RUNNER_TEMP/review-feedback.md"
+          grep -c "Failed CI checks" "$RUNNER_TEMP/review-feedback.md" | sed 's/^/failed-CI sections: /'
       - run: npm install --no-audit --no-fund
       - uses: ./.pipeline/.github/actions/claude-agent
         with:
@@ -82,14 +113,15 @@ jobs:
           model: ${{ vars.AI_MODEL }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ steps.id.outputs.token }}
-          allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots (auto-chain labels as the App); empty = none
+          allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots; empty = none
           max-turns: "40"
           allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(sf:*),Bash(git:*),Bash(npm run:*),Bash(npm install:*),Bash(npx prettier:*),Bash(npx sfdx-lwc-jest:*),Bash(ls:*),Bash(jq:*)"
           prompt: |
-            Fix the review findings on pull request #${{ env.PR }}. All review feedback (summary and inline comments) is in ${{ runner.temp }}/review-feedback.md.
-            Address every [blocker] and [major]; ignore [minor] unless trivial. The latest comments win if they disagree.
+            Fix the review findings and any failed CI checks on pull request #${{ env.PR }}. All feedback (review comments, inline comments, and the errors of a failed CI run, if any) is in ${{ runner.temp }}/review-feedback.md.
+            Failed CI checks come first: they block the merge. Then address every [blocker] and [major]; ignore [minor] unless trivial. The latest comments win if they disagree.
             The scratch org alias is ${{ steps.org.outputs.alias }}: deploy with `sf project deploy start -o ${{ steps.org.outputs.alias }} -d force-app --ignore-conflicts`, run the Apex tests until they pass, and run `npm run format` before committing.
       - name: Review again (and CI, without the App)
+        if: always()
         run: |
           gh pr edit "$PR" --remove-label ai:fix || true
           [ "${{ vars.AI_REVIEW }}" != "true" ] || gh workflow run ai-review.yml -f pr="$PR"

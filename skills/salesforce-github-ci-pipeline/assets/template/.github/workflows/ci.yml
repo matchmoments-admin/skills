@@ -141,12 +141,37 @@ jobs:
       - name: Apex tests and coverage gate
         if: steps.delta.outputs.none != 'true'
         run: mkdir -p test-results && ./.pipeline/scripts/ci/coverage-gate.sh "${{ steps.org.outputs.alias }}"
+      - name: Flow tests (Flow Builder tests in force-app)
+        if: steps.delta.outputs.none != 'true'
+        run: ./.pipeline/scripts/ci/flow-tests.sh "${{ steps.org.outputs.alias }}"
       - uses: actions/upload-artifact@v4
         if: always() && steps.delta.outputs.none != 'true'
         with: { name: apex-results, path: test-results }
       - name: Delete the temporary org
         if: always() && steps.org.outputs.temp == 'true'
         run: sf org delete scratch -o "${{ steps.org.outputs.alias }}" --no-prompt || true
+  autofix:
+    # Auto-chain (AI_AUTO_CHAIN + AI_FIX): a failed check on a story PR starts ai:fix, which reads the failed output.
+    # ai-fix caps the rounds, so a failure it cannot fix stops at a person.
+    needs: [static, apex]
+    if: failure() && github.event_name == 'pull_request' && vars.AI_AUTO_CHAIN == 'true' && vars.AI_FIX == 'true' && (startsWith(github.head_ref, 'issue-') || contains(github.head_ref, '-'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: Start ai:fix (as the App, so the label starts the workflow)
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          [[ "$BRANCH" =~ ^(issue-[0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "not a story branch"; exit 0; }
+          gh pr edit "$PR" --add-label ai:fix
   nudge:
     # After both required checks have finished (a separate job, so the checks are complete when the gate reads them).
     needs: [static, apex]
@@ -161,6 +186,10 @@ jobs:
       - uses: actions/checkout@v4
         with: { ref: main }
       - name: Merge now if a person already approved
+        env:
+          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: |
           PRN="${{ github.event.pull_request.number }}"
           [ -n "$PRN" ] || PRN=$(gh pr list --head "$REF" --state open --json number --jq '.[0].number // empty')

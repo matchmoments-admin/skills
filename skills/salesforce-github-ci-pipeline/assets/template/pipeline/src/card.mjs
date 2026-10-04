@@ -45,7 +45,8 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   }
 
   const approved = merged || humanApproval(ctx);
-  rows.push([approved ? "done" : "waiting", "Approval", approved ? "approved" : `**[Approve here](${prUrl}/files)** (Review changes > Approve)`]);
+  const signOff = base === "main" ? "(Review changes > Approve)" : "(Review changes > Approve), or comment **/ship** on the PR";
+  rows.push([approved ? "done" : "waiting", "Approval", approved ? "approved" : `**[Approve here](${prUrl}/files)** ${signOff}`]);
   rows.push([shipped ? "done" : merged ? "done" : "waiting", "Merged", merged ? `into \`${base}\`; the staging regression runs next` : "merges by itself when everything above is green"]);
   rows.push([shipped ? "done" : "waiting", "In production", shipped ? `released in [${shipped.tag}](${shipped.url})` : base === "main" ? "ships right after the merge" : "ships with the sprint's release"]);
 
@@ -66,12 +67,37 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   return render(key, next, rows);
 }
 
+const SHORT = { "Branch and scratch org": "Branch + org", "Build": "Build", "Pull request": "Pull request", "CI (tests in a scratch org)": "CI",
+  "AI review": "AI review", "UI test": "UI test", "Approval": "Approval", "Merged": "Merged", "In production": "Production" };
+
+/** The stages as a left-to-right flow, coloured by state (GitHub draws Mermaid in comments; Jira gets the table only). */
+export function storyMap(rows) {
+  const nodes = rows.map(([state, stage], i) => `  s${i}["${ICON[state]} ${(SHORT[stage] || stage).replace(/"/g, "'")}"]:::${state}`);
+  return [
+    "```mermaid",
+    "flowchart LR",
+    ...nodes,
+    `  ${rows.map((_, i) => `s${i}`).join(" --> ")}`,
+    "  classDef done fill:#d6f5e3,stroke:#1d7a4c,color:#14202b",
+    "  classDef running fill:#fdf0d5,stroke:#946000,color:#14202b",
+    "  classDef failed fill:#f8e3e3,stroke:#a93838,color:#14202b",
+    "  classDef waiting fill:#eef1f4,stroke:#9aa7b3,color:#5a6977",
+    "  classDef off fill:#ffffff,stroke:#c8d0d8,stroke-dasharray:4 3,color:#9aa7b3",
+    "```",
+  ].join("\n");
+}
+
+/** Remove the diagram (for trackers that cannot draw Mermaid). */
+export const withoutMap = (body) => body.replace(/```mermaid[\s\S]*?```\n*/g, "");
+
 function render(key, next, rows) {
   return [
     CARD_MARK,
     `### ${CARD_TITLE} (kept up to date by the pipeline)`,
     "",
     `**Next:** ${next}`,
+    "",
+    storyMap(rows),
     "",
     "| | Stage | Details |",
     "|---|---|---|",

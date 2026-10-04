@@ -6,7 +6,7 @@ name: ai-review
 # Cheap by design: Haiku (pipeline/src/verdict.mjs MODELS), the diff handed over as a file, 15 turns, no review when
 # nothing reviewable changed, and with AI_TRIAGE=true a Jev risk score skips low-risk declarative changes.
 on:
-  pull_request:
+  pull_request_target:   # runs the base branch's own copy of this file (never the PR's code), so routing is never stale
     types: [opened, ready_for_review, labeled]
   workflow_dispatch:
     inputs:
@@ -40,11 +40,22 @@ jobs:
       - run: |
           gh pr comment "${{ github.event.pull_request.number }}" --body "AI review is off (repository variable \`AI_REVIEW\`). A person's approval is the review; or turn it on in Settings > Secrets and variables > Actions > Variables."
           gh pr edit "${{ github.event.pull_request.number }}" --remove-label ai:review || true
-  review:
+  route:
+    # PR events only dispatch the real review with --ref main (a PR runs the workflow file from GitHub's test merge
+    # commit, which can lag behind main).
     if: >-
-      vars.AI_REVIEW == 'true' &&
-      (github.event_name == 'workflow_dispatch' || github.event.action != 'labeled' || github.event.label.name == 'ai:review') &&
+      github.event_name == 'pull_request_target' && vars.AI_REVIEW == 'true' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ai:review') &&
       !startsWith(github.event.pull_request.head.ref, 'backmerge-') && !startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: gh workflow run ai-review.yml --ref main -f pr="${{ github.event.pull_request.number }}"
+  review:
+    if: github.event_name == 'workflow_dispatch' && vars.AI_REVIEW == 'true'
     runs-on: ubuntu-latest
     concurrency:
       group: ai-review-${{ github.event.pull_request.number || inputs.pr }}   # a newer review of the same PR replaces an older one
@@ -156,6 +167,10 @@ jobs:
             *)       node pipeline/bin/pipe.mjs status set pipeline/ai-review error "$HEAD" "the review posted no verdict"; echo "::warning::no verdict" ;;
           esac
       - name: Merge now if a person already approved
+        env:
+          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: node pipeline/bin/pipe.mjs gate nudge "$PR"
       # Auto-chain (AI_AUTO_CHAIN=true), only into steps whose own flag is on: changes -> ai:fix (ai-fix caps the
       # rounds), pass with UI-facing changes -> ai:test. Labels are added as the App, because the Actions token's start nothing.

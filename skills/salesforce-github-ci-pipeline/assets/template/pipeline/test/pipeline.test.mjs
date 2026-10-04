@@ -7,10 +7,11 @@ import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
-import { orgRegistry } from "../src/org.mjs";
+import { orgRegistry, packageList } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
-import { storyCard, CARD_MARK } from "../src/card.mjs";
+import { storyCard, CARD_MARK, withoutMap } from "../src/card.mjs";
+import * as board from "../src/board.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -130,6 +131,12 @@ test("ready counts only when applied after the head was pushed", () => {
   assert.equal(gate.readyAfterPush({ labelEvents: ready("2026-10-04T10:05:00Z"), checkRuns: checks }), true);
   assert.equal(gate.readyAfterPush({ labelEvents: ready("2026-10-04T09:00:00Z"), checkRuns: checks }), false);
   assert.equal(gate.readyAfterPush({ labelEvents: ready("2026-10-04T10:05:00Z", "Bot"), checkRuns: checks }), false);
+  const ship = (at, assoc = "MEMBER", type = "User", body = "/ship") => [{ body, created_at: at, author_association: assoc, user: { type } }];
+  assert.equal(gate.readyAfterPush({ comments: ship("2026-10-04T10:05:00Z"), checkRuns: checks }), true);
+  assert.equal(gate.readyAfterPush({ comments: ship("2026-10-04T09:00:00Z"), checkRuns: checks }), false);   // before the push
+  assert.equal(gate.readyAfterPush({ comments: ship("2026-10-04T10:05:00Z", "NONE"), checkRuns: checks }), false);   // no write access
+  assert.equal(gate.readyAfterPush({ comments: ship("2026-10-04T10:05:00Z", "MEMBER", "Bot"), checkRuns: checks }), false);
+  assert.equal(gate.readyAfterPush({ comments: ship("2026-10-04T10:05:00Z", "MEMBER", "User", "please /ship it"), checkRuns: checks }), false);
 });
 
 test("PR #12 (hotfix): approved on its head, validated against production; refused if it carries sprint commits", () => {
@@ -298,7 +305,7 @@ test("org registry: attaches the live org found by Description; never creates wh
 
 test("org registry: creates, deploys and prepares when none is live; remove is a no-op when none", () => {
   const { sf, calls } = fakeSf([]);
-  const r = orgRegistry({ sf, log: () => {}, sleep: () => {} });
+  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] });
   const o = r.ensure("story:12", { hotfix: true });
   assert.equal(o.created, true);
   assert.equal(o.definition, "config/scratch-hotfix.json");
@@ -414,6 +421,7 @@ test("review triage: code and access changes always reviewed; only confident low
   const low = fakeJev({ risk: { type: "score", score: 0.4, confidence: 0.8 } });
   assert.equal((await triageReview(low, { files: ["force-app/main/default/classes/A.cls"], diff: "" })).review, true);
   assert.equal((await triageReview(low, { files: ["force-app/main/default/permissionsets/P.permissionset-meta.xml"], diff: "" })).review, true);
+  assert.equal((await triageReview(low, { files: ["force-app/main/default/flows/F.flow-meta.xml"], diff: "" })).review, true);   // a Flow is logic
   assert.equal((await triageReview(low, { files: ["README.md"], diff: "" })).review, false);
   assert.equal((await triageReview(low, { files: ["force-app/main/default/objects/Account/fields/X__c.field-meta.xml"], diff: "+<label>X</label>" })).review, false);
   const high = fakeJev({ risk: { type: "score", score: 2.6, confidence: 0.8 } });
@@ -452,4 +460,46 @@ test("story card: before the PR it says how to build; with a PR it tracks each s
   const shipped = storyCard({ ...base, pr: { ...pr, state: "MERGED" }, facts: f, shipped: { tag: "v1", url: "https://x/v1" } });
   assert.match(shipped, /Done: live in production since \[v1\]/);
   assert.doesNotMatch(shipped, /⬜/);
+});
+
+test("story card draws the stages as a coloured flow; trackers without Mermaid get the table only", () => {
+  const card = storyCard({ key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/w", ai: {} });
+  assert.match(card, /```mermaid\nflowchart LR\n  s0\["✅ Branch \+ org"\]:::done\n  s1\["⬜ Build"\]:::waiting\n  s0 --> s1/);
+  assert.doesNotMatch(withoutMap(card), /mermaid/);
+  assert.match(withoutMap(card), /\| ✅ \| Branch and scratch org/);
+});
+
+test("board: stage follows the story; moving a card adds it and sets Status", async () => {
+  assert.equal(board.stageOf({}), "Building");
+  assert.equal(board.stageOf({ pr: { state: "OPEN" } }), "In review");
+  assert.equal(board.stageOf({ pr: { state: "OPEN" }, approved: true }), "Approved");
+  assert.equal(board.stageOf({ pr: { state: "MERGED", baseRefName: "release/w" } }), "In staging");
+  assert.equal(board.stageOf({ pr: { state: "MERGED", baseRefName: "main" } }), "Live");
+  assert.equal(board.stageOf({ pr: { state: "MERGED", baseRefName: "release/w" }, shipped: true }), "Live");
+  const calls = [];
+  const graphql = async (q, v) => {
+    calls.push(v);
+    if (q.includes("organization")) return { organization: { projectV2: { id: "P", field: { id: "F", options: board.STAGES.map((n, i) => ({ id: `o${i}`, name: n })) } } } };
+    if (q.includes("addProjectV2ItemById")) return { addProjectV2ItemById: { item: { id: "I" } } };
+    return {};
+  };
+  assert.deepEqual(await board.moveCard({ graphql, org: "o", project: "3", issueNodeId: "N", stage: "In staging" }), { item: "I", stage: "In staging" });
+  assert.deepEqual(calls[2], { p: "P", i: "I", f: "F", o: "o4" });
+});
+
+test("managed packages: installed before the source, with an install key from the env; bad ids rejected", async () => {
+  const { sf, calls } = fakeSf([]);
+  const seen = [];
+  const spy = (args, o) => { seen.push(args); return sf(args, o); };
+  const r = orgRegistry({ sf: spy, log: () => {}, sleep: () => {}, packages: [{ name: "DocuSign", id: "04t000000000001AAA", keyEnv: "DS_KEY" }], env: { DS_KEY: "k" } });
+  r.ensure("story:12");
+  const order = calls.filter((c) => /^(org create|package install|project deploy)/.test(c));
+  assert.deepEqual(order, ["org create scratch", "package install --package", "project deploy start"]);
+  assert.ok(seen.find((a) => a[0] === "package").includes("--installation-key"));
+  const { writeFileSync, mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const f = `${mkdtempSync(`${tmpdir()}/pk-`)}/packages.json`;
+  writeFileSync(f, JSON.stringify([{ name: "X", id: "not-an-id" }]));
+  assert.throws(() => packageList(f), /needs a package version id/);
+  assert.deepEqual(packageList(`${f}.missing`), []);
 });

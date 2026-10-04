@@ -5,9 +5,20 @@ name: ui-test
 # The spec runs in its own job, after production access is gone; its result travels only as the step's outcome. A
 # separate job on a fresh runner posts the commit status pipeline/ui-test on that exact commit (the gate trusts
 # only that). With AI_TRIAGE=true, a failure is classified by Jev; a likely flake is re-run once.
+# The labels only dispatch the real jobs with --ref main (a labelled PR runs the workflow file from GitHub's test
+# merge commit, which can lag behind main).
 on:
-  pull_request:
+  pull_request_target:   # runs the base branch's own copy of this file (never the PR's code), so routing is never stale
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+      mode:
+        description: "ai = Claude writes the spec, then it runs; run = run the committed spec"
+        required: true
+        default: run
 permissions:
   actions: write        # starts ci without the App
   contents: write
@@ -24,34 +35,46 @@ env:                    # the AI switches (repository variables); the gate and t
   AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
   AI_TRIAGE: ${{ vars.AI_TRIAGE }}
 jobs:
-  off:
-    if: github.event.label.name == 'ai:test' && vars.AI_UI_TEST != 'true'
+  route:
+    if: github.event_name == 'pull_request_target' && (github.event.label.name == 'ai:test' || github.event.label.name == 'test')
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      LABEL: ${{ github.event.label.name }}
     steps:
       - run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --body "AI UI test is off (repository variable \`AI_UI_TEST\`). Commit \`e2e/story-<key>.spec.ts\` yourself and label the PR \`test\`, or turn it on in Settings > Secrets and variables > Actions > Variables."
-          gh pr edit "${{ github.event.pull_request.number }}" --remove-label ai:test || true
+          if [ "$LABEL" = "ai:test" ] && [ "${{ vars.AI_UI_TEST }}" != "true" ]; then
+            gh pr comment "$PR" --body "AI UI test is off (repository variable \`AI_UI_TEST\`). Commit \`e2e/story-<key>.spec.ts\` yourself and label the PR \`test\`, or turn it on in Settings > Secrets and variables > Actions > Variables."
+            gh pr edit "$PR" --remove-label ai:test || true
+            exit 0
+          fi
+          if [ "$LABEL" = "ai:test" ]; then MODE=ai; else MODE=run; fi
+          gh workflow run ui-test.yml --ref main -f pr="$PR" -f mode="$MODE"
   write:
-    if: github.event.label.name == 'ai:test' && vars.AI_UI_TEST == 'true'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'ai' && vars.AI_UI_TEST == 'true'
     runs-on: ubuntu-latest
     concurrency:
-      group: org-${{ github.event.pull_request.head.ref }}   # the story's org (org-issue-N); only AI jobs share it
+      group: ai-pr-${{ inputs.pr }}   # one AI job per PR at a time (ai-fix shares it: same story org)
       cancel-in-progress: false
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      PR: ${{ github.event.pull_request.number }}
-      BRANCH: ${{ github.event.pull_request.head.ref }}
+      PR: ${{ inputs.pr }}
     outputs:
       is-app: ${{ steps.id.outputs.is-app }}
     steps:
+      - name: The PR (validated)
+        id: pr
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::not a PR number"; exit 1; }
+          B=$(gh pr view "$PR" --json headRefName --jq .headRefName)
+          echo "BRANCH=$B" >> "$GITHUB_ENV"; echo "branch=$B" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
-        with: { ref: "${{ github.event.pull_request.head.ref }}", fetch-depth: 0 }
+        with: { ref: "${{ steps.pr.outputs.branch }}", fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
@@ -61,7 +84,7 @@ jobs:
         with:
           app-id: ${{ secrets.PIPELINE_APP_ID }}
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ steps.pr.outputs.branch }}
       - uses: ./.pipeline/.github/actions/sf-auth
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
@@ -94,6 +117,17 @@ jobs:
             Use getByRole / getByLabel locators only. Cover the happy path and one negative case from the criteria.
             Test the feature as a user sees it. Never configure the org through the UI (no Lightning App Builder, no Setup pages); if the feature is not visible where the story says, that is a failure of the feature, not something to build in the test.
             Run it with `npx playwright test e2e/story-${{ steps.org.outputs.key }}.spec.ts`. If it fails because the feature is wrong, say so; if the test is wrong, fix the test (at most 3 attempts).
+      - name: Make sure the spec is committed and pushed (even if the agent stopped early)
+        if: always() && steps.org.outputs.key != ''
+        env:
+          SPEC: e2e/story-${{ steps.org.outputs.key }}.spec.ts
+        run: |
+          [ -f "$SPEC" ] || { echo "no spec written"; exit 0; }
+          if [ -n "$(git status --porcelain -- "$SPEC")" ] || [ -n "$(git log "origin/$BRANCH..HEAD" --oneline)" ]; then
+            git add -- "$SPEC"
+            git -c user.name="__owner__-pipeline[bot]" -c user.email="pipeline@users.noreply.github.com" commit -qm "test(e2e): story ${{ steps.org.outputs.key }}" -- "$SPEC" || true
+            git push origin "HEAD:$BRANCH"
+          fi
       - name: Remove the button label
         if: always()
         run: gh pr edit "$PR" --remove-label ai:test || true
@@ -101,30 +135,34 @@ jobs:
     # Runs the committed spec against the PR's head, on its own runner, with a read-only token. Production access is
     # dropped before any of the PR's code runs. The result is the step outcome, which the spec cannot write.
     needs: write
-    if: always() && ((github.event.label.name == 'ai:test' && needs.write.result != 'skipped') || github.event.label.name == 'test')
+    if: always() && github.event_name == 'workflow_dispatch' && ((inputs.mode == 'ai' && needs.write.result != 'skipped') || inputs.mode == 'run')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     concurrency:
-      group: org-${{ github.event.pull_request.head.ref }}
+      group: ai-pr-${{ inputs.pr }}
       cancel-in-progress: false
     timeout-minutes: 25
     env:
       GH_REPO: ${{ github.repository }}
-      PR: ${{ github.event.pull_request.number }}
-      BRANCH: ${{ github.event.pull_request.head.ref }}
+      PR: ${{ inputs.pr }}
     outputs:
       head: ${{ steps.head.outputs.sha }}
       key: ${{ steps.spec.outputs.key }}
       has-spec: ${{ steps.spec.outputs.exists }}
       outcome: ${{ steps.test.outcome }}
+      branch: ${{ steps.spec.outputs.branch }}
     steps:
       - name: The PR's head now (after any spec commit)
         id: head
         env:
           GH_TOKEN: ${{ github.token }}
-        run: echo "sha=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" >> "$GITHUB_OUTPUT"
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::not a PR number"; exit 1; }
+          J=$(gh pr view "$PR" --json headRefOid,headRefName)
+          echo "sha=$(jq -r .headRefOid <<<"$J")" >> "$GITHUB_OUTPUT"
+          echo "BRANCH=$(jq -r .headRefName <<<"$J")" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { ref: "${{ steps.head.outputs.sha }}", persist-credentials: false }
       - name: Trusted pipeline code (main)
@@ -136,6 +174,7 @@ jobs:
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           echo "KEY=$KEY" >> "$GITHUB_ENV"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           if [ -n "$KEY" ] && [ -f "e2e/story-$KEY.spec.ts" ]; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
       - uses: ./.pipeline/.github/actions/sf-auth
         if: steps.spec.outputs.exists == 'true'
@@ -186,8 +225,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      PR: ${{ github.event.pull_request.number }}
-      BRANCH: ${{ github.event.pull_request.head.ref }}
+      PR: ${{ inputs.pr }}
+      BRANCH: ${{ needs.run.outputs.branch }}
       HEAD_SHA: ${{ needs.run.outputs.head }}
       KEY: ${{ needs.run.outputs.key }}
       HAS_SPEC: ${{ needs.run.outputs.has-spec }}
@@ -213,7 +252,7 @@ jobs:
           KIND: ${{ steps.triage.outputs.kind }}
           WHY: ${{ steps.triage.outputs.why }}
         run: |
-          gh pr edit "$PR" --remove-label ui:pass --remove-label ui:fail --remove-label test 2>/dev/null || true
+          gh pr edit "$PR" --remove-label ui:pass --remove-label ui:fail --remove-label test --remove-label ai:test 2>/dev/null || true
           if [ "$HAS_SPEC" != "true" ]; then
             node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "no spec e2e/story-$KEY.spec.ts committed"; gh pr edit "$PR" --add-label ui:fail
           elif [ "$OUTCOME" = "success" ]; then
@@ -243,4 +282,8 @@ jobs:
         if: needs.write.result == 'success' && needs.write.outputs.is-app != 'true'
         run: gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
       - name: Merge now if a person already approved
+        env:
+          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: node pipeline/bin/pipe.mjs gate nudge "$PR"

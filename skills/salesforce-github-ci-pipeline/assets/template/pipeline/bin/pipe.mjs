@@ -24,6 +24,7 @@ import * as closeout from "../src/closeout.mjs";
 import * as metrics from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
 import { storyCard, CARD_MARK, CARD_TITLE } from "../src/card.mjs";
+import * as board from "../src/board.mjs";
 import { orgRegistry } from "../src/org.mjs";
 import { tracker as makeTracker } from "../src/tracker.mjs";
 
@@ -76,7 +77,27 @@ async function refreshCard(key, { base = null, tag = null } = {}) {
       shipped: tag ? { tag, url: `${repoUrl}/releases/tag/${tag}` } : null,
     });
     await makeTracker(io).card(key, body, CARD_MARK, CARD_TITLE);
+    await syncBoard(key, { repo, pr, facts, shipped: Boolean(tag) });
   } catch (e) { log(`::warning::story card for ${key} not updated: ${e.message}`); }
+}
+
+/** Move the story on the delivery board, when BOARD_PROJECT is set and the App credentials are in this step. */
+async function syncBoard(key, { repo, pr, facts, shipped }) {
+  const { BOARD_PROJECT, PIPELINE_APP_ID, PIPELINE_APP_PRIVATE_KEY } = process.env;
+  if (!BOARD_PROJECT || !PIPELINE_APP_ID || !PIPELINE_APP_PRIVATE_KEY || !/^\d+$/.test(String(key))) return;
+  try {
+    const token = await board.appToken({ appId: PIPELINE_APP_ID, privateKey: PIPELINE_APP_PRIVATE_KEY, repo });
+    const graphql = async (query, variables) => {
+      const r = await (await fetch("https://api.github.com/graphql", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ query, variables }) })).json();
+      if (r.errors) throw new Error(r.errors.map((e) => e.message).join("; "));
+      return r.data;
+    };
+    const issueNodeId = io.gh(["api", `repos/${repo}/issues/${key}`, "--jq", ".node_id"]);
+    const approved = Boolean(facts && gate.humanApproval({ ...facts, head: pr?.headRefOid }));
+    const stage = board.stageOf({ pr, approved, shipped });
+    await board.moveCard({ graphql, org: repo.split("/")[0], project: BOARD_PROJECT, issueNodeId, stage });
+    log(`board: story ${key} -> ${stage}`);
+  } catch (e) { log(`::warning::board not updated for ${key}: ${e.message}`); }
 }
 
 async function main() {

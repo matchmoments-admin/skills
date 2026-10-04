@@ -1,7 +1,8 @@
 name: release
-# Started by the gate after a release or hotfix merges into main. Quick-deploys the gate's production validation
-# (no second test run), smoke-checks, refreshes the org shape, tags, closes out, then checks for a back-merge.
-# Re-runnable: an already-tagged commit skips the deploy and tag, but close-out and back-merge still run.
+# Started by the gate after a release or hotfix merges into main. One run, drawn as a graph on the run page:
+#   plan -> deploy to production -> (tag | refresh org shape) -> close out -> back-merge
+# Quick-deploys the gate's production validation (no second test run). Re-runnable: an already-tagged commit skips
+# deploy and tag, but close-out and back-merge still run.
 on:
   workflow_dispatch:      # no push trigger, so nothing runs twice
     inputs:
@@ -25,29 +26,44 @@ env:                    # the AI switches (repository variables); the gate and t
   AI_UI_TEST: ${{ vars.AI_UI_TEST }}
   AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
   AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+  GH_REPO: ${{ github.repository }}
 jobs:
-  release:
+  plan:
+    name: what ships
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: production    # deploys only from main (environment rule)
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.p.outputs.sha }}
+      skip: ${{ steps.p.outputs.skip }}
+      tag: ${{ steps.p.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, fetch-depth: 0 }
-      - name: Already released?
-        id: skip
+      - name: The commit, and whether it already shipped
+        id: p
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          SHA=$(git rev-parse HEAD); echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           TAG=$(git tag --points-at HEAD | head -1)
-          if [ -n "$TAG" ]; then echo "already released as $TAG"; echo "skip=true" >> "$GITHUB_OUTPUT"; echo "tag=$TAG" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$TAG" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "tag=$TAG" >> "$GITHUB_OUTPUT"; echo "already released as $TAG"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+          { echo "### Shipping \`${SHA:0:7}\`"; echo; git log -1 --format='%s' "$SHA"; } >> "$GITHUB_STEP_SUMMARY"
+  deploy:
+    name: deploy to production
+    needs: plan
+    if: needs.plan.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production    # deploys only from main (environment rule)
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ needs.plan.outputs.sha }}" }
       - uses: ./.github/actions/sf-auth
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Production validation (the gate's, or here)
-        if: steps.skip.outputs.skip == 'false'
         id: validate
         env:
           GATE_JOB: ${{ inputs.validated_job }}
@@ -58,35 +74,79 @@ jobs:
           fi
           echo "job=$(./scripts/ci/validate-prod.sh)" >> "$GITHUB_OUTPUT"
       - name: Quick deploy the validated change
-        if: steps.skip.outputs.skip == 'false'
         env:
           JOB: ${{ steps.validate.outputs.job }}
         run: sf project deploy quick -o devhub --job-id "$JOB" --wait 30
       - name: Smoke check
-        if: steps.skip.outputs.skip == 'false'
         run: sf data query -o devhub -q "SELECT COUNT() FROM Account" >/dev/null && echo "production responds"
-      - name: Refresh the production org shape (non-blocking)
-        if: steps.skip.outputs.skip == 'false'
-        run: sf org create shape -o devhub || echo "::warning::Org shape refresh failed; scratch orgs use the previous shape"
+  shape:
+    name: refresh org shape
+    needs: [plan, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true    # scratch orgs keep the previous shape if this fails
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ needs.plan.outputs.sha }}" }
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - run: sf org create shape -o devhub
+  tag:
+    name: tag and release notes
+    needs: [plan, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
       - id: app
-        if: steps.skip.outputs.skip == 'false'
         uses: actions/create-github-app-token@v1   # a tag on a commit that changes workflows needs the workflows permission
         with:
           app-id: ${{ secrets.PIPELINE_APP_ID }}
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
       - name: Tag and publish release notes
-        if: steps.skip.outputs.skip == 'false'
         id: tag
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          SHA: ${{ needs.plan.outputs.sha }}
         run: |
           TAG="v$(date -u +%Y.%m.%d)-${{ github.run_number }}"
-          gh release create "$TAG" --target "$(git rev-parse HEAD)" --generate-notes
+          gh release create "$TAG" --target "$SHA" --generate-notes
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Released [$TAG](${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
+  closeout:
+    name: close out sprint and stories
+    needs: [plan, tag]
+    if: always() && needs.plan.result == 'success' && (needs.tag.result == 'success' || needs.plan.outputs.skip == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - uses: ./.github/actions/sf-auth   # deletes the shipped stories' scratch orgs
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Close out (stories, sprint, orgs, release branch)
         env:
-          TAG: ${{ steps.tag.outputs.tag || steps.skip.outputs.tag }}
+          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          TAG: ${{ needs.tag.outputs.tag || needs.plan.outputs.tag }}
         run: node pipeline/bin/pipe.mjs closeout run --tag "$TAG"
-      - name: Bring main into an open release branch if one exists (after a hotfix)
-        if: always()
-        run: gh workflow run back-merge.yml --ref main
+  backmerge:
+    name: back-merge into the open sprint
+    needs: [plan, closeout]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: gh workflow run back-merge.yml --ref main

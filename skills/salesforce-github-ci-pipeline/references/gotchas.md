@@ -78,3 +78,17 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Actions minutes**: `pipe metrics` / the weekly `metrics` workflow. The template caches the sf CLI weekly and Chromium by lockfile.
 - **Release PR and back-merge CI burn scratch orgs** (1 of 6 a day each). → They attach the sprint's staging org under the `org-staging` lock.
 - **Jev (TypeSafe) is for decisions only.** It cannot write code or reviews. `noul` criteria must be `{true, false}`; score criteria are levels lowest first; keys start `apik`; failures return `{ok:false}` and the caller falls back.
+
+## Flows
+
+- **Shipped Flows arrive inactive in production** → `enableFlowDeployAsActiveEnabled` is off by default. → `devhub-setup/.../Flow.settings-meta.xml`; then deploys need Apex tests that run the active Flows.
+- **`flow:TriggerEntryCriteria` (High) from Code Analyzer** → a record-triggered Flow checks its conditions in a Decision. → Put them in the Start element's filters.
+- **A Flow test fails although the Flow is right** → the test's triggering record does not meet the entry criteria; Flow tests cannot test "does not run". → Cover that in Apex.
+- **A deleted Flow test keeps failing CI** → added and deleted within one branch, it never reaches a destructive change and stays in the story org. → Run Flow tests by name from git (`<FlowApiName>.<TestName>`), not RunLocalTests.
+- **`This class name's value is invalid: flowtesting`** → `--tests` needs `<FlowApiName>.<TestName>`.
+
+## Workflow versions
+
+- **A labelled PR runs an old workflow file** → `pull_request` events use GitHub's test merge commit, refreshed lazily; even a back-merge may not reach it. → Run AI steps on `workflow_dispatch --ref main`; route PR events through `pull_request_target` (base branch's own file), with route jobs that never check out PR code.
+- **An agent "scheduled a check" and ended without committing** → it backgrounded a long command. → `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` on the agent step, plus a workflow step that commits what it wrote.
+- **ai-fix ignored a failed check** → the newest CI run was still running. → Use the newest *failed* run, preferring the current head.
