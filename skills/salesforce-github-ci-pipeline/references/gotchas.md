@@ -138,3 +138,9 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **The plan's next step said `/start` on a started story** → `plan-post --started` makes it `/build`.
 - **The agent's plan must never touch the repo or comment** → plan tools are `Read,Glob,Grep,Write` (one file); an
   agent-free step posts it. No Salesforce login and no scratch org: planning costs no allowance.
+
+## UI tests and platform behaviour
+
+- **A UI test failed on a correct feature** → it typed a future Close Date and expected to see it; Salesforce sets a
+  closed Opportunity's future Close Date to today, and the Flow copied that. → UI tests use past dates and assert what
+  the platform stores (read the record back). Jev's failure triage is a guess: it said "feature" here.

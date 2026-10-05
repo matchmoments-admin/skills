@@ -121,6 +121,7 @@ jobs:
             You are the UI tester for story ${{ steps.org.outputs.key }} (pull request #${{ env.PR }}). The story is in ${{ runner.temp }}/story.md: its acceptance criteria and "Where to see it" are your test plan.
             Write ONE Playwright spec at e2e/story-${{ steps.org.outputs.key }}.spec.ts. Call `login(page)` from e2e/support/login.ts, then navigate with `openPath(page, "/lightning/...")` from the same file (there is no baseURL). SCRATCH_ALIAS is already set, so login needs no arguments.
             Use getByRole / getByLabel locators only. Cover the happy path and one negative case from the criteria.
+            Assert what the platform stores, not what you typed: Salesforce changes some values when records change state (closing an Opportunity with a future Close Date sets it to today). Use dates in the past and read the record back for the expected value.
             Test the feature as a user sees it. Never configure the org through the UI (no Lightning App Builder, no Setup pages); if the feature is not visible where the story says, that is a failure of the feature, not something to build in the test.
             Run it with `npx playwright test e2e/story-${{ steps.org.outputs.key }}.spec.ts`. If it fails because the feature is wrong, say so; if the test is wrong, fix the test (at most 3 attempts).
       - name: Make sure the spec is committed and pushed (even if the agent stopped early)
@@ -264,8 +265,8 @@ jobs:
           elif [ "$OUTCOME" = "success" ]; then
             node pipeline/bin/pipe.mjs status set pipeline/ui-test success "$HEAD_SHA" "UI test passed"; gh pr edit "$PR" --add-label ui:pass
           else
-            node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "the spec failed${KIND:+ (Jev: $KIND)}"; gh pr edit "$PR" --add-label ui:fail
-            if [ -n "$KIND" ] && [ "$KIND" != "unknown" ]; then gh pr comment "$PR" --body "UI test failed. Jev triage: **$KIND**: $WHY"; fi
+            node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "the spec failed${KIND:+ (Jev guesses: $KIND)}"; gh pr edit "$PR" --add-label ui:fail
+            if [ -n "$KIND" ] && [ "$KIND" != "unknown" ]; then gh pr comment "$PR" --body "UI test failed. Jev's guess: **$KIND** ($WHY). It is a guess: check the report (screenshot and error context) before acting on it."; fi
           fi
       - name: A likely flake gets one re-run
         id: retry

@@ -54,4 +54,8 @@ The workflow gives you the story (title, acceptance criteria, where to see it) a
 - Fix failures before committing. Do not commit with failing tests.
 
 ## UI tests
+UI tests check what the platform **stores**, not what was typed: Salesforce changes some values when a record
+changes state (closing an Opportunity with a future Close Date sets it to today; a Lead conversion copies fields). Use
+realistic dates in the past, read the record back (`sf data get record`) for the expected value, and assert that.
+
 Playwright specs live in `e2e/`. A story's own spec is `e2e/story-<key>.spec.ts` (for example `e2e/story-28.spec.ts`); label the PR `test` to run it, with or without AI. Use role and label locators (`getByRole`, `getByLabel`), never CSS class selectors. Log in with `login(page)` from `e2e/support/login.ts`, then navigate with `openPath(page, "/lightning/...")` from the same file. There is no Playwright `baseURL`, so `page.goto("/relative")` fails. Run a spec with `SCRATCH_ALIAS=<alias> npx playwright test <file>`.
