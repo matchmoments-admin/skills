@@ -151,7 +151,7 @@ jobs:
         with: { name: apex-results, path: test-results }
       - name: Delete the temporary org
         if: always() && steps.org.outputs.temp == 'true'
-        run: sf org delete scratch -o "${{ steps.org.outputs.alias }}" --no-prompt || true
+        run: node .pipeline/pipeline/bin/pipe.mjs org remove-tagged "${{ steps.org.outputs.alias }}"   # by its tag, via the Dev Hub: works even if creation half-failed
   autofix:
     # Auto-chain (AI_AUTO_CHAIN + AI_FIX): a failed check on a story PR starts ai:fix, which reads the failed output.
     # ai-fix caps the rounds, so a failure it cannot fix stops at a person.

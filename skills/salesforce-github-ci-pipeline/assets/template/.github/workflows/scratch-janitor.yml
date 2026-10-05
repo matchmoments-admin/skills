@@ -1,11 +1,13 @@
 name: scratch-janitor
-# Weekly: delete the scratch orgs of closed stories (the Dev Hub is the registry), and report the allocation.
+# Every 6 hours: delete orphan scratch orgs (CI orgs whose run died, closed stories, staging and UAT of sprints no longer
+# open) through the Dev Hub, and report the allocation. Run by hand any time.
 on:
   schedule:
-    - cron: "17 18 * * 1"   # Monday; run by hand any time
+    - cron: "17 */6 * * *"   # every 6 hours: an orphan must not hold one of the Dev Hub's active slots for long
   workflow_dispatch:
 permissions:
-  issues: read
+  contents: read        # which sprint is open (release branch refs)
+  issues: read          # which stories are closed
 jobs:
   sweep:
     runs-on: ubuntu-latest

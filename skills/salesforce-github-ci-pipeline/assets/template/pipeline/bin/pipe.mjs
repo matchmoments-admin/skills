@@ -223,19 +223,21 @@ async function main() {
     }
     case "org attach": { const o = orgs().attach(arg(0)); output({ alias: o.alias }); return say(o.alias); }
     case "org remove": { orgs().remove(arg(0)); return; }
+    case "org remove-tagged": { orgs().removeTagged(arg(0)); return; }
     case "org prepare": { orgs().prepare(arg(0)); return; }
     case "org deploy": { orgs().deploy(arg(0), { manifest: flag("manifest") }); return; }
     case "org temp": { const o = orgs().temporary(arg(0)); output({ alias: o.alias, temp: true }); return say(o.alias); }
     case "org limits": { const l = orgs().limits(); return say(`active scratch orgs ${l.active.remaining}/${l.active.max} free, created today ${l.daily.max - l.daily.remaining}/${l.daily.max}`); }
     case "org sweep": {
+      // every orphan: CI orgs whose run died, closed stories' orgs, staging and UAT orgs of sprints no longer open
       const t = makeTracker(io);
-      const closed = [];
-      for (const r of orgs().closedStoryOrgs(() => true)) {
-        const key = names.storyOf(r.Description);
-        try { if (key && (await t.story(key)).state === "CLOSED") closed.push(key); } catch (e) { log(`skipped ${r.Description}: ${e.message}`); }
+      const closed = new Set();
+      for (const d of (io.sf(["data", "query", "-o", "devhub", "-q", "SELECT Description FROM ScratchOrgInfo WHERE Status = 'Active'"]).records || []).map((r) => r.Description || "")) {
+        const key = names.storyOf(d);
+        try { if (key && (await t.story(key)).state === "CLOSED") closed.add(d); } catch (e) { log(`skipped ${d}: ${e.message}`); }
       }
-      for (const key of closed) { try { orgs().remove(`story:${key}`); } catch (e) { log(`could not delete ${key}: ${e.message}`); } }
-      return say(`deleted ${closed.length} org(s) of closed stories: ${closed.join(", ") || "none"}`);
+      const gone = orgs().sweep({ isStoryClosed: (d) => closed.has(d), openSprint: names.sprintOf(openRelease() || "") });
+      return say(`deleted ${gone.length} orphan org(s)${gone.length ? `: ${gone.map((o) => `${o.description} (${o.why})`).join(", ")}` : ""}`);
     }
 
     case "gate evaluate": {

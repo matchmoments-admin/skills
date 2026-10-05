@@ -9,6 +9,26 @@ import { PIPELINE_ROOT } from "./io.mjs";
 // Scratch definitions come from the trusted pipeline checkout, so a PR cannot change its own org's shape.
 const definitionPath = (d) => join(PIPELINE_ROOT, d);
 
+/**
+ * Which live scratch orgs nothing needs any more (pure). Orgs whose description the pipeline did not make are left alone.
+ *   ci-*                 a CI run's temporary org older than tempHours: its run failed before its cleanup, or died
+ *   issue-N / KEY-N      the story is closed (isStoryClosed)
+ *   staging-S, uat-S     sprint S is not the open sprint (shipped or abandoned)
+ */
+export function findOrphans(records, { now = new Date(), isStoryClosed = () => false, openSprint = null, tempHours = 2 } = {}) {
+  const out = [];
+  for (const r of records) {
+    const d = r.Description || "";
+    const age = (now - new Date(r.CreatedDate || now)) / 3600e3;
+    let why = null;
+    if (/^ci-/.test(d) && age > tempHours) why = `CI org ${Math.round(age)} h old (its run did not clean up)`;
+    else if (/^issue-\d+$|^[A-Z][A-Z0-9]+-\d+$/.test(d) && isStoryClosed(d)) why = "story closed";
+    else if (/^(staging|uat)-(.+)$/.test(d) && d.replace(/^(staging|uat)-/, "") !== openSprint) why = "sprint no longer open";
+    if (why) out.push({ username: r.SignupUsername, description: d, why });
+  }
+  return out;
+}
+
 /** Managed packages production has, which Org Shape does not copy: config/packages.json,
  *  [{ "name": "DocuSign", "id": "04t...", "keyEnv": "DOCUSIGN_KEY" }] (keyEnv names an env var holding an install key). */
 export function packageList(file = join(PIPELINE_ROOT, "config/packages.json")) {
@@ -42,7 +62,9 @@ export function permissionSets(dir = "force-app") {
 
 export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key`, packages = packageList(), env = process.env }) {
   const active = () =>
-    (sf(["data", "query", "-o", DEVHUB, "-q", "SELECT SignupUsername, LoginUrl, Description, ExpirationDate FROM ScratchOrgInfo WHERE Status = 'Active' ORDER BY CreatedDate DESC"]).records || []);
+    (sf(["data", "query", "-o", DEVHUB, "-q", "SELECT SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate FROM ScratchOrgInfo WHERE Status = 'Active' ORDER BY CreatedDate DESC"]).records || []);
+  /** Delete through the Dev Hub's ActiveScratchOrg record: no login to the org itself, so it works on any org. */
+  const deleteRecord = (username) => Boolean(sf(["data", "delete", "record", "-o", DEVHUB, "-s", "ActiveScratchOrg", "-w", `SignupUsername='${username}'`], { allowFail: true }));
 
   const self = {
     /** The live org for a target, or null. Description is long text, which SOQL cannot filter, so match here. */
@@ -125,10 +147,28 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     remove(target, opts) {
       const org = self.find(target, opts);
       if (!org) { log(`no live org for ${resolve(target, opts).description}`); return false; }
-      self.attach(org);
-      const done = sf(["org", "delete", "scratch", "-o", org.alias, "--no-prompt"], { allowFail: true });
-      log(done ? `deleted ${org.alias} (${org.description})` : `could not delete ${org.alias} (${org.description}); the janitor will retry`);
-      return Boolean(done);
+      return self.removeTagged(org.description) > 0;
+    },
+
+    /** Delete every live org with this description (works when the alias was never set: a half-made CI org). */
+    removeTagged(description) {
+      let n = 0;
+      for (const r of active().filter((x) => x.Description === description)) {
+        if (deleteRecord(r.SignupUsername)) { n++; log(`deleted ${description} (${r.SignupUsername})`); }
+        else log(`could not delete ${description} (${r.SignupUsername}); the janitor will retry`);
+      }
+      if (!n) log(`no live org tagged ${description}`);
+      return n;
+    },
+
+    /** Find and delete orphans (see findOrphans). Returns what was deleted, with why. */
+    sweep(facts) {
+      const gone = [];
+      for (const o of findOrphans(active(), facts)) {
+        if (deleteRecord(o.username)) { gone.push(o); log(`deleted ${o.description}: ${o.why}`); }
+        else log(`could not delete ${o.description} (${o.why})`);
+      }
+      return gone;
     },
 
     /** Story orgs whose story the tracker says is closed. */

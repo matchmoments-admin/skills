@@ -77,6 +77,14 @@ export async function apply(p, { tag, tracker, orgs, git, gh, log = console.erro
   for (const target of p.deleteOrgs) {
     try { orgs.remove(target); } catch (e) { log(`could not delete ${target}: ${e.message}`); }
   }
-  if (p.deleteBranch) git(["push", "origin", "--delete", p.deleteBranch], { allowFail: true });
+  if (p.deleteBranch) {
+    // git first; then the API (a shallow or credential-less checkout cannot push). A branch left behind blocks the
+    // next sprint-start ("still open"), so a failure is said out loud, never swallowed.
+    const exists = () => git(["ls-remote", "--exit-code", "--heads", "origin", p.deleteBranch], { allowFail: true }) !== null;
+    git(["push", "origin", "--delete", p.deleteBranch], { allowFail: true });
+    if (exists() && gh) gh(["api", "-X", "DELETE", `repos/${process.env.GH_REPO || process.env.GITHUB_REPOSITORY}/git/refs/heads/${p.deleteBranch}`], { allowFail: true });
+    if (exists()) log(`::warning::could not delete ${p.deleteBranch}; delete it by hand before the next sprint-start`);
+    else log(`deleted ${p.deleteBranch}`);
+  }
   log(`close-out: sprint=${p.sprint || "none"} shipped=[${p.ship}] carried=[${p.carry}] hotfixes=[${p.hotfix.map((h) => h.key)}]`);
 }

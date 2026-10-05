@@ -7,7 +7,7 @@ import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
-import { orgRegistry, packageList } from "../src/org.mjs";
+import { orgRegistry, packageList, findOrphans } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
 import { storyCard, CARD_MARK, withoutMap } from "../src/card.mjs";
@@ -351,9 +351,17 @@ test("close-out is safe to re-run and closes PRs still aimed at the shipped rele
   const gh = (args) => (args[1] === "list" ? [{ number: 40, headRefName: "issue-5" }] : (closed.push(args[2]), null));
   const { apply } = await import("../src/closeout.mjs");
   await apply({ sprint: "w", ship: ["1", "3"], carry: [], hotfix: [], deleteOrgs: [], deleteBranch: "release/w" },
-    { tag: "v1", tracker, orgs: { remove: () => true }, git: () => "", gh, log: () => {} });
+    { tag: "v1", tracker, orgs: { remove: () => true }, git: (args) => (args[0] === "ls-remote" ? null : ""), gh, log: () => {} });
   assert.deepEqual(done, ["3"]);       // story 1 was already closed by an earlier run
   assert.deepEqual(closed, ["40"]);
+  // git cannot delete it: the API does, and a branch that survives both is reported, never silent
+  const calls = [], logs = [];
+  let alive = true;
+  const git = (args) => (args[0] === "ls-remote" ? (alive ? "sha refs/heads/release/w" : null) : null);
+  const gh2 = (args) => { calls.push(args.join(" ")); if (args.includes("DELETE")) alive = false; return []; };
+  await apply({ sprint: "w", ship: [], carry: [], hotfix: [], deleteOrgs: [], deleteBranch: "release/w" }, { tag: "v1", tracker, orgs: { remove: () => true }, git, gh: gh2, log: (m) => logs.push(m) });
+  assert.ok(calls.some((c) => c.includes("-X DELETE") && c.endsWith("git/refs/heads/release/w")));
+  assert.ok(logs.includes("deleted release/w"));
 });
 
 // ---------------------------------------------------------------- metrics
@@ -607,4 +615,32 @@ test("UAT: with UAT_ENABLED a release needs a sign-off on its current code; off,
   assert.deepEqual(gate.evaluate({ ...f, uat: true, statuses: [st("success")] }).reasons, []);
   const o = names.orgFor("uat:2026-w45");
   assert.deepEqual([o.alias, o.description, o.lock, o.days], ["uat", "uat-2026-w45", "org-uat", 30]);
+});
+
+// ---------------------------------------------------------------- scratch org cleanup
+test("orphans: dead CI orgs, closed stories, and staging or UAT of sprints no longer open; nothing else", () => {
+  const now = new Date("2026-10-05T12:00:00Z");
+  const r = (Description, hoursAgo = 1) => ({ Description, SignupUsername: `${Description}@x`, CreatedDate: new Date(now - hoursAgo * 3600e3).toISOString() });
+  const orphans = findOrphans([
+    r("ci-371", 5), r("ci-372", 1), r("issue-12"), r("issue-13"), r("LIFE-7"),
+    r("staging-2026-w44"), r("uat-2026-w44"), r("staging-2026-w45"), r("uat-2026-w45"), r("someone's own org"),
+  ], { now, openSprint: "2026-w45", isStoryClosed: (d) => ["issue-12", "LIFE-7"].includes(d) });
+  assert.deepEqual(orphans.map((o) => o.description), ["ci-371", "issue-12", "LIFE-7", "staging-2026-w44", "uat-2026-w44"]);
+  assert.match(orphans[0].why, /5 h old/);
+  assert.deepEqual(findOrphans([r("staging-2026-w45")], { now, openSprint: null }).map((o) => o.why), ["sprint no longer open"]);   // no sprint open
+});
+
+test("removing an org goes through the Dev Hub record, never a login to the org; tagged deletes find half-made orgs", () => {
+  const calls = [];
+  const sf = (args) => {
+    calls.push(args.join(" "));
+    if (args[1] === "query") return { records: [{ Description: "issue-12", SignupUsername: "u12@x" }, { Description: "ci-9", SignupUsername: "c9@x" }] };
+    return {};
+  };
+  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] });
+  assert.equal(r.remove("story:12"), true);
+  assert.equal(r.removeTagged("ci-9"), 1);
+  assert.ok(calls.some((c) => c.includes("data delete record -o devhub -s ActiveScratchOrg -w SignupUsername='u12@x'")));
+  assert.ok(calls.some((c) => c.includes("SignupUsername='c9@x'")));
+  assert.ok(!calls.some((c) => c.startsWith("org login") || c.startsWith("org delete")));
 });

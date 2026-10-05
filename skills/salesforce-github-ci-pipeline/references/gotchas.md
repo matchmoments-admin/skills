@@ -102,3 +102,12 @@ Every entry happened in a real run. Search this file for the error text you see.
   latest main commit; do not merge to main while a sprint is starting.
 - **Logging in to the same Salesforce user under a new alias drops the old alias** (seen with `devhub` after a
   `ci-devhub` login). → Pipeline jobs use one alias; locally, `sf alias set devhub=<username>` restores it.
+
+## Scratch org cleanup
+
+- **Every creator needs a cleaner, and a sweep for when it fails.** Story orgs go at merge and close-out; staging and
+  UAT at close-out; CI temporary orgs in an `always()` step. A killed runner, a half-failed creation (an org without
+  its alias), an abandoned sprint (30-day orgs) or a closed-but-unmerged story still leaves orgs holding active slots.
+  → `findOrphans` + `scratch-janitor` every 6 hours.
+- **Delete through the Dev Hub** (`ActiveScratchOrg` record by `SignupUsername`), not by logging in to the org: a
+  failed JWT login or a missing alias otherwise leaves the org alive.
