@@ -26,6 +26,8 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
    managed packages, no source control) first follows [`references/enterprise.md`](references/enterprise.md):
    Dev Hub and integration user, production into source, `config/packages.json`, Flow settings.
 9. **CI runner.** GitHub Actions (the template) or the company's Buildkite ([`references/buildkite.md`](references/buildkite.md)).
+   If the team only wants per-feature scratch-org tests in an existing build (Buildkite, Bitbucket, no pipeline
+   change), use the separate `salesforce-scratch-org-tests` skill instead of this one.
 
 Done when: all nine answers are written down.
 
@@ -79,7 +81,8 @@ Done when: a GitHub Release tag exists for both, the change is visible in produc
 - People follow the **story card** on each issue (next step, a link per stage, a live flow diagram) and can use
   comment commands (`/start`, `/build`, `/test`, `/review`, `/fix`, `/ship`, `/help`). Optional delivery board:
   create a Project with a Status field (Ready, Building, In review, Approved, In staging, Live), give the App
-  organisation **Projects: Read and write**, and set `BOARD_PROJECT` to the project number.
+  organisation **Projects: Read and write**, and set `BOARD_PROJECT` to the project number
+  ([`scripts/create-board.sh`](scripts/create-board.sh) `<org> <repo>` does the project, the stages and the variable).
 - Telemetry: the weekly `metrics` workflow keeps a "Delivery metrics" issue (DORA, AI first-pass rate, workflow health); transcripts of every AI run are artifacts (`claude-transcript-*`).
 - A fix to `.github/` or `pipeline/` reaches an open release branch only after `gh workflow run back-merge.yml` (PR workflows run the merge result's copy).
 - When something fails, look it up in [`references/gotchas.md`](references/gotchas.md) by its error text first.

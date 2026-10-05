@@ -1,0 +1,8 @@
+{
+  "orgName": "CI scratch org",
+  "sourceOrg": "00D000000000000",
+  "description": "Copies production's shape (edition, features, settings). Replace sourceOrg with production's 15-character org ID after enabling Org Shape, or delete it and list edition/features/settings by hand.",
+  "settings": {
+    "lightningExperienceSettings": { "enableS1DesktopEnabled": true }
+  }
+}
