@@ -5,6 +5,7 @@ name: ai-fix
 # a failed CI run, pushes, and the review runs again. At most two rounds per PR.
 # The label only dispatches the real job with --ref main: a labelled PR runs the workflow file from GitHub's test merge
 # commit, which can lag behind main, so fixes to this file would otherwise not reach open PRs.
+run-name: "${{ inputs.pr && format('ai-fix PR #{0}', inputs.pr) || format('ai-fix (label on PR #{0})', github.event.pull_request.number) }}"   # the round limit counts these
 on:
   pull_request_target:   # runs the base branch's own copy of this file (never the PR's code), so routing is never stale
     types: [labeled]
@@ -21,6 +22,8 @@ permissions:
   id-token: write
   checks: read          # the story card reads checks and verdicts
   statuses: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   route:
     if: github.event_name == 'pull_request_target' && github.event.label.name == 'ai:fix'
@@ -41,10 +44,7 @@ jobs:
   fix:
     if: github.event_name == 'workflow_dispatch' && vars.AI_FIX == 'true'
     runs-on: ubuntu-latest
-    concurrency:
-      group: ai-pr-${{ inputs.pr }}   # one AI job per PR at a time (ui-test shares it: same story org)
-      cancel-in-progress: false
-    timeout-minutes: 30
+    timeout-minutes: 75   # 45 of them may be waiting for the story org's lane
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -78,11 +78,11 @@ jobs:
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
           echo "STORY_KEY=$KEY" >> "$GITHUB_ENV"
           [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is fixing the review comments and failed checks (5 to 10 minutes)"
-      - name: Enforce the round limit (rounds counted since the PR's own base)
+      - name: Enforce the round limit (earlier fix runs for this PR, whatever their commits were called)
         id: rounds
-        run: |
-          git fetch -q origin "$BASE"
-          node .pipeline/pipeline/bin/pipe.mjs verdict rounds --base "origin/$BASE"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs verdict rounds --pr "$PR"
       - name: Stop at the limit
         if: steps.rounds.outputs.over == 'true'
         run: |
@@ -94,6 +94,10 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH"
       - name: Attach the story's org and collect the feedback (review comments and failed CI)
         id: org
         env:
@@ -115,10 +119,12 @@ jobs:
             fi
           } > "$RUNNER_TEMP/review-feedback.md"
           grep -c "Failed CI checks" "$RUNNER_TEMP/review-feedback.md" | sed 's/^/failed-CI sections: /'
-      - run: npm install --no-audit --no-fund
+          if [ -n "$STORY_KEY" ]; then node .pipeline/pipeline/bin/pipe.mjs tracker story "$STORY_KEY" --pack --base "origin/$BASE" --out "$RUNNER_TEMP/story.md"; else echo "(no story)" > "$RUNNER_TEMP/story.md"; fi
+      - run: npm install --no-audit --no-fund --ignore-scripts   # the production key is still on disk here: no install scripts
       - uses: ./.pipeline/.github/actions/claude-agent
         with:
           role: fix
+          pr: ${{ env.PR }}
           model: ${{ vars.AI_MODEL }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ steps.id.outputs.token }}
@@ -128,7 +134,13 @@ jobs:
           prompt: |
             Fix the review findings and any failed CI checks on pull request #${{ env.PR }}. All feedback (review comments, inline comments, and the errors of a failed CI run, if any) is in ${{ runner.temp }}/review-feedback.md.
             Failed CI checks come first: they block the merge. Then address every [blocker] and [major]; ignore [minor] unless trivial. The latest comments win if they disagree.
+            The story (the scope; do not build beyond it) and "The codebase today" are in ${{ runner.temp }}/story.md. Follow CLAUDE.md, including its Access rules.
             The scratch org alias is ${{ steps.org.outputs.alias }}: deploy with `sf project deploy start -o ${{ steps.org.outputs.alias }} -d force-app --ignore-conflicts`, run the Apex tests until they pass, and run `npm run format` before committing.
+      - name: Let the next job into the org's lane
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
       - name: Review again (and CI, without the App)
         if: always()
         run: |

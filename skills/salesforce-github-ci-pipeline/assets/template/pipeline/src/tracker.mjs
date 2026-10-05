@@ -7,6 +7,7 @@ import { milestoneTitle } from "./conventions.mjs";
 
 export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY }) {
   const list = (path) => (ghPages ? ghPages(path) : gh(["api", path]) || []);
+  const cards = new Map();
   const milestone = (sprint, state = "all") => list(`repos/${repo}/milestones?state=${state}&per_page=100`).find((m) => m.title === milestoneTitle(sprint));
   return {
     name: "github",
@@ -19,11 +20,13 @@ export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || proce
     async comments(key) {
       return list(`repos/${repo}/issues/${key}/comments?per_page=100`).map((c) => ({ author: c.user?.login || "", body: c.body || "", created: c.created_at }));
     },
-    /** Create or update the one story card comment (found by its marker). */
+    /** Create or update the one comment with this marker (the story card, the build plan). The comment found is
+     *  remembered, so refreshing it again in the same process costs one call. */
     async card(key, body, mark) {
-      const mine = list(`repos/${repo}/issues/${key}/comments?per_page=100`).find((c) => String(c.body || "").includes(mark));
-      if (mine) gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${mine.id}`, "-f", `body=${body}`]);
-      else gh(["issue", "comment", String(key), "--body", body]);
+      const k = `${key}|${mark}`;
+      if (!cards.has(k)) cards.set(k, list(`repos/${repo}/issues/${key}/comments?per_page=100`).find((c) => String(c.body || "").includes(mark))?.id || null);
+      if (cards.get(k)) gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${cards.get(k)}`, "-f", `body=${body}`]);
+      else { gh(["issue", "comment", String(key), "--body", body]); cards.delete(k); }
     },
     async done(key, text) {
       if (text) gh(["issue", "comment", String(key), "--body", text]);

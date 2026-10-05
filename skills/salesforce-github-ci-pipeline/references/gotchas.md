@@ -139,6 +139,73 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **The agent's plan must never touch the repo or comment** → plan tools are `Read,Glob,Grep,Write` (one file); an
   agent-free step posts it. No Salesforce login and no scratch org: planning costs no allowance.
 
+## Code layout and API budget
+
+- **The story card refresh cost hundreds of API calls per CI run**: every progress tick (once a minute) re-gathered all
+  the gate's facts (6 + 2N calls), listed the comments to find the card, and moved the board. → The code host
+  (`pipeline/src/github.mjs`) fetches each fact once per process; the tracker remembers the comment it edits; a
+  `light` refresh every ~2 minutes during tests is two comment edits.
+- **`pipe.mjs` had grown real logic no test reached** (check runs, deletions manifests, App tokens, card refresh). → It
+  is a command table; the logic lives in the module that owns it (`tests.runForCheckout`, `production.validateCheckout`,
+  `card.storyCards`, `closeout.releaseNotes`, `shipping.renudge` / `watchdogFacts`, `io.sourceFiles`), tested there.
+
+## Settings and telemetry
+
+- **A new switch (`AI_PLAN`) was missing from 9 workflows' env blocks**, so the card and the gate read it as off there.
+  → One line per workflow, `PIPELINE_VARS: ${{ toJSON(vars) }}`; `pipe` reads every setting from it. A test fails any
+  workflow that lists a switch by hand.
+- **Metrics reconstructed from leftovers were wrong**: lead time stopped at the sprint branch, hotfix releases counted as
+  releases, rollbacks were not counted, and AI cost needed every transcript downloaded. → The event log
+  (`pipeline/src/events.mjs`): the command that knows an outcome records it (one Contents API call, a new file each, on
+  `metrics`); `metrics` reads the branch once with `git cat-file --batch`. Jobs that record need `contents: write`.
+- **The fix-round limit counted `fix(review)` commits**, so an agent that named its commit differently could loop. →
+  `pipe verdict rounds --pr N` counts earlier completed `ai-fix PR #N` runs (`run-name`).
+- **`run-name: ${{ format('PR #{0}', ...) }}` broke the YAML**: an unquoted ` #` starts a comment. Quote the value.
+
+## Lanes and orgs
+
+- **A queued fix (or a release PR's required CI) silently vanished**: jobs sharing an org shared a GitHub concurrency
+  group, which keeps only the newest pending run and cancels the one before. → Lanes (`pipe lane acquire|release`): an
+  atomic `refs/locks/<org>` ref, polled, taken over (fast-forward only) when its holder's run has finished. Every job that
+  uses a story or staging org takes the org's lane and releases it with `if: always()`.
+- **CI tested code another job had just deployed** (CI, ai-fix and ui-test used three different locks for one story
+  org). → One lane name per org: `orgFor(target).lock`.
+- **A half-made org was trusted for ever** (created, then packages or the deploy failed). → `org ensure` finishes any org
+  without the ready marker (admin user's Title `pipeline: ready`), skipping packages already installed.
+- Lane refs need `contents: write` in the job; keep the token out of steps that run branch code (`GH_TOKEN: ""`).
+
+## Shipping
+
+- **Validation checked GitHub's merge preview** (`refs/pull/N/merge`), which can lag the base. → The gate builds the
+  candidate itself (`pipe ship candidate`: base tip + decided head) under the `main` lock.
+- **The release tagged `main`'s tip, not the merge it was started for**, and self-validated from a depth-1 checkout (no
+  tags, so no deletions). → `release.yml` takes `sha` (+ `validated_job`, `validated_tree`); `pipe ship plan` decides skip
+  / quick / validate; checkouts use `fetch-depth: 0`.
+- **Close-out found the previous release with `HEAD^`.** → `--sha` and `--previous` from the release's plan job.
+- **A queued ship vanished**: GitHub keeps one pending run per concurrency group and cancels the older one. → After
+  each ship, `pipe ship renudge` re-runs the gate for the other approved PRs; `pipe ship watchdog` (janitor) catches a
+  lost release.
+- **`/uat-pass` signed the release PR's head even when UAT still ran an older commit.** → It signs only a commit with
+  uat-deploy's "In UAT" status.
+- **A production validation that could not start said only "could not start".** → It reports the CLI's error per level.
+
+## Agent context and access
+
+- **`/build` refused "issue-106 was not cut from release/…" once another story (or a back-merge) landed in the sprint
+  after `/start`**: the route check demanded the branch contain the whole base. → `pipe gate route-check` refuses only
+  what it was for (a branch aimed at `main` carrying unreleased sprint work); a base that moved is merged in next.
+- **The builder worked on a stale story branch** (cut at `/start`; other stories merged into the sprint since), while
+  the planner read the sprint: it could add a second trigger on an object. → `ai-implement` merges the base into the
+  story branch before the agent starts (a conflict is a warning; the PR shows it).
+- **A "limited user" test passed only because Opportunity is Public Read/Write** and a record-triggered Flow runs as the
+  system: it proved nothing about access. → The context pack gives production's org-wide defaults per object, CLAUDE.md
+  says a permission test proves a boundary, and REVIEW.md makes a test that relies on a public OWD a major.
+- **PMD's Apex security rules never failed CI**: `ApexCRUDViolation`, `ApexSharingViolations` and `ApexSOQLInjection`
+  are Moderate (3), below `--severity-threshold 2`. → Raise them in `code-analyzer.yml` (`rules: pmd: <rule>: { severity: 2 }`).
+- **PMD cannot see metadata access** (permission sets, profiles, Flow run mode, OWD). → `pipe access check`.
+- **A story could loosen its own review** by editing `REVIEW.md`, `CLAUDE.md` or `code-analyzer.yml`. → They are
+  pipeline paths: CI's guard fails a story PR that touches them.
+
 ## UI tests and platform behaviour
 
 - **A UI test failed on a correct feature** → it typed a future Close Date and expected to see it; Salesforce sets a

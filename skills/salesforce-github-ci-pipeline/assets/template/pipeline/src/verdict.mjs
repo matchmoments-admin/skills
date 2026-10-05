@@ -1,3 +1,4 @@
+import { isPipelineAuthor, setting } from "./conventions.mjs";
 // What the AI jobs are told to produce, and how the pipeline reads it back. One module owns both sides,
 // so an instruction and its parser cannot drift apart. Pure.
 
@@ -19,7 +20,7 @@ export const MODELS = {
   review: "claude-haiku-4-5-20251001",
   "ui-test": "claude-haiku-4-5-20251001",
 };
-export function modelFor(role, override = process.env.AI_MODEL) {
+export function modelFor(role, override = setting("AI_MODEL")) {
   if (override && String(override).trim()) return String(override).trim();
   if (!MODELS[role]) throw new Error(`Unknown AI role: ${role}`);
   return MODELS[role];
@@ -43,7 +44,7 @@ export function instructions(role, { key = "N" } = {}) {
     case "review":
       return `${common}\nDo not push commits. Do not approve or merge. Post ONE summary comment that ends with exactly one line: \`${REVIEW_LINE.pass}\` or \`${REVIEW_LINE.changes}\`.`;
     case "plan":
-      return `${common}\nDo not change any file except the plan file named in the prompt. Do not commit, push or comment. Write the plan in markdown with these sections, in order: \`### Proposed build\` (objects and fields, Flows, Apex, permission sets, layouts and pages; say what you would reuse), \`### Tests\` (Apex, Flow and UI tests, by acceptance criterion), \`### Risks\`, \`### Open questions\` (numbered; only what you cannot decide from the story and the repo; none if there are none). End with one line: \`PLAN-SIZE: S\`, \`PLAN-SIZE: M\` or \`PLAN-SIZE: L\`.`;
+      return `${common}\nDo not change any file except the plan file named in the prompt. Do not commit, push or comment. Write the plan in markdown with these sections, in order: \`### Proposed build\` (objects and fields, Flows, Apex, permission sets, layouts and pages; say what you would reuse), \`### Access\` (who must see and change what: the permission set to add or extend, each touched object's org-wide default from the story file and whether the change relies on it, and whether each Flow or class runs as the user or the system, and why), \`### Tests\` (Apex, Flow and UI tests, by acceptance criterion, including the permission test: a user without the access is refused), \`### Risks\`, \`### Open questions\` (numbered; only what you cannot decide from the story and the repo; none if there are none). End with one line: \`PLAN-SIZE: S\`, \`PLAN-SIZE: M\` or \`PLAN-SIZE: L\`.`;
     case "ui-test":
       return `${common}\nCommit the spec as \`${COMMIT.uiTest(key)}\` and push. Never print or commit login URLs.`;
     default:
@@ -65,11 +66,16 @@ export function reviewVerdict(commentBodies) {
   return v;
 }
 
-/** How many AI fix rounds a branch has had, from the commit subjects since its base. */
+/** How many AI fix rounds a PR has had: its earlier completed ai-fix runs (run-name "ai-fix PR #N"). Robust to what
+ *  the agent called its commits; a run that stopped at the limit counts too, which only keeps it over the limit. */
+export const fixRunsFor = (runs, pr, currentRunId) =>
+  runs.filter((r) => r.display_title === `ai-fix PR #${pr}` && r.status === "completed" && ["success", "failure"].includes(r.conclusion) && String(r.id) !== String(currentRunId)).length;
+
+/** How many AI fix rounds a branch has had, from the commit subjects since its base (the older count). */
 export const fixRounds = (subjects) => subjects.filter((s) => String(s).startsWith(FIX_PREFIX)).length;
 
 /** The comments that may carry this run's verdict: written by the pipeline's identity, at or after the run started. */
-export const PIPELINE_COMMENTER = /^(github-actions|app\/.+|.+\[bot\]|.+-pipeline)$/;
+// The pipeline's own comments: exact identities from PIPELINE_BOTS (conventions.isPipelineAuthor), never a pattern.
 export function reviewComments(comments, since) {
-  return comments.filter((c) => PIPELINE_COMMENTER.test(c.author?.login || "") && (!since || String(c.createdAt) >= since)).map((c) => c.body);
+  return comments.filter((c) => isPipelineAuthor(c.author?.login) && (!since || String(c.createdAt) >= since)).map((c) => c.body);
 }

@@ -21,14 +21,8 @@ permissions:
   pull-requests: write
   actions: write
   statuses: write       # pipeline/gate: the status the branch rules require before GitHub allows a merge
-env:                    # the AI switches (repository variables); the gate and the story card read them
-  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
-  AI_REVIEW: ${{ vars.AI_REVIEW }}
-  AI_FIX: ${{ vars.AI_FIX }}
-  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
-  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
-  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
-  UAT_ENABLED: ${{ vars.UAT_ENABLED }}   # a release needs a UAT sign-off (pipeline/uat)
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   decide:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready' || github.event.review.state == 'approved'
@@ -77,7 +71,6 @@ jobs:
       - name: Story card
         if: steps.gate.outputs.story != ''
         env:
-          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: node pipeline/bin/pipe.mjs story card "${{ steps.gate.outputs.story }}"
@@ -103,10 +96,19 @@ jobs:
           app-id: ${{ secrets.PIPELINE_APP_ID }}
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           ref: main
-      - name: The candidate (exactly what the base will contain), as data
+      - name: A clone for the candidate, as data
         if: needs.decide.outputs.validate == 'true'
         uses: actions/checkout@v4
-        with: { ref: "refs/pull/${{ env.PR }}/merge", path: candidate, fetch-depth: 0, persist-credentials: false }   # tags: deletions since the last release
+        with: { ref: main, path: candidate, fetch-depth: 0 }   # history and tags: deletions since the last release
+      - name: The candidate is the base's tip now with this head merged (not GitHub's merge preview, which can be stale)
+        id: cand
+        if: needs.decide.outputs.validate == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+          node pipeline/bin/pipe.mjs ship candidate --pr "$PR" --base "$BASE" --sha "$HEAD_SHA" --dir candidate
+          git -C candidate config --unset-all http.https://github.com/.extraheader || true   # data from here on
       - uses: ./.github/actions/sf-auth
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
@@ -119,7 +121,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VALIDATE_SHA: ${{ needs.decide.outputs.head }}   # the live "Production validation" check lands on the PR
-          PROD_TEST_LEVEL: ${{ vars.PROD_TEST_LEVEL }}     # empty = RunRelevantTests, falling back to every test class
+          DELETIONS_FROM: ${{ steps.cand.outputs.since }}  # components removed since the previous release
         run: |
           if JOB=$("$GITHUB_WORKSPACE/scripts/ci/validate-prod.sh" 2> "$RUNNER_TEMP/prod-errors.txt"); then echo "job=$JOB" >> "$GITHUB_OUTPUT"; echo "validated as $JOB"; exit 0; fi
           cat "$RUNNER_TEMP/prod-errors.txt"
@@ -139,9 +141,11 @@ jobs:
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           if [ "$ROUTE" = "release" ]; then gh pr merge "$PR" --merge --match-head-commit "$HEAD_SHA"
           else gh pr merge "$PR" "--$METHOD" --delete-branch --match-head-commit "$HEAD_SHA"; fi
+          # the commit that ships: the release checks it has the tree validated above, or validates again
+          for _ in 1 2 3 4 5; do SHA=$(gh pr view "$PR" --json mergeCommit --jq '.mergeCommit.oid // empty'); [ -n "$SHA" ] && break; sleep 3; done
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
       - name: Follow-ups (start the next workflows first; org cleanup cannot fail the merge)
         env:
-          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}
@@ -149,11 +153,13 @@ jobs:
           STORY: ${{ needs.decide.outputs.story }}
           BASE: ${{ steps.merge.outputs.base }}
           JOB: ${{ steps.prod.outputs.job }}
+          TREE: ${{ steps.cand.outputs.tree }}
+          SHA: ${{ steps.merge.outputs.sha }}
         run: |
           for step in $AFTER; do
             case "$step" in
               staging) gh workflow run staging-deploy.yml --ref "$BASE" ;;      # on the release branch, so the check lands on the release PR's head
-              release) gh workflow run release.yml -f validated_job="$JOB" ;;   # quick-deploys exactly what was validated
+              release) gh workflow run release.yml -f sha="$SHA" -f validated_job="$JOB" -f validated_tree="$TREE" ;;   # quick-deploys only that exact tree
             esac
           done
           [ -z "$STORY" ] || node pipeline/bin/pipe.mjs story card "$STORY"
@@ -162,3 +168,9 @@ jobs:
               delete-story-org) [ -z "$STORY" ] || node pipeline/bin/pipe.mjs org remove "story:$STORY" || echo "::warning::could not delete the story org; the janitor will";;
             esac
           done
+      - name: Nothing waiting behind this one is lost (GitHub cancels all but the newest queued run in a group)
+        if: always() && steps.merge.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.merge.outputs.base }}
+        run: node pipeline/bin/pipe.mjs ship renudge --base "${BASE:-main}" --except "$PR"

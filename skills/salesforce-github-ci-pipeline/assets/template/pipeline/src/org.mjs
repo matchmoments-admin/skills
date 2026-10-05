@@ -39,6 +39,8 @@ export function packageList(file = join(PIPELINE_ROOT, "config/packages.json")) 
 }
 
 const DEVHUB = "devhub";
+/** Written to the scratch org admin user's Title when ensure() has finished every step. */
+export const READY = "pipeline: ready";
 
 function resolve(target, opts) {
   const org = typeof target === "object" ? target : orgFor(target, opts);
@@ -87,24 +89,43 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       throw new Error(`Could not log in to ${org.username}`);
     },
 
-    /** Attach the target's org, or create it from its definition, deploy the source and prepare it. */
+    /** Attach the target's org, or create it; either way finish it (packages, source, prepare) unless it is marked
+     *  ready, so a run that died half way (packages, deploy) is completed by the next one instead of trusted. */
     ensure(target, opts = {}) {
       const existing = self.find(target, opts);
-      if (existing) return { ...self.attach(existing), created: false };
-      const org = resolve(target, opts);
-      self.assertCapacity();
-      log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
-      sf(["org", "create", "scratch", "--definition-file", definitionPath(org.definition), "--alias", org.alias, "--description", org.description,
-        "--duration-days", String(org.days), "--target-dev-hub", DEVHUB, "--wait", "25"]);
+      const org = existing ? self.attach(existing) : resolve(target, opts);
+      if (existing && self.isReady(org.alias)) return { ...org, created: false };
+      if (existing) log(`${org.alias} exists but was never finished: completing it`);
+      else {
+        self.assertCapacity();
+        log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
+        sf(["org", "create", "scratch", "--definition-file", definitionPath(org.definition), "--alias", org.alias, "--description", org.description,
+          "--duration-days", String(org.days), "--target-dev-hub", DEVHUB, "--wait", "25"]);
+      }
       self.installPackages(org.alias);
       self.deploy(org.alias);
       self.prepare(org.alias);
-      return { ...org, created: true };
+      self.markReady(org.alias);
+      return { ...org, created: !existing, completed: Boolean(existing) };
     },
 
-    /** Install production's managed packages, in order, before the source that depends on them. */
+    /** The ready marker: the org's admin user's Title, set only when ensure() finished every step. */
+    isReady(alias) {
+      const username = sf(["org", "display", "-o", alias], { allowFail: true })?.username;
+      const r = username && sf(["data", "query", "-o", alias, "-q", `SELECT Title FROM User WHERE Username = '${username}'`], { allowFail: true });
+      return r?.records?.[0]?.Title === READY;
+    },
+    markReady(alias) {
+      const username = sf(["org", "display", "-o", alias]).username;
+      sf(["data", "update", "record", "-o", alias, "-s", "User", "-w", `Username='${username}'`, "-v", `Title='${READY}'`]);
+    },
+
+    /** Install production's managed packages, in order, before the source that depends on them (skipping any the org
+     *  already has, so finishing a half-made org does not reinstall). */
     installPackages(alias) {
+      const have = packages.length ? new Set((sf(["package", "installed", "list", "-o", alias], { allowFail: true }) || []).map((p) => p.SubscriberPackageVersionId)) : new Set();
       for (const p of packages) {
+        if (have.has(p.id)) { log(`${p.name || p.id} already installed in ${alias}`); continue; }
         log(`installing ${p.name || p.id} in ${alias}`);
         const key = p.keyEnv ? env[p.keyEnv] : null;
         sf(["package", "install", "--package", p.id, "--target-org", alias, "--wait", "30", "--publish-wait", "10", "--no-prompt", "--security-type", "AdminsOnly", ...(key ? ["--installation-key", key] : [])]);

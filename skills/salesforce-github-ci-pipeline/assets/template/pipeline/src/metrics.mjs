@@ -98,7 +98,7 @@ export function toMarkdown(s) {
   ].join("\n");
 }
 
-export function gather(io, { days = 28 } = {}) {
+export function gather(io, { days = 28, transcripts: withTranscripts = true } = {}) {
   const since = new Date(Date.now() - days * 24 * HOUR).toISOString();
   const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
   const prs = (io.gh(["pr", "list", "--state", "merged", "--limit", "300", "--search", `merged:>=${since.slice(0, 10)}`,
@@ -110,7 +110,7 @@ export function gather(io, { days = 28 } = {}) {
     const commits = io.gh(["pr", "view", String(p.number), "--json", "commits", "--jq", "[.commits[].messageHeadline]"]) || [];
     fixCommits[p.number] = fixRounds(commits);
   }
-  return { days, prs, releases, runs, fixCommits, transcripts: transcripts(io, repo, since) };
+  return { days, prs, releases, runs, fixCommits, transcripts: withTranscripts ? transcripts(io, repo, since) : [] };
 }
 
 /** Each AI run's result line, from its transcript artifact (claude-transcript-<role>-<run id>, kept 30 days). */

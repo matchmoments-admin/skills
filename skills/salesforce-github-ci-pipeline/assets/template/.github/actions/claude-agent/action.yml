@@ -7,6 +7,7 @@ inputs:
   role: { required: true, description: "implement | fix | review | ui-test" }
   prompt: { required: true, description: "What to do, in plain words" }
   key: { required: false, default: "N", description: "Story key, used in commit formats" }
+  pr: { required: false, default: "", description: "Pull request number, for the event log (fix rounds, cost per PR)" }
   max-turns: { required: true, description: "Turn cap" }
   allowed-tools: { required: true, description: "Comma-separated tool allow-list" }
   oauth-token: { required: true, description: "secrets.CLAUDE_CODE_OAUTH_TOKEN" }
@@ -48,6 +49,15 @@ runs:
           --model ${{ steps.rules.outputs.model }}
           --max-turns ${{ inputs.max-turns }}
           --allowedTools "${{ inputs.allowed-tools }}"
+    - name: Record the agent's cost and turns in the event log (needs contents write on the job's token)
+      if: always()
+      shell: bash
+      env:
+        ROLE: ${{ inputs.role }}
+        KEY: ${{ inputs.key }}
+        PR: ${{ inputs.pr }}
+        MODEL: ${{ steps.rules.outputs.model }}
+      run: node .pipeline/pipeline/bin/pipe.mjs event agent --role "$ROLE" --key "$KEY" ${PR:+--pr "$PR"} --model "$MODEL" --file "$RUNNER_TEMP/claude-execution-output.json" || true
     - name: Keep the AI transcript (audit trail)
       if: always()
       uses: actions/upload-artifact@v4

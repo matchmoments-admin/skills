@@ -6,24 +6,16 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-env:                    # the AI switches (repository variables); the gate and the story card read them
-  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
-  AI_REVIEW: ${{ vars.AI_REVIEW }}
-  AI_FIX: ${{ vars.AI_FIX }}
-  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
-  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
-  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   staging:
     name: staging regression
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write       # the staging org's lane only (a ref under refs/locks/); the specs never see a token
       checks: write         # the live "Salesforce tests" check on the release head
-    concurrency:
-      group: org-staging   # the one staging org
-      cancel-in-progress: false
-    timeout-minutes: 30
+    timeout-minutes: 75   # 45 of them may be waiting for the staging org's lane (release-PR CI, a back-merge)
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -38,30 +30,46 @@ jobs:
         run: |
           node pipeline/bin/pipe.mjs context
           node pipeline/bin/pipe.mjs context | grep -q '^RELEASE_BRANCH=.' || { echo "::error::No open sprint"; exit 1; }
+      - name: Wait for the staging org's lane (nobody is dropped; a run whose commit was already tested stops early)
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "sprint:${{ steps.ctx.outputs.SPRINT }}"
       - uses: actions/checkout@v4
         with: { ref: "${{ steps.ctx.outputs.RELEASE_BRANCH }}", path: candidate, persist-credentials: false }
+      - name: Already tested? (several merges queue several runs; the first tests the newest head)
+        id: fresh
+        working-directory: candidate
+        run: |
+          SHA=$(git rev-parse HEAD)
+          N=$(gh api "repos/$GH_REPO/commits/$SHA/check-runs?check_name=staging%20regression" --jq '[.check_runs[] | select(.conclusion=="success")] | length')
+          if [ "$N" != "0" ]; then echo "done=true" >> "$GITHUB_OUTPUT"; echo "${SHA:0:7} already passed the staging regression"; fi
       - uses: ./.pipeline/.github/actions/sf-auth
+        if: steps.fresh.outputs.done != 'true'
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Deploy the release branch to staging and prepare it
+        if: steps.fresh.outputs.done != 'true'
         working-directory: candidate
         run: |
           node ../.pipeline/pipeline/bin/pipe.mjs org attach "sprint:${{ steps.ctx.outputs.SPRINT }}"
           node ../.pipeline/pipeline/bin/pipe.mjs org deploy staging
           node ../.pipeline/pipeline/bin/pipe.mjs org prepare staging
       - name: Full regression (every Apex and Flow test), live on the release head as "Salesforce tests"
+        if: steps.fresh.outputs.done != 'true'
         working-directory: candidate
         run: node ../.pipeline/pipeline/bin/pipe.mjs tests run staging --all --base HEAD --sha "$(git rev-parse HEAD)" --out test-results
       - name: Drop production access before running the branch's specs
+        if: steps.fresh.outputs.done != 'true'
         run: |
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}"
       - uses: ./.pipeline/.github/actions/playwright
-        if: hashFiles('candidate/e2e/*.spec.ts') != ''
+        if: steps.fresh.outputs.done != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
+        env:
+          GH_TOKEN: ""          # installs the branch's packages: no token
         with: { working-directory: candidate }
       - name: UI regression (every spec in e2e/)
+        if: steps.fresh.outputs.done != 'true'
         working-directory: candidate
         env:
           GH_TOKEN: ""
@@ -71,8 +79,12 @@ jobs:
           else
             echo "No UI specs yet"
           fi
-      - uses: actions/upload-artifact@v4
+      - name: Let the next job into the staging org's lane
         if: always()
+        working-directory: .pipeline
+        run: node pipeline/bin/pipe.mjs lane release "sprint:${{ steps.ctx.outputs.SPRINT }}" || true
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.fresh.outputs.done != 'true'
         with:
           name: staging-results
           path: |

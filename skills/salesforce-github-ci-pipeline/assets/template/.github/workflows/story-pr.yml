@@ -16,13 +16,8 @@ permissions:
   issues: write
   checks: read
   statuses: read
-env:                    # the AI switches (repository variables); the story card reads them
-  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
-  AI_REVIEW: ${{ vars.AI_REVIEW }}
-  AI_FIX: ${{ vars.AI_FIX }}
-  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
-  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
-  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   open:
     runs-on: ubuntu-latest
@@ -72,7 +67,6 @@ jobs:
       - name: Story card
         if: steps.s.outputs.key != ''
         env:
-          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: node pipeline/bin/pipe.mjs story card "${{ steps.s.outputs.key }}"

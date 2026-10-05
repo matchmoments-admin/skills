@@ -8,6 +8,8 @@ permissions:
   actions: write        # starts CI on the release candidate without the App
   pull-requests: write
   issues: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   cut:
     runs-on: ubuntu-latest

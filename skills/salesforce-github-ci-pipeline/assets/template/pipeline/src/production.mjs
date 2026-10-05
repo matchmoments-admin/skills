@@ -7,6 +7,10 @@
 // rejects the level, it falls back to every test class in the repo (RunSpecifiedTests), the previous behaviour.
 // Flow tests never run in a deploy: they run in CI and in the staging regression.
 
+import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 export const LEVELS = ["RunRelevantTests", "RunLocalTests", "all"];
 const FINAL = ["Succeeded", "SucceededPartial", "Failed", "Canceled"];
 const arr = (x) => (Array.isArray(x) ? x : x ? [x] : []);
@@ -24,11 +28,15 @@ const rejectsLevel = (msg) => /RunRelevantTests|test ?level|INVALID_TEST_LEVEL|n
  * Returns { ok, id, level, status, components, tests, failures[], componentFailures[] }.
  */
 export function validate(io, { org = "devhub", source, level = "RunRelevantTests", allTests = [], onProgress = () => {}, sleep, pollMs = 15000, maxPolls = 240 }) {
-  const start = (lvl) => io.sf(["project", "deploy", "validate", "-o", org, ...source, ...levelArgs(lvl, allTests), "--async"], { allowFail: true });
+  const errors = [];
+  const start = (lvl) => {
+    try { return io.sf(["project", "deploy", "validate", "-o", org, ...source, ...levelArgs(lvl, allTests), "--async"]); }
+    catch (e) { errors.push(`${lvl}: ${e.message}`); return null; }
+  };
   let used = level;
   let started = start(level);
   if ((!started?.id) && level === "RunRelevantTests") { used = "all"; started = start("all"); }   // org does not offer the beta
-  if (!started?.id) throw new Error(`could not start the production validation (${used})`);
+  if (!started?.id) throw new Error(`could not start the production validation: ${errors.join(" | ") || "no deploy id returned"}`);
   const id = started.id;
   let r = {};
   for (let i = 0; i < maxPolls; i++) {
@@ -72,4 +80,37 @@ export function progressOutput(p, { deployStatusUrl, done = false } = {}) {
     ...p.coverageWarnings.map((w) => `| coverage | | ${w.replace(/\|/g, "\\|")} |`),
   ];
   return { title, summary: lines.join("\n"), text: fails.length ? ["| | what | problem |", "|---|---|---|", ...fails].join("\n") : "" };
+}
+
+/**
+ * Validate the checkout against production, live on a "Production validation" check: components removed since
+ * `deletionsFrom` (the previous release) go as post-destructive changes, so the quick deploy removes them too.
+ * Returns validate()'s result plus { out, seconds }.
+ */
+export function validateCheckout(io, { host, sha, level, deletionsFrom, sleep, log = () => {} }) {
+  const src = io.sourceFiles();
+  const allTests = src.files.filter((p) => p.endsWith(".cls")).filter((p) => /@istest/i.test(src.read(p))).map((p) => p.split("/").pop().replace(/\.cls$/, ""));
+  let source = src.dirs.flatMap((d) => ["-d", d]);
+  if (deletionsFrom) {
+    const out = mkdtempSync(join(tmpdir(), "delta-"));
+    io.run("sf", ["sgd", "source", "delta", "--from", deletionsFrom, "--to", "HEAD", "--output-dir", out, ...src.dirs.flatMap((d) => ["--source-dir", d])], { quiet: true, allowFail: true });
+    const destructive = join(out, "destructiveChanges", "destructiveChanges.xml");
+    if (existsSync(destructive) && readFileSync(destructive, "utf8").includes("<members>")) {
+      log(`deleting since ${deletionsFrom}: ${[...readFileSync(destructive, "utf8").matchAll(/<members>([^<]+)/g)].map((m) => m[1]).join(", ")}`);
+      io.run("sf", ["project", "generate", "manifest", ...src.dirs.flatMap((d) => ["--source-dir", d]), "--output-dir", out, "--name", "full"], { quiet: true });
+      source = ["--manifest", join(out, "full.xml"), "--post-destructive-changes", destructive];
+    }
+  }
+  const instance = io.sf(["org", "display", "-o", "devhub"], { allowFail: true })?.instanceUrl;
+  const deployStatusUrl = instance ? `${instance.replace(".my.salesforce.com", ".lightning.force.com")}/lightning/setup/DeployStatus/home` : undefined;
+  const check = host.checkRun(sha, "Production validation");
+  log(`production validation with ${level} (fallback: every test class)`);
+  const started = Date.now();
+  const p = validate(io, {
+    source, level, allTests, sleep,
+    onProgress: (st) => { check.update(progressOutput(st, { deployStatusUrl })); log(`  ${st.status}: components ${st.components.done}/${st.components.total}, tests ${st.tests.done}/${st.tests.total}`); },
+  });
+  const out = progressOutput(p, { deployStatusUrl, done: true });
+  check.update(out, p.ok ? "success" : "failure");
+  return { ...p, out, seconds: Math.round((Date.now() - started) / 1000) };
 }

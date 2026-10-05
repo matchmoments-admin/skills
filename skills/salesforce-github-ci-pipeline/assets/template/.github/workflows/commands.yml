@@ -12,6 +12,8 @@ permissions:
   statuses: write        # /uat-pass, /uat-fail
   issues: write
   pull-requests: write
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   run:
     if: startsWith(github.event.comment.body, '/') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
@@ -56,6 +58,9 @@ jobs:
           J=$(gh pr view "$N" --json headRefName,headRefOid,baseRefName)
           [[ "$(jq -r .headRefName <<<"$J")" == release/* && "$(jq -r .baseRefName <<<"$J")" == main ]] || { gh pr comment "$N" --body "/uat-pass and /uat-fail apply to release PRs only."; exit 0; }
           SHA=$(jq -r .headRefOid <<<"$J")
+          # a sign-off covers only what UAT is running: uat-deploy marks the commit it deployed ("In UAT")
+          IN_UAT=$(gh api "repos/$GH_REPO/commits/$SHA/statuses?per_page=100" --jq '[.[] | select(.context=="pipeline/uat" and .creator.login=="github-actions[bot]" and (.description|startswith("In UAT")))] | length')
+          if [ "$IN_UAT" = "0" ]; then gh pr comment "$N" --body "UAT is not running \`${SHA:0:7}\` (the release PR's latest commit) yet: it redeploys after the staging regression. Sign off when **Ready for UAT** names this commit."; exit 0; fi
           if [ "$KIND" = uat-pass ]; then STATE=success; DESC="Signed off in UAT by @$WHO"
           else STATE=failure; DESC="UAT failed (@$WHO): $(printf '%s' "$BODY" | head -1 | sed 's#^/uat-fail *##' | cut -c1-100)"; fi
           gh api "repos/$GH_REPO/statuses/$SHA" -f state="$STATE" -f context=pipeline/uat -f description="${DESC:0:139}" >/dev/null

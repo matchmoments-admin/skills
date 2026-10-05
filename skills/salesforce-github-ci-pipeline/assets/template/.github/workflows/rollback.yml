@@ -10,11 +10,13 @@ on:
         description: Release tag to return to, for example v2026.10.04-8
         required: true
 permissions:
-  contents: read
+  contents: write       # the event log: a rollback counts as a change failure
   issues: write
 concurrency:
   group: release           # never at the same time as a release
   cancel-in-progress: false
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   rollback:
     runs-on: ubuntu-latest
@@ -47,6 +49,8 @@ jobs:
         env:
           JOB: ${{ steps.validate.outputs.job }}
         run: sf project deploy quick -o devhub --job-id "$JOB" --wait 30
+      - name: Record the rollback (the change failure rate counts it)
+        run: node pipeline/bin/pipe.mjs event rollback --tag "$TAG" --sha "$(git -C target rev-parse HEAD)" || true
       - name: Smoke check
         run: sf data query -o devhub -q "SELECT COUNT() FROM Account" >/dev/null && echo "production responds"
       - name: Say what still needs doing

@@ -1,8 +1,11 @@
 // The story card: one comment on the story (GitHub issue or Jira ticket), edited in place at every stage, that tells
-// a non-technical person where the story is, what is next, and links straight to it. Pure: built from the same facts
-// and decision the gate uses (gate.gather / gate.evaluate), so the card and the gate cannot disagree.
-import { CHECKS } from "./conventions.mjs";
-import { latestCheck, verdictFor, humanApproval, requiredVerdicts, STATUS } from "./gate.mjs";
+// a non-technical person where the story is, what is next, and links straight to it. storyCard() is pure: built from the
+// same facts and decision the gate uses (gate.gather / gate.evaluate), so the card and the gate cannot disagree.
+// storyCards() puts it on the story and its PR (and moves the board), through the code host and the tracker.
+import { CHECKS, storyBranch, aiFeatures, context, setting } from "./conventions.mjs";
+import { latestCheck, verdictFor, humanApproval, requiredVerdicts, evaluate, STATUS } from "./gate.mjs";
+import { planContext } from "./plan.mjs";
+import { stageOf, moveCard } from "./board.mjs";
 
 export const CARD_TITLE = "Pipeline status";
 export const CARD_MARK = "<!-- pipeline:story-card -->";
@@ -124,4 +127,51 @@ function render(key, next, rows, now = null) {
     "|---|---|---|",
     ...rows.map(([s, stage, d]) => `| ${ICON[s]} | ${stage} | ${d} |`),
   ].join("\n");
+}
+
+/**
+ * Refresh story cards. host: the code host (github.mjs); tracker: where the story lives; prTracker: comments on PRs.
+ * refresh(key, { light }) with light=true reuses this process's facts and leaves the board alone: two edits, for the
+ * Now line while tests run. Never throws: a card is information, not a gate.
+ */
+export function storyCards({ host, tracker, prTracker, log = () => {} }) {
+  const seen = new Map();
+  async function facts(key, base) {
+    const branch = storyBranch(key);
+    const pr = host.storyPr(branch);
+    const ai = aiFeatures();
+    const openRel = host.openRelease();
+    const f = pr ? host.prFacts(pr.number, { openReleaseBranch: openRel, ai }) : null;
+    const planned = Boolean(planContext(await tracker.comments(key).catch(() => [])).plan);
+    return { branch, pr, ai, facts: f, planned, base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
+  }
+  return {
+    async refresh(key, { base = null, tag = null, activity = null, light = false } = {}) {
+      try {
+        let c = light ? seen.get(key) : null;
+        if (!c) { c = await facts(key, base); seen.set(key, c); }
+        const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, base: c.base,
+          shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null, activity });
+        await tracker.card(key, body, CARD_MARK, CARD_TITLE);
+        if (c.pr) await prTracker.card(c.pr.number, body, CARD_MARK, CARD_TITLE);   // the same card on the PR
+        if (!light) await syncBoard({ host, key, pr: c.pr, facts: c.facts, shipped: Boolean(tag), log });
+      } catch (e) { log(`::warning::story card for ${key} not updated: ${e.message}`); }
+    },
+    async starting(key, activity) {
+      await tracker.card(key, startingCard({ key, activity }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
+    },
+  };
+}
+
+/** Move the story on the delivery board, when BOARD_PROJECT is set and the App's credentials are in this step. */
+async function syncBoard({ host, key, pr, facts, shipped, log }) {
+  const project = setting("BOARD_PROJECT");
+  if (!project || !host.hasApp() || !/^\d+$/.test(String(key))) return;
+  try {
+    const issueNodeId = host.api("GET", `repos/${host.repo}/issues/${key}`)?.node_id;
+    const approved = Boolean(facts && humanApproval({ ...facts, head: pr?.headRefOid }));
+    const stage = stageOf({ pr, approved, shipped });
+    await moveCard({ graphql: host.appGraphql, org: host.repo.split("/")[0], project, issueNodeId, stage });
+    log(`board: story ${key} -> ${stage}`);
+  } catch (e) { log(`::warning::board not updated for ${key}: ${e.message}`); }
 }

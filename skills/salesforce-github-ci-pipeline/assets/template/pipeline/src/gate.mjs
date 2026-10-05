@@ -9,7 +9,7 @@
 // AI is optional (facts.ai, from the AI_* repo variables). Required verdicts: the AI review only when AI_REVIEW is on;
 // the UI test when the change is UI-facing and either AI_UI_TEST is on or the PR commits its story spec. A failed
 // verdict on the code always blocks, whatever the flags. With every flag off, CI plus a person's approval is the gate.
-import { CHECKS, storyOf, sprintOf, uiFacing, storySpec } from "./conventions.mjs";
+import { CHECKS, storyOf, sprintOf, uiFacing, storySpec, isPipelineAuthor } from "./conventions.mjs";
 
 export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", uat: "pipeline/uat" };
 /** The gate's own verdict on the PR's head. The branch rules require it, so GitHub's merge button stays locked until
@@ -34,7 +34,18 @@ export function followUps(pr, files = []) {
   return RULES[r].after.map((a) => (a === "release-if-force-app" ? (forceApp ? "release" : null) : a)).filter(Boolean);
 }
 export const TRUSTED_STATUS_CREATORS = ["github-actions[bot]"];
-const PIPELINE_AUTHORS = /^(github-actions|app\/.+|.+\[bot\]|.+-pipeline)$/;
+
+/**
+ * Can a story branch still be built towards its base? (before /build; git is the io seam). Its base moving on since
+ * /start is fine: the build merges it in. What is not: a branch aimed at main (a hotfix) that carries unreleased sprint
+ * work, i.e. its fork point with the open release branch is not in main (the hotfix label was added after /start).
+ */
+export function branchRoute(git, { branch, base, release = null }) {
+  if (base !== "main" || !release) return { ok: true };
+  const fork = git(["merge-base", `origin/${branch}`, `origin/${release}`], { allowFail: true });
+  if (!fork || git(["merge-base", "--is-ancestor", fork, "origin/main"], { allowFail: true }) !== null) return { ok: true };
+  return { ok: false, why: `${branch} carries unreleased ${release} work but is aimed at main (was the hotfix label added after /start?). Start the story again from main.` };
+}
 
 /** Which gate route a PR takes, or null if no gate applies. */
 export function route(pr) {
@@ -144,8 +155,9 @@ export function evaluate(facts) {
     else if (u.state !== "success") reasons.push(`UAT failed (${u.description || u.state}); fix it, or comment /uat-pass after a retest`);
   }
   if (rules.trusted) {
-    if (!PIPELINE_AUTHORS.test(pr.author?.login || "") && !pr.author?.is_bot) reasons.push("a back-merge must be opened by the pipeline");
-    if (compare.headInMain === false) reasons.push("a back-merge must contain only commits already in main");
+    if (!isPipelineAuthor(pr.author?.login)) reasons.push("a back-merge must be opened by the pipeline");
+    if (compare.headInMain !== true) reasons.push("a back-merge must contain only commits already in main");
+
   }
   if (rules.pure && compare.unreleasedSprintCommits > 0) {
     reasons.push(`it carries ${compare.unreleasedSprintCommits} unreleased sprint commit(s); a hotfix must branch from main`);

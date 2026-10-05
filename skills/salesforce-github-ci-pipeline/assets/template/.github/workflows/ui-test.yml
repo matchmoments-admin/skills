@@ -7,6 +7,7 @@ name: ui-test
 # only that). With AI_TRIAGE=true, a failure is classified by Jev; a likely flake is re-run once.
 # The labels only dispatch the real jobs with --ref main (a labelled PR runs the workflow file from GitHub's test
 # merge commit, which can lag behind main).
+run-name: "${{ inputs.pr && format('ui-test PR #{0} ({1})', inputs.pr, inputs.mode) || format('ui-test (label on PR #{0})', github.event.pull_request.number) }}"
 on:
   pull_request_target:   # runs the base branch's own copy of this file (never the PR's code), so routing is never stale
     types: [labeled]
@@ -27,13 +28,8 @@ permissions:
   statuses: write
   id-token: write
   checks: read   # the story card reads checks and verdicts
-env:                    # the AI switches (repository variables); the gate and the story card read them
-  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
-  AI_REVIEW: ${{ vars.AI_REVIEW }}
-  AI_FIX: ${{ vars.AI_FIX }}
-  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
-  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
-  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   route:
     if: github.event_name == 'pull_request_target' && (github.event.label.name == 'ai:test' || github.event.label.name == 'test')
@@ -56,10 +52,7 @@ jobs:
   write:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'ai' && vars.AI_UI_TEST == 'true'
     runs-on: ubuntu-latest
-    concurrency:
-      group: ai-pr-${{ inputs.pr }}   # one AI job per PR at a time (ai-fix shares it: same story org)
-      cancel-in-progress: false
-    timeout-minutes: 30
+    timeout-minutes: 75   # 45 of them may be waiting for the story org's lane
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -93,9 +86,11 @@ jobs:
       - name: The story card says Claude is writing the UI test
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
-          [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is writing and running the UI test in the scratch org (5 to 15 minutes)"
+        run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "$BRANCH" --now "Claude is writing and running the UI test in the scratch org (5 to 15 minutes)"
+      - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH"
       - name: Attach, deploy this head and prepare the story's org; fetch the story
         id: org
         run: |
@@ -105,12 +100,13 @@ jobs:
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           echo "SCRATCH_ALIAS=$ALIAS" >> "$GITHUB_ENV"
-          node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story.md"
+          node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --out "$RUNNER_TEMP/story.md"
       - uses: ./.pipeline/.github/actions/playwright
       - uses: ./.pipeline/.github/actions/claude-agent
         with:
           role: ui-test
           key: ${{ steps.org.outputs.key }}
+          pr: ${{ env.PR }}
           model: ${{ vars.AI_MODEL }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ steps.id.outputs.token }}
@@ -135,6 +131,11 @@ jobs:
             git -c user.name="__owner__-pipeline[bot]" -c user.email="pipeline@users.noreply.github.com" commit -qm "test(e2e): story ${{ steps.org.outputs.key }}" -- "$SPEC" || true
             git push origin "HEAD:$BRANCH"
           fi
+      - name: Let the next job into the org's lane
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
       - name: Remove the button label
         if: always()
         run: gh pr edit "$PR" --remove-label ai:test || true
@@ -145,12 +146,9 @@ jobs:
     if: always() && github.event_name == 'workflow_dispatch' && ((inputs.mode == 'ai' && needs.write.result != 'skipped') || inputs.mode == 'run')
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write       # the org's lane only (a ref under refs/locks/); the spec step never sees a token
       pull-requests: read
-    concurrency:
-      group: ai-pr-${{ inputs.pr }}
-      cancel-in-progress: false
-    timeout-minutes: 25
+    timeout-minutes: 70   # 45 of them may be waiting for the story org's lane
     env:
       GH_REPO: ${{ github.repository }}
       PR: ${{ inputs.pr }}
@@ -189,6 +187,11 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+        if: steps.spec.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH"
       - name: Deploy this exact head to the story's org and prepare it
         if: steps.spec.outputs.exists == 'true'
         run: |
@@ -207,10 +210,17 @@ jobs:
         id: test
         if: steps.spec.outputs.exists == 'true'
         continue-on-error: true
+        env:
+          GH_TOKEN: ""
         run: |
           set -o pipefail
           mkdir -p ui-out
           npx playwright test "e2e/story-$KEY.spec.ts" --reporter=line 2>&1 | tee ui-out/playwright.log
+      - name: Let the next job into the org's lane
+        if: always() && steps.spec.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
       - uses: actions/upload-artifact@v4
         if: always() && steps.spec.outputs.exists == 'true'
         with:
@@ -290,7 +300,6 @@ jobs:
         run: gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
       - name: Merge now if a person already approved
         env:
-          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: node pipeline/bin/pipe.mjs gate nudge "$PR"

@@ -1,14 +1,15 @@
 // The only place that runs gh, sf and git. Modules receive these functions, so tests replace them with fakes.
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /** The checkout this pipeline code came from (".pipeline/" in CI: main's copy, never the PR's). */
 export const PIPELINE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
-export function run(cmd, args, { input, quiet = false, allowFail = false, env } = {}) {
+export function run(cmd, args, { input, quiet = false, allowFail = false, env, encoding = "utf8" } = {}) {
   try {
     return execFileSync(cmd, args, {
-      encoding: "utf8", input, maxBuffer: 64 * 1024 * 1024,
+      encoding: encoding === "buffer" ? undefined : encoding, input, maxBuffer: 64 * 1024 * 1024,   // no encoding = a Buffer
       stdio: ["pipe", "pipe", quiet ? "pipe" : "inherit"],
       env: { ...process.env, SF_AUTOUPDATE_DISABLE: "true", FORCE_COLOR: "0", NO_COLOR: "1", NODE_NO_WARNINGS: "1", ...env },
     });
@@ -56,4 +57,13 @@ export const git = (args, opts) => {
   return out === null ? null : out.trim();
 };
 
-export const io = { gh, ghPages, sf, git, run };
+/** The checkout's Salesforce source (SOURCE_DIRS, default force-app): every file, a reader, and what changed against
+ *  `base` (added or modified, added alone, deleted). Used by tests, the access check, the context pack and validation. */
+export function sourceFiles({ base = null, head = "HEAD", dirs = (process.env.SOURCE_DIRS || "force-app").split(/\s+/).filter(Boolean) } = {}) {
+  const list = (args) => (git(args, { allowFail: true }) || "").split("\n").filter(Boolean);
+  const diff = (filter) => (base ? list(["diff", "--name-only", `--diff-filter=${filter}`, `${base}...${head}`, "--", ...dirs]) : []);
+  const read = (p) => { try { return readFileSync(p, "utf8"); } catch { return ""; } };
+  return { dirs, files: list(["ls-files", ...dirs]), read, changed: diff("ACMR"), added: diff("A"), deleted: diff("D") };
+}
+
+export const io = { gh, ghPages, sf, git, run, sourceFiles };

@@ -27,6 +27,26 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
 - A field users edit must also be on the page layout they use. Retrieve the layout from the scratch org first (`sf project retrieve start -o issue-12 -m "Layout:Account-Account Layout"`), add the field, and commit the layout. Scratch orgs copy production's shape, so a retrieved layout only references what production has.
 - Reference data (settings an admin changes) goes in custom metadata, not hard-coded constants.
 
+## Access (permissions, sharing, org-wide defaults)
+Least privilege: a user gets exactly the access the story needs, and every grant can be reviewed. CI's **access check**
+(`pipe access check`) fails the build on the blockers below; the review checks the rest.
+- Grant access with **permission sets** (grouped in permission set groups for a persona), never by editing profiles.
+- No administrator permissions in a story's permission set (Modify All Data, View All Data, Manage Users, Author Apex,
+  Customize Application...), and no View All / Modify All on an object: they ignore the sharing model.
+- New custom objects start with org-wide default **Private** (internal and external); open access with sharing rules or
+  teams, and say in the plan who must see what. If an object must be public, the plan says why.
+- Record access comes from the sharing model, not code. The story file's **"The codebase today"** section gives
+  production's org-wide defaults for the objects the story touches: know whether the change relies on them.
+- Apex: `with sharing` by default, `inherited sharing` for utilities called from both sides. `without sharing` only with
+  a `// sharing: <why>` comment above the class. User-facing queries and DML run in user mode (`WITH USER_MODE`,
+  `AccessLevel.USER_MODE`); `@AuraEnabled` methods always.
+- Flows: record-triggered Flows run as the system (they see and change records the user cannot); say so in the plan
+  when that matters. Screen and autolaunched Flows keep the default run mode; `SystemModeWithoutSharing` only with
+  `sharing: <why>` in the Flow's description.
+- The permission test proves a boundary: a user **without** the story's permission set is refused (or does not see the
+  field), and a user with it succeeds. A test that passes only because the org-wide default is Public Read/Write
+  proves nothing; create the record as another user, or assert on access (`UserRecordAccess`, `Schema` describe).
+
 ## The agreed plan
 When the story file has an "Agreed plan" (from `/plan`) and "Answers", build what the plan says; where an answer
 differs from the plan, the answer wins. Do not build anything the plan and the acceptance criteria do not ask for.

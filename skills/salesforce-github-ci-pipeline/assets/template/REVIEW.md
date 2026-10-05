@@ -15,6 +15,17 @@ Review the pull request diff against the linked issue's acceptance criteria and 
   criteria broader than the story needs (the flow runs on every save); an after-save flow doing what a before-save
   flow could.
 
+## Access (CLAUDE.md "Access")
+CI's access check already fails profiles, administrator permissions, View All / Modify All, a class with no sharing
+keyword, unexplained `without sharing`, and new fields or objects no permission set grants. Its findings (warnings
+too) are in the access report you are given. Review what it cannot judge:
+- **blocker**: a query or DML a user triggers that runs in system mode without a reason (`@AuraEnabled`, invocable
+  Apex, a screen Flow); `without sharing` whose stated reason does not hold; a new object or field public to external users.
+- **major**: a new custom object not Private with no reason in the plan; a permission test that would pass with no
+  permission set at all (it relies on a Public Read/Write org-wide default or a system-context Flow and asserts nothing
+  about access); a permission set broader than the story needs (edit where read is enough, objects it never uses).
+- **minor**: a permission set without a description of who it is for.
+
 ## How to report
 1. Leave inline comments on the exact lines. Start each with `[blocker]`, `[major]` or `[minor]` and say how to fix it.
 2. Post one summary comment that ends with exactly one verdict line:

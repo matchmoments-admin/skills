@@ -1,7 +1,8 @@
+process.env.PIPELINE_BOTS = "github-actions,__owner__-pipeline";   // the pipeline's identities, as the repo variable sets them
 // Tests through each module's interface. Gate fixtures are this repo's real PRs from sprint 2026-w41.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import * as names from "../src/conventions.mjs";
 import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
@@ -15,6 +16,14 @@ import { storyCard, CARD_MARK, withoutMap, startingCard, activityLine } from "..
 import * as board from "../src/board.mjs";
 import * as tests from "../src/tests.mjs";
 import * as production from "../src/production.mjs";
+import * as access from "../src/access.mjs";
+import * as pack from "../src/context-pack.mjs";
+import * as shipping from "../src/shipping.mjs";
+import * as closeout from "../src/closeout.mjs";
+import { lane } from "../src/lane.mjs";
+import * as events from "../src/events.mjs";
+import { codeHost } from "../src/github.mjs";
+import { storyCards } from "../src/card.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -285,10 +294,12 @@ test("GitHub adapter: carry over removes the milestone; sprint stories map to ke
 });
 
 // ---------------------------------------------------------------- org registry (fake sf)
-function fakeSf(records) {
+function fakeSf(records, { ready = true, installed = [] } = {}) {
   const calls = [];
   const sf = (args, opts) => {
     calls.push(args.slice(0, 3).join(" "));
+    if (args[0] === "data" && args[1] === "query" && /FROM User/.test(args.at(-1))) return { records: [{ Title: ready ? "pipeline: ready" : null }] };
+    if (args[0] === "package" && args[1] === "installed") return installed.map((id) => ({ SubscriberPackageVersionId: id }));
     if (args[0] === "data" && args[1] === "query") return { records };
     if (args[0] === "org" && args[1] === "display") return { clientId: "CID", username: "u@x" };
     return {};
@@ -505,8 +516,8 @@ test("managed packages: installed before the source, with an install key from th
   const r = orgRegistry({ sf: spy, log: () => {}, sleep: () => {}, packages: [{ name: "DocuSign", id: "04t000000000001AAA", keyEnv: "DS_KEY" }], env: { DS_KEY: "k" } });
   r.ensure("story:12");
   const order = calls.filter((c) => /^(org create|package install|project deploy)/.test(c));
-  assert.deepEqual(order, ["org create scratch", "package install --package", "project deploy start"]);
-  assert.ok(seen.find((a) => a[0] === "package").includes("--installation-key"));
+  assert.deepEqual(order, ["org create scratch", "package installed list", "package install --package", "project deploy start"]);
+  assert.ok(seen.find((a) => a[1] === "install").includes("--installation-key"));
   const { writeFileSync, mkdtempSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const f = `${mkdtempSync(`${tmpdir()}/pk-`)}/packages.json`;
@@ -737,4 +748,471 @@ test("the Build plan comment appears at once while Claude plans, with a link to 
   const real = `${plans.PLAN_MARK}\n### Build plan (size S)\nthe plan`;
   assert.match(plans.planContext([{ author: "app/x", body: real, created: "1" }, { author: "app/x", body, created: "2" }]).plan, /the plan/);   // a re-plan in progress keeps the last agreed one
   assert.match(plans.planPending({ state: "failed", what: "Claude could not produce a plan", url: "u" }), /❌ \*\*Failed:\*\*[\s\S]*\/plan\*\* to try again/);
+});
+
+test("a full run never depends on the diff; unfinished or empty runs fail", () => {
+  assert.equal(pick([], { mode: "all" }).mode, "all");   // staging: --all with no changes against HEAD
+  const plan = { mode: "all", apex: [], flows: [], why: "" };
+  const base = { apex: { ran: 0, failed: 0, finished: false, failures: [] }, flows: { ran: 0, failed: 0, finished: true, failures: [] }, coverage: {}, orgWide: null };
+  assert.match(tests.verdict(base, { plan }).reasons.join(), /did not finish/);
+  assert.match(tests.verdict({ ...base, apex: { ...base.apex, finished: true } }, { plan }).reasons.join(), /no Apex tests ran/);
+  assert.match(tests.verdict({ ...base, apex: { ran: 5, failed: 0, finished: true, failures: [] } }, { plan }).reasons.join(), /coverage is unknown/);
+  assert.equal(tests.verdict({ ...base, apex: { ran: 5, failed: 0, finished: true, failures: [] }, orgWide: 90 }, { plan }).ok, true);
+  const flowsOnly = { mode: "relevant", apex: [], flows: ["F.T"], why: "" };
+  assert.match(tests.verdict({ ...base, flows: { ...base.flows, finished: false } }, { plan: flowsOnly }).reasons.join(), /Flow tests did not finish/);
+});
+
+test("the pipeline's identity is exact: look-alike users and other bots are not trusted", () => {
+  for (const ok of ["github-actions", "github-actions[bot]", "app/github-actions", "__owner__-pipeline[bot]", "app/__owner__-pipeline"]) assert.equal(names.isPipelineAuthor(ok), true, ok);
+  for (const bad of ["evil-pipeline", "someone[bot]", "app/other", "dependabot[bot]", "__owner__-pipeline2", ""]) assert.equal(names.isPipelineAuthor(bad), false, bad);
+  const c = (login, body) => ({ author: { login }, createdAt: "2026-10-05T10:00:00Z", body });
+  assert.equal(verdict.reviewVerdict(verdict.reviewComments([c("evil-pipeline", "AI-REVIEW: PASS")], "2026-10-05T09:00:00Z")), null);
+  assert.deepEqual(names.touchesPipeline(["package.json", "force-app/x.cls"]), ["package.json"]);
+});
+
+// ---------------------------------------------------------------- access and context
+const repo = (map) => ({ files: Object.keys(map), read: (p) => map[p] ?? "" });
+const O = "force-app/main/default";
+
+test("access check: profiles, admin permissions, View All and unexplained without-sharing are blockers", () => {
+  const r = repo({
+    [`${O}/profiles/Admin.profile-meta.xml`]: "<Profile/>",
+    [`${O}/permissionsets/Ops.permissionset-meta.xml`]: "<PermissionSet><userPermissions><enabled>true</enabled><name>ModifyAllData</name></userPermissions><objectPermissions><object>Case</object><viewAllRecords>true</viewAllRecords></objectPermissions><userPermissions><enabled>true</enabled><name>ApiEnabled</name></userPermissions></PermissionSet>",
+    [`${O}/classes/Plain.cls`]: "public class Plain {\n}",
+    [`${O}/classes/Wide.cls`]: "public without sharing class Wide {\n}",
+    [`${O}/classes/Ok.cls`]: "// sharing: counts every case for the dashboard total, which users may see but not open\npublic without sharing class Ok {\n}",
+    [`${O}/classes/PlainTest.cls`]: "@IsTest\nprivate class PlainTest { }",
+    [`${O}/classes/Shape.cls`]: "public interface Shape { }",
+    [`${O}/flows/Screen.flow-meta.xml`]: "<Flow><runInMode>SystemModeWithoutSharing</runInMode><description>Shows totals</description></Flow>",
+  });
+  const f = access.findings({ ...r, changed: r.files });
+  const rules = f.filter((x) => x.level === "blocker").map((x) => `${x.rule} ${x.file.split("/").pop()}`).sort();
+  assert.deepEqual(rules, ["admin-permission Ops.permissionset-meta.xml", "flow-without-sharing Screen.flow-meta.xml", "profile Admin.profile-meta.xml",
+    "sharing-keyword Plain.cls", "view-all Ops.permissionset-meta.xml", "without-sharing Wide.cls"]);
+  assert.ok(!f.some((x) => /ApiEnabled/.test(x.message)), "ordinary permissions are fine");
+  assert.match(access.toMarkdown(f), /❌ \| profile/);
+});
+
+test("access check: a new field or object needs a permission set; a new object should start Private; exceptions are reviewed config", () => {
+  const field = `${O}/objects/Account/fields/Score__c.field-meta.xml`, req = `${O}/objects/Account/fields/Code__c.field-meta.xml`;
+  const obj = `${O}/objects/Visit__c/Visit__c.object-meta.xml`;
+  const r = repo({ [field]: "<CustomField><type>Number</type></CustomField>", [req]: "<CustomField><required>true</required></CustomField>",
+    [obj]: "<CustomObject><sharingModel>ReadWrite</sharingModel><externalSharingModel>Read</externalSharingModel></CustomObject>",
+    [`${O}/permissionsets/Visits.permissionset-meta.xml`]: "<PermissionSet><objectPermissions><object>Visit__c</object></objectPermissions></PermissionSet>" });
+  const f = access.findings({ ...r, changed: [field, req, obj], added: [field, req, obj] });
+  assert.deepEqual(f.filter((x) => x.level === "blocker").map((x) => x.rule), ["field-permission"]);   // required fields cannot have field access entries
+  assert.equal(f.filter((x) => x.rule === "object-owd").length, 2);
+  const allowed = access.findings({ ...r, changed: [field], added: [field], exceptions: [{ file: field, rule: "field-permission", why: "integration only" }] });
+  assert.equal(allowed[0].level, "warning");
+  assert.match(allowed[0].message, /allowed: integration only/);
+  const granted = repo({ [field]: "<CustomField/>", [`${O}/permissionsets/S.permissionset-meta.xml`]: "<fieldPermissions><field>Account.Score__c</field></fieldPermissions>" });
+  assert.deepEqual(access.findings({ ...granted, changed: [field], added: [field] }), []);
+});
+
+test("access check: user-facing queries in user mode, and a permission test that runs as a limited user", () => {
+  const ctl = `${O}/classes/Ctl.cls`;
+  const r = repo({ [ctl]: "public with sharing class Ctl {\n @AuraEnabled public static Integer n() { return [SELECT COUNT() FROM Case]; }\n}",
+    [`${O}/classes/CtlTest.cls`]: "@IsTest private class CtlTest { @IsTest static void t() { Ctl.n(); } }" });
+  assert.deepEqual(access.findings({ ...r, changed: [ctl] }).map((x) => `${x.level} ${x.rule}`), ["warning user-mode", "warning permission-test"]);
+});
+
+test("context pack: the objects a story names (capitalised for plain English words, fields bring their object)", () => {
+  const files = [`${O}/objects/Account/fields/Customer_Since__c.field-meta.xml`, `${O}/objects/Visit__c/Visit__c.object-meta.xml`];
+  assert.deepEqual(pack.objectsFor({ text: "Fill Customer Since when an opportunity is won, just in case", files }), ["Account", "Opportunity"]);
+  assert.deepEqual(pack.objectsFor({ text: "Escalate the Case; log a visit", files }), ["Case", "Visit__c"]);
+  assert.deepEqual(pack.objectsFor({ text: "nothing here", files, changed: [`${O}/objects/Visit__c/fields/X__c.field-meta.xml`] }), ["Visit__c"]);
+});
+
+test("context pack: what exists per object and production's sharing model, so the agent extends instead of duplicating", () => {
+  const r = repo({
+    [`${O}/objects/Case/fields/Escalated__c.field-meta.xml`]: "",
+    [`${O}/triggers/CaseTrigger.trigger`]: "trigger CaseTrigger on Case (before insert) { }",
+    [`${O}/flows/Case_Prio.flow-meta.xml`]: "<Flow><start><object>Case</object><triggerType>RecordBeforeSave</triggerType><recordTriggerType>Create</recordTriggerType></start><status>Active</status></Flow>",
+    [`${O}/classes/CaseHandler.cls`]: "public with sharing class CaseHandler { Case c; }",
+    [`${O}/classes/CaseHandlerTest.cls`]: "@IsTest class CaseHandlerTest { Case c; }",
+    [`${O}/permissionsets/Esc.permissionset-meta.xml`]: "<fieldPermissions><field>Case.Escalated__c</field></fieldPermissions>",
+  });
+  const md = pack.pack({ ...r, objects: ["Case"], owd: pack.owdFrom([{ QualifiedApiName: "Case", InternalSharingModel: "ReadWrite", ExternalSharingModel: "Private" }]) });
+  for (const want of ["internal **ReadWrite**", "must not rely on this", "Escalated__c", "Triggers: CaseTrigger", "Case_Prio (RecordBeforeSave Create, runs as system)",
+    "CaseHandler (with sharing)", "Tests that name it: CaseHandlerTest", "grant it: Esc"]) assert.ok(md.includes(want), want);
+  assert.match(pack.owdQuery(["Case", "Bad'; DROP"]), /IN \('Case','BadDROP'\)/);
+});
+
+test("rules that steer checks and agents are pipeline paths; the plan asks for an Access section", () => {
+  assert.deepEqual(names.touchesPipeline(["CLAUDE.md", "REVIEW.md", "code-analyzer.yml", "README.md"]), ["CLAUDE.md", "REVIEW.md", "code-analyzer.yml"]);
+  assert.match(verdict.instructions("plan"), /### Access/);
+});
+
+test("every agent reads the story with its context pack; CI runs the access check", () => {
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  for (const n of ["ai-plan", "ai-implement", "ai-review", "ai-fix", "ui-test"]) assert.match(wf(n), /tracker story "?\$[A-Z_]*KEY"? --pack/, n);
+  assert.match(wf("ci"), /access check --base/);
+  assert.match(wf("ai-implement"), /merge -q --no-edit "origin\/\$BASE"/);
+});
+
+// ---------------------------------------------------------------- shipping keyed by commit
+const SHA = "a".repeat(40), TREE = "t".repeat(40);
+
+test("release plan: an already-shipped SHA is a no-op; the gate's validation is used only for the exact tree it checked", () => {
+  const f = { sha: SHA, onMain: true, tree: TREE, previous: "v2026.10.04-8" };
+  assert.deepEqual(shipping.releasePlan({ ...f, shippedIn: ["v2026.10.05-9", "v2026.10.05-12"] }).tag, "v2026.10.05-9");
+  assert.equal(shipping.releasePlan({ ...f, shippedIn: ["v2026.10.05-9"] }).action, "skip");
+  const quick = shipping.releasePlan({ ...f, validated: { job: "0AfX", tree: TREE } });
+  assert.deepEqual([quick.action, quick.job, quick.previous], ["quick", "0AfX", "v2026.10.04-8"]);
+  const moved = shipping.releasePlan({ ...f, validated: { job: "0AfX", tree: "other" } });
+  assert.deepEqual([moved.action, moved.job], ["validate", undefined]);
+  assert.match(moved.why, /not the one the gate validated/);
+  assert.match(shipping.releasePlan(f).why, /no gate validation/);
+  assert.throws(() => shipping.releasePlan({ ...f, onMain: false }), /only main ships/);
+});
+
+test("release facts: the SHA, whether a release contains it, and the release before it (before its own tag on a re-run)", () => {
+  const git = (args) => {
+    const a = args.join(" ");
+    if (a.startsWith("fetch")) return "";
+    if (a === "rev-parse origin/main") return SHA;
+    if (a === `rev-parse ${SHA}^{tree}`) return TREE;
+    if (a.startsWith("rev-parse")) return args[1];
+    if (a.startsWith("merge-base")) return "";
+    if (a.startsWith("tag --contains")) return "v2026.10.05-9";
+    if (a.startsWith("describe")) return args.at(-1) === "v2026.10.05-9^" ? "v2026.10.04-8" : "v2026.10.05-9";
+    throw new Error(a);
+  };
+  const f = shipping.gatherRelease(git, {});
+  assert.deepEqual([f.sha, f.onMain, f.shippedIn, f.previous], [SHA, true, ["v2026.10.05-9"], "v2026.10.04-8"]);
+});
+
+test("the gate's candidate is the base's tip now plus the decided head, and refuses a head that moved", () => {
+  const calls = [];
+  const git = (head) => (args) => {
+    calls.push(args.slice(2).join(" "));
+    const a = args.slice(2).join(" ");
+    if (a === "rev-parse refs/remotes/origin/pr-7") return head;
+    if (a === "rev-parse refs/remotes/origin/main") return "b".repeat(40);
+    if (a === "rev-parse HEAD^{tree}") return TREE;
+    if (a.startsWith("describe")) return "v2026.10.04-8";
+    return "";
+  };
+  const c = shipping.buildCandidate(git(SHA), { pr: 7, base: "main", head: SHA, dir: "candidate" });
+  assert.deepEqual([c.base, c.tree, c.since], ["b".repeat(40), TREE, "v2026.10.04-8"]);
+  assert.ok(calls.some((x) => /merge -q --no-ff --no-edit a{40}/.test(x)), "merges the decided head");
+  assert.throws(() => shipping.buildCandidate(git("c".repeat(40)), { pr: 7, base: "main", head: SHA, dir: "candidate" }), /moved to ccccccc/);
+});
+
+test("release watchdog: ships what never shipped; never re-ships after a rollback or loops on a failed release", () => {
+  const f = { mainSha: SHA, previous: "v2026.10.04-8", forceAppChanged: true, releaseActive: false };
+  assert.equal(shipping.watchdog(f).action, "release");
+  assert.equal(shipping.watchdog({ ...f, forceAppChanged: false }).action, "none");
+  assert.equal(shipping.watchdog({ ...f, releaseActive: true }).action, "none");
+  assert.equal(shipping.watchdog({ ...f, previous: null }).action, "none");
+  assert.equal(shipping.watchdog({ ...f, rolledBack: true }).action, "report");
+  assert.equal(shipping.watchdog({ ...f, lastRun: { sha: SHA, conclusion: "failure" } }).action, "report");
+  assert.equal(shipping.watchdog({ ...f, lastRun: { sha: "b".repeat(40), conclusion: "failure" } }).action, "release");
+});
+
+test("close-out counts what is in the shipped SHA and not in the release before it, wherever main has moved since", async () => {
+  const inside = { m1: [SHA], m2: [SHA, "v2026.10.04-8"], m3: [] };   // m3 merged after the shipped SHA
+  const git = (args) => {
+    if (args[0] === "merge-base") return inside[args[2]]?.includes(args[3]) ? "" : null;
+    if (args[0] === "for-each-ref") return "";
+    return "";
+  };
+  const gh = () => [{ number: 1, headRefName: "issue-1", mergeCommit: { oid: "m1" } }, { number: 2, headRefName: "issue-2", mergeCommit: { oid: "m2" } }, { number: 3, headRefName: "issue-3", mergeCommit: { oid: "m3" } }];
+  const f = await closeout.gather({ gh, git }, { sprintStories: async () => [] }, { sha: SHA, previous: "v2026.10.04-8" });
+  assert.deepEqual(f.mergedIntoMain.map((p) => p.number), [1]);
+});
+
+test("a production validation that cannot start says why", () => {
+  const io = { sf: () => { throw new Error("INVALID_SESSION_ID: expired"); } };
+  assert.throws(() => production.validate(io, { source: [], sleep: () => {} }), /RunRelevantTests: INVALID_SESSION_ID: expired \| all: INVALID_SESSION_ID/);
+});
+
+test("shipping wiring: the gate passes the SHA and the validated tree; nothing queued is lost; UAT signs only what it runs", () => {
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  assert.match(wf("gate"), /release.yml -f sha="\$SHA" -f validated_job="\$JOB" -f validated_tree="\$TREE"/);
+  assert.match(wf("gate"), /ship candidate --pr/);
+  assert.doesNotMatch(wf("gate"), /refs\/pull\/\$\{\{ env.PR \}\}\/merge/);
+  assert.match(wf("gate"), /ship renudge --base/);
+  assert.match(wf("release"), /run-name: release \$\{\{ inputs.sha/);
+  assert.match(wf("release"), /closeout run --tag "\$TAG" --sha "\$SHA"/);
+  assert.match(wf("merged"), /-f sha="\$MERGED_SHA"/);
+  assert.match(wf("scratch-janitor"), /ship watchdog/);
+  assert.match(wf("commands"), /startswith\("In UAT"\)/);
+});
+
+// ---------------------------------------------------------------- lanes and resumable orgs
+test("org registry: a live org that never finished is completed, not trusted; a ready one is left alone", () => {
+  const live = [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }];
+  const half = fakeSf(live, { ready: false, installed: ["04t000000000001AAA"] });
+  const pkgs = [{ name: "A", id: "04t000000000001AAA" }, { name: "B", id: "04t000000000002AAA" }];
+  const o = orgRegistry({ sf: half.sf, log: () => {}, sleep: () => {}, packages: pkgs }).ensure("story:12");
+  assert.deepEqual([o.created, o.completed], [false, true]);
+  assert.ok(!half.calls.includes("org create scratch"));
+  assert.equal(half.calls.filter((c) => c === "package install --package").length, 1, "only the missing package");
+  assert.ok(half.calls.includes("project deploy start") && half.calls.includes("data update record"));
+  const done = fakeSf(live, { ready: true });
+  orgRegistry({ sf: done.sf, log: () => {}, sleep: () => {}, packages: pkgs }).ensure("story:12");
+  assert.ok(!done.calls.includes("project deploy start") && !done.calls.includes("package install --package"));
+});
+
+/** A fake GitHub git-refs API with the atomic create and fast-forward-only update the lane relies on. */
+function fakeRefs({ runs = {} } = {}) {
+  const refs = {}, commits = { base: { tree: { sha: "T" } } };
+  let n = 0;
+  const api = (method, path, body) => {
+    if (method === "POST" && path.endsWith("/git/commits")) { const sha = `c${++n}`; commits[sha] = { message: body.message, parents: body.parents, tree: { sha: body.tree } }; return { sha }; }
+    if (method === "GET" && path.includes("/git/commits/")) return commits[path.split("/").pop()];
+    if (method === "GET" && path.includes("/actions/runs/")) return { status: runs[path.split("/").pop()] || "in_progress" };
+    const name = path.split("/git/")[1];
+    if (method === "POST" && path.endsWith("/git/refs")) { if (refs[body.ref]) return { status: 422 }; refs[body.ref] = body.sha; return { ref: body.ref }; }
+    if (method === "GET") return refs[name] ? { object: { sha: refs[name] } } : { status: 404 };
+    if (method === "PATCH") { if (!commits[body.sha].parents.includes(refs[name])) return { status: 422 }; refs[name] = body.sha; return {}; }
+    if (method === "DELETE") { delete refs[name]; return {}; }
+    throw new Error(`${method} ${path}`);
+  };
+  return { api, refs, commits };
+}
+
+test("lane: one holder at a time; the next waits its turn and is never dropped; only the holder releases", () => {
+  const f = fakeRefs();
+  let t = 0;
+  const mk = (run, job) => lane({ api: f.api, repo: "o/r", holder: { run, job, sha: "base" }, now: () => t, sleep: (ms) => { t += ms; }, log: () => {} });
+  const a = mk("1", "ci"), b = mk("2", "ai-fix");
+  assert.equal(a.acquire("org-issue-12"), true);
+  assert.equal(a.acquire("org-issue-12"), true, "a retried step that already holds it");
+  assert.throws(() => b.acquire("org-issue-12", { timeoutMinutes: 1, pollSeconds: 20 }), /still busy after 1 minutes \(run 1\)/);
+  assert.equal(b.release("org-issue-12"), false, "not the holder");
+  assert.equal(a.release("org-issue-12"), true);
+  assert.equal(b.acquire("org-issue-12"), true);
+});
+
+test("lane: a holder whose run finished (crashed, cancelled) is taken over, by exactly one waiter", () => {
+  const f = fakeRefs({ runs: { 1: "completed" } });
+  const mk = (run) => lane({ api: f.api, repo: "o/r", holder: { run, job: "j", sha: "base" }, now: () => 0, sleep: () => {}, log: () => {} });
+  mk("1").acquire("org-staging");
+  const stale = f.refs["refs/locks/org-staging"];
+  assert.equal(mk("2").acquire("org-staging"), true);
+  assert.match(f.commits[f.refs["refs/locks/org-staging"]].message, /"run":"2"/);
+  // a second waiter that saw the same stale holder loses the fast-forward race
+  const loser = f.api("PATCH", "repos/o/r/git/refs/locks/org-staging", { sha: f.api("POST", "repos/o/r/git/commits", { message: "{}", tree: "T", parents: [stale] }).sha, force: false });
+  assert.equal(loser.status, 422);
+});
+
+test("every job that uses a story or staging org holds its lane, and releases it whatever happens", () => {
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  for (const n of ["issue-start", "ai-implement", "ai-fix", "ui-test", "ci", "staging-deploy"]) {
+    const y = wf(n);
+    const steps = y.split(/\n\s+- (?=name:|uses:|run:|id:|if:)/);
+    const takes = steps.filter((x) => /lane acquire/.test(x)).length, gives = steps.filter((x) => /lane release/.test(x));
+    assert.ok(takes > 0, `${n} takes a lane`);
+    assert.equal(gives.length, takes, `${n} releases every lane it takes`);
+    for (const g of gives) assert.match(g, /if: always\(\)/, `${n} releases whatever happens`);
+    assert.doesNotMatch(y, /group: (ai-pr-|org-staging|org-\$\{\{)/, `${n} has no GitHub concurrency group on an org`);
+  }
+});
+
+// ---------------------------------------------------------------- the event log and settings
+test("settings come from the one PIPELINE_VARS line (toJSON(vars)); an env var of the same name wins", () => {
+  const env = { PIPELINE_VARS: JSON.stringify({ AI_PLAN: "true", AI_REVIEW: "false", UAT_ENABLED: "true", PIPELINE_BOTS: "github-actions,acme-bot" }) };
+  assert.equal(names.setting("UAT_ENABLED", env), "true");
+  assert.equal(names.setting("AI_REVIEW", { ...env, AI_REVIEW: "true" }), "true");
+  assert.equal(names.setting("MISSING", env), "");
+  assert.deepEqual([names.aiFeatures(env).plan, names.aiFeatures(env).review], [true, false]);
+  assert.equal(names.setting("X", { PIPELINE_VARS: "not json" }), "");
+});
+
+test("every workflow passes every repository variable in one line, and lists no switch by hand", () => {
+  for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml"))) {
+    const y = readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8");
+    assert.match(y, /^  PIPELINE_VARS: \$\{\{ toJSON\(vars\) \}\}/m, f);
+    assert.doesNotMatch(y, /^\s+(AI_[A-Z_]+|PIPELINE_BOTS|UAT_ENABLED|BOARD_PROJECT|PROD_TEST_LEVEL): \$\{\{ vars\./m, f);
+  }
+});
+
+test("events: what happened and where, one new file each; a token that cannot write turns recording off, quietly", () => {
+  const e = events.event("tests", { story: "84", ok: true, empty: "", none: null }, { GITHUB_RUN_ID: "9", GITHUB_WORKFLOW: "ci", GITHUB_JOB: "apex" }, new Date("2026-10-05T10:11:12.345Z"));
+  assert.deepEqual(e, { v: 1, at: "2026-10-05T10:11:12.345Z", kind: "tests", story: "84", ok: true, run: "9", workflow: "ci", job: "apex" });
+  assert.equal(events.pathOf(e, "abc"), "events/2026/10/05/20261005T101112345Z-9-tests-abc.json");
+  assert.throws(() => events.event("nonsense"), /Unknown event kind/);
+  const puts = [];
+  let reply = [{ status: 409 }, {}];
+  const rec = events.recorder({ api: (m, p, b) => { puts.push(p); return reply.shift(); }, repo: "o/r", env: {}, sleep: () => {} });
+  assert.equal(rec("gate", { pr: 1 }), true);
+  assert.equal(puts.length, 2, "a 409 (the branch moved) is retried");
+  reply = [{ status: 403 }];
+  const notes = [];
+  const ro = events.recorder({ api: () => reply.shift(), repo: "o/r", env: {}, log: (m) => notes.push(m) });
+  assert.equal(ro("gate", {}), false);
+  assert.equal(ro("gate", {}), false, "no second call after a 403");
+  assert.equal(notes.length, 1);
+});
+
+test("event log: DORA to production, rollbacks as failures, what PRs waited on, org-hours and AI cost", () => {
+  const ev = (at, kind, d) => ({ at: `2026-10-0${at}`, kind, ...d });
+  const log = [
+    ev("1T00:00:00Z", "stage", { story: "84", what: "creating the branch", state: "running" }),
+    ev("1T01:00:00Z", "org", { action: "created", org: "issue-84" }),
+    ev("1T02:00:00Z", "gate", { pr: 90, mergeable: false, reasons: ['check "deploy and Apex tests (scratch org)" is pending', "no sign-off (approve it, or comment /ship)"] }),
+    ev("1T03:00:00Z", "gate", { pr: 90, mergeable: false, reasons: ['check "static checks (no org)" is pending'] }),
+    ev("1T03:00:00Z", "gate", { pr: 91, mergeable: false, reasons: ['check "x" is pending'] }),
+    ev("1T04:00:00Z", "tests", { story: "84", mode: "relevant", ok: true, seconds: 240 }),
+    ev("1T05:00:00Z", "org", { action: "deleted", org: "issue-84" }),
+    ev("1T06:00:00Z", "stage", { story: "84", what: "CI (deploy or tests)", state: "failed" }),
+    ev("2T00:00:00Z", "agent", { role: "fix", pr: 90, usd: 0.4, turns: 20, minutes: 6 }),
+    ev("2T01:00:00Z", "agent", { role: "fix", pr: 90, usd: 0.6, turns: 30, minutes: 8 }),
+    ev("2T02:00:00Z", "verdict", { context: "pipeline/ai-review", state: "failure", pr: 90 }),
+    ev("2T03:00:00Z", "verdict", { context: "pipeline/ai-review", state: "success", pr: 90 }),
+    ev("3T00:00:00Z", "release", { tag: "v1", sprint: "w45", shipped: ["84"], hotfixes: [] }),
+    ev("3T12:00:00Z", "stage", { story: "95", what: "starting", state: "running" }),
+    ev("4T00:00:00Z", "release", { tag: "v2", sprint: null, shipped: [], hotfixes: ["95"] }),
+    ev("5T00:00:00Z", "rollback", { tag: "v1" }),
+    ev("5T01:00:00Z", "lane", { lane: "org-issue-84", waitedSeconds: 600 }),
+  ];
+  const s = events.summarize(log, { days: 7 });
+  assert.equal(s.dora.leadTimeHours, 48);                   // started 1st 00:00, in production 3rd 00:00
+  assert.equal(s.dora.changeFailureRate, 100);              // 1 hotfix release + 1 rollback over 2 releases
+  assert.equal(s.dora.timeToRestoreHours, 12);
+  assert.deepEqual(s.gateWaits[0], { reason: "check X is pending", prs: 2 });
+  assert.equal(s.stages.orgs.orgHours, 4);
+  assert.equal(s.stages.lanes.totalMinutes, 10);
+  assert.deepEqual(s.failedStages, [{ what: "CI (deploy or tests)", n: 1 }]);
+  assert.deepEqual([s.ai.byRole.fix.runs, s.ai.totalUsd, s.ai.medianFixRounds, s.ai.passedFirstReview], [2, 1, 2, 0]);
+  const md = events.toMarkdown(s);
+  for (const want of ["story started to in production) | 48 h", "1 hotfix, 1 rollback", "check X is pending | 2", "| fix | 2 | $1.00"]) assert.ok(md.includes(want), want);
+});
+
+test("the event log is read with one git cat-file --batch, sizes in bytes (non-ASCII safe)", () => {
+  const a = Buffer.from('{"kind":"gate","why":"→ ok"}'), b = Buffer.from('{"kind":"org"}');
+  const out = Buffer.concat([Buffer.from(`aaa blob ${a.length}\n`), a, Buffer.from("\n"), Buffer.from(`bbb blob ${b.length}\n`), b, Buffer.from("\n")]);
+  assert.deepEqual(events.parseBatch(out).map((t) => JSON.parse(t).kind), ["gate", "org"]);
+});
+
+test("fix rounds are this PR's earlier completed ai-fix runs, whatever the commits were called", () => {
+  const runs = [{ id: 1, display_title: "ai-fix PR #90", status: "completed", conclusion: "success" }, { id: 2, display_title: "ai-fix PR #90", status: "completed", conclusion: "cancelled" },
+    { id: 3, display_title: "ai-fix PR #91", status: "completed", conclusion: "success" }, { id: 4, display_title: "ai-fix PR #90", status: "in_progress" }, { id: 5, display_title: "ai-fix PR #90", status: "completed", conclusion: "failure" }];
+  assert.equal(verdict.fixRunsFor(runs, 90, 5), 1);
+  assert.equal(verdict.fixRunsFor(runs, 90, 4), 2);
+  const wf = readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8");
+  assert.match(wf, /verdict rounds --pr/);
+  assert.match(readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8"), /event agent --role/);
+});
+
+// ---------------------------------------------------------------- the code host and cheap card refreshes
+function fakeGitHub() {
+  const calls = [];
+  const io = {
+    run: (cmd, args, o) => {
+      calls.push(`${args[2]} ${args[3]}`);
+      if (args[3].endsWith("/check-runs") && args[2] === "POST") return JSON.stringify({ id: 7 });
+      if (args[3].includes("/missing")) throw new Error("gh api failed: gh: Not Found (HTTP 404)");
+      return "";
+    },
+    gh: (args) => { calls.push(args.slice(0, 3).join(" ")); if (args[0] === "pr" && args[1] === "list") return [{ number: 90, state: "OPEN", baseRefName: "release/w45", headRefOid: "h" }]; if (args[0] === "api" && /matching-refs/.test(args[1])) return [{ ref: "refs/heads/release/w45" }]; return null; },
+    ghPages: () => [],
+  };
+  return { io, calls };
+}
+
+test("code host: one call per fact per process, errors as a status, verdicts linked to the run", () => {
+  const { io, calls } = fakeGitHub();
+  const h = codeHost({ io, env: { GH_REPO: "o/r", GITHUB_SERVER_URL: "https://github.com", GITHUB_RUN_ID: "5" } });
+  assert.equal(h.runUrl, "https://github.com/o/r/actions/runs/5");
+  assert.equal(h.openRelease(), "release/w45");
+  h.openRelease(); h.storyPr("issue-84"); h.storyPr("issue-84");
+  assert.equal(calls.filter((c) => /matching-refs/.test(c)).length, 1);
+  assert.equal(calls.filter((c) => c === "pr list --head").length, 1);
+  assert.deepEqual(h.api("GET", "repos/o/r/missing"), { status: 404, message: "gh api failed: gh: Not Found (HTTP 404)" });
+  const check = h.checkRun("abc", "Salesforce tests");
+  check.update({ title: "x" }, "success");
+  assert.ok(calls.includes("PATCH repos/o/r/check-runs/7"));
+  assert.deepEqual(codeHost({ io, env: { GH_REPO: "o/r" } }).checkRun(null, "x").update(), undefined, "no commit: a no-op check");
+});
+
+test("a light card refresh (the Now line while tests run) reuses the facts: two comment edits, nothing re-gathered", async () => {
+  const edits = [];
+  let gathered = 0;
+  const host = { repoUrl: "https://github.com/o/r", runUrl: "u", openRelease: () => "release/w45", hasApp: () => false,
+    storyPr: () => ({ number: 90, state: "OPEN", baseRefName: "release/w45", headRefOid: "h" }),
+    prFacts: () => { gathered++; return { pr: { number: 90, state: "OPEN", headRefName: "issue-84", baseRefName: "release/w45", headRefOid: "h" }, checkRuns: [], statuses: [], reviews: [] }; } };
+  const t = (who) => ({ comments: async () => [], card: async (k) => edits.push(`${who}:${k}`) });
+  const c = storyCards({ host, tracker: t("issue"), prTracker: t("pr") });
+  await c.refresh("84");
+  await c.refresh("84", { light: true, activity: { state: "running", what: "testing" } });
+  await c.refresh("84", { light: true, activity: { state: "running", what: "testing" } });
+  assert.equal(gathered, 1);
+  assert.deepEqual(edits, ["issue:84", "pr:90", "issue:84", "pr:90", "issue:84", "pr:90"]);
+});
+
+test("the GitHub tracker finds a marked comment once, then edits it directly", async () => {
+  const calls = [];
+  const t = githubTracker({ repo: "o/r", gh: (a) => { calls.push(a.slice(0, 3).join(" ")); return null; }, ghPages: (p) => { calls.push(`list ${p}`); return [{ id: 11, body: "<!-- mark --> old" }]; } });
+  await t.card(84, "new 1", "<!-- mark -->");
+  await t.card(84, "new 2", "<!-- mark -->");
+  assert.equal(calls.filter((c) => c.startsWith("list")).length, 1);
+  assert.equal(calls.filter((c) => c === "api -X PATCH").length, 2);
+});
+
+test("pipe.mjs is a thin command table: no GitHub, git or Salesforce logic of its own", () => {
+  const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  assert.ok(src.split("\n").length < 400, "small");
+  assert.doesNotMatch(src, /fetch\(|check-runs`, \{|sgd", "source", "delta"|createSign/);
+});
+
+// ---------------------------------------------------------------- one engine for both skills
+test("the scratch-org skill runs this pipeline's test selection: its engine is tests.mjs, verbatim, and agrees on a real repo", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const skill = new URL("../../.claude/skills/salesforce-scratch-org-tests/scripts/", import.meta.url);
+  assert.equal(readFileSync(new URL("engine/tests.mjs", skill), "utf8"), readFileSync(new URL("../src/tests.mjs", import.meta.url), "utf8"));
+  const dir = mkdtempSync(`${tmpdir()}/engine-`);
+  const g = (...a) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8" });
+  const put = (p, t) => { mkdirSync(`${dir}/${p.split("/").slice(0, -1).join("/")}`, { recursive: true }); writeFileSync(`${dir}/${p}`, t); };
+  put("sfdx-project.json", JSON.stringify({ packageDirectories: [{ path: "force-app" }] }));
+  put("force-app/main/default/classes/Svc.cls", "public with sharing class Svc {}");
+  put("force-app/main/default/classes/SvcTest.cls", "@IsTest class SvcTest { Svc s; }");
+  put("force-app/main/default/classes/OtherTest.cls", "@IsTest class OtherTest { }");
+  g("init", "-q"); g("add", "."); g("commit", "-qm", "base");
+  const base = g("rev-parse", "HEAD").trim();
+  put("force-app/main/default/classes/Svc.cls", "public with sharing class Svc { Integer n; }");
+  g("commit", "-qam", "change");
+  const sel = (env = {}) => execFileSync("bash", [new URL("select-tests.sh", skill).pathname, base], { cwd: dir, encoding: "utf8", env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "ignore"] }).trim();
+  assert.equal(sel(), "apex SvcTest");
+  assert.equal(sel({ TEST_MODE: "all" }), "all");
+  put("force-app/main/default/objects/Account/fields/X__c.field-meta.xml", "<CustomField/>");
+  g("add", "."); g("commit", "-qm", "field");
+  assert.equal(sel(), "all", "other metadata can affect anything");
+});
+
+test("route check before /build: a base that moved on is fine; a hotfix branch carrying sprint work is refused", () => {
+  const git = (inMain) => (args) => (args[1] === "--is-ancestor" ? (inMain ? "" : null) : "fork");
+  assert.equal(gate.branchRoute(git(false), { branch: "issue-106", base: "release/w45", release: "release/w45" }).ok, true, "sprint story: the build merges the base in");
+  assert.equal(gate.branchRoute(git(true), { branch: "issue-7", base: "main", release: "release/w45" }).ok, true, "hotfix cut from main");
+  const bad = gate.branchRoute(git(false), { branch: "issue-7", base: "main", release: "release/w45" });
+  assert.match(bad.why, /carries unreleased release\/w45 work/);
+  assert.equal(gate.branchRoute(git(false), { branch: "issue-7", base: "main" }).ok, true, "no open sprint: nothing to carry");
+});
+
+test("the event log is read from a real metrics branch (fetch, ls-tree, one cat-file --batch), only inside the window", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { io } = await import("../src/io.mjs");
+  const root = mkdtempSync(`${tmpdir()}/log-`);
+  const g = (dir, ...a) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8" });
+  execFileSync("git", ["init", "-q", "--bare", `${root}/remote.git`]);
+  g(root, "init", "-q", "w"); const w = `${root}/w`;
+  const put = (p, e) => { mkdirSync(`${w}/${p.split("/").slice(0, -1).join("/")}`, { recursive: true }); writeFileSync(`${w}/${p}`, JSON.stringify(e) + "\n"); };
+  put("events/2026/10/05/a-1-gate-x.json", { kind: "gate", at: "2026-10-05T10:00:00Z", why: "→ waiting" });
+  put("events/2026/10/05/b-1-agent-y.json", { kind: "agent", at: "2026-10-05T11:00:00Z", role: "fix", usd: 0.5 });
+  put("events/2026/08/01/c-1-org-z.json", { kind: "org", at: "2026-08-01T00:00:00Z" });
+  g(w, "checkout", "-q", "-b", "metrics"); g(w, "add", "."); g(w, "commit", "-qm", "events"); g(w, "remote", "add", "origin", `${root}/remote.git`); g(w, "push", "-q", "origin", "metrics");
+  g(root, "clone", "-q", `${root}/remote.git`, "reader");
+  const here = process.cwd();
+  process.chdir(`${root}/reader`);
+  try {
+    const got = events.readLog(io, { days: 7, now: new Date("2026-10-06T00:00:00Z") });
+    assert.deepEqual(got.map((e) => e.kind).sort(), ["agent", "gate"]);
+    assert.equal(got.find((e) => e.kind === "gate").why, "→ waiting");
+  } finally { process.chdir(here); }
 });

@@ -31,7 +31,17 @@ export const CHECKS = {
 export const COVERAGE_MIN = 75;
 
 /** Pipeline code: story PRs may not change it (it runs with production credentials). */
-export const PIPELINE_PATHS = [".github/", "pipeline/", "scripts/", "config/", "devhub-setup/"];
+// package.json and the lockfile too: install scripts run in jobs that hold credentials, so a story cannot change them.
+// The rules the checks and agents enforce too (code-analyzer.yml, CLAUDE.md, REVIEW.md): a story cannot loosen its own review.
+export const PIPELINE_PATHS = [".github/", "pipeline/", "scripts/", "config/", "devhub-setup/", "package.json", "package-lock.json",
+  "code-analyzer.yml", "CLAUDE.md", "REVIEW.md"];
+
+/** Is this login one of the pipeline's own identities (PIPELINE_BOTS: bare names, e.g. "github-actions,acme-pipeline")?
+ *  Exact names only, in the three forms GitHub prints them (name, name[bot], app/name): a look-alike user is not trusted. */
+export function isPipelineAuthor(login, bots = setting("PIPELINE_BOTS") || "github-actions") {
+  const names = String(bots).split(",").map((b) => b.trim()).filter(Boolean);
+  return names.some((n) => [n, `${n}[bot]`, `app/${n}`].includes(String(login || "")));
+}
 export const touchesPipeline = (files) => files.filter((f) => PIPELINE_PATHS.some((p) => f.startsWith(p)));
 
 /** Metadata a user sees in the UI: a change touching any of these needs a UI test; others do not. */
@@ -39,12 +49,18 @@ const UI_FACING = [/\/lwc\//, /\/aura\//, /\/flexipages\//, /\/layouts\//, /\/ob
   /\/tabs\//, /\/applications\//, /\/flows\//, /\/validationRules\//, /\/listViews\//, /\/compactLayouts\//, /\/pages\//, /\/triggers\//];
 export const uiFacing = (files) => files.filter((f) => f.startsWith("force-app/") && UI_FACING.some((re) => re.test(f)));
 
-// ---- AI feature flags ---------------------------------------------------------------------------------------
-// Each AI step is its own repo variable (Settings > Secrets and variables > Actions > Variables); unset = off, so
-// the pipeline is fully manual by default. Workflows pass them as env; nothing else reads them.
+// ---- settings and AI feature flags ---------------------------------------------------------------------------
+// Settings are repository variables (Settings > Secrets and variables > Actions > Variables). Every workflow passes all
+// of them in one line, `PIPELINE_VARS: ${{ toJSON(vars) }}`, so a new switch needs no workflow edits and no workflow can
+// forget one. An env var of the same name, if set, wins (a step that overrides one setting).
+export function setting(name, env = process.env) {
+  if (env[name] !== undefined && env[name] !== "") return env[name];
+  try { return JSON.parse(env.PIPELINE_VARS || "{}")[name] ?? ""; } catch { return ""; }
+}
+// Each AI step is its own variable; unset = off, so the pipeline is fully manual by default.
 export const AI_FLAGS = { plan: "AI_PLAN", implement: "AI_IMPLEMENT", review: "AI_REVIEW", fix: "AI_FIX", uiTest: "AI_UI_TEST", autoChain: "AI_AUTO_CHAIN", triage: "AI_TRIAGE" };
 export function aiFeatures(env = process.env) {
-  const on = (name) => String(env[name] || "").trim().toLowerCase() === "true";
+  const on = (name) => String(setting(name, env) || "").trim().toLowerCase() === "true";
   return Object.fromEntries(Object.entries(AI_FLAGS).map(([k, v]) => [k, on(v)]));
 }
 /** The story's own Playwright spec, which a person (or the AI tester) commits with the change. */

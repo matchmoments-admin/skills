@@ -1,13 +1,23 @@
 name: release
-# Started by the gate after a release or hotfix merges into main. One run, drawn as a graph on the run page:
+# Started by the gate after a release or hotfix merges into main, for that merge commit's SHA (pipeline/src/shipping.mjs).
+# One run, drawn as a graph on the run page:
 #   plan -> deploy to production -> (tag | refresh org shape) -> close out -> back-merge
-# Quick-deploys the gate's production validation (no second test run). Re-runnable: an already-tagged commit skips
-# deploy and tag, but close-out and back-merge still run.
+# Quick-deploys the gate's production validation only if the SHA has exactly the tree the gate validated; otherwise it
+# validates here (deletions since the previous release). Re-runnable and replaceable: a SHA already shipped (tagged, or
+# inside a later release) skips deploy and tag, but close-out and back-merge still run. scratch-janitor's watchdog
+# starts a release for Salesforce changes on main that never shipped.
+run-name: release ${{ inputs.sha || 'main' }}
 on:
   workflow_dispatch:      # no push trigger, so nothing runs twice
     inputs:
+      sha:
+        description: The commit on main to ship; empty = main's tip
+        required: false
       validated_job:
         description: Production validation ID from the gate; empty = validate here
+        required: false
+      validated_tree:
+        description: The tree the gate validated (the job is used only if the SHA has this tree)
         required: false
 permissions:
   actions: write          # starts back-merge
@@ -19,13 +29,8 @@ permissions:
 concurrency:
   group: release
   cancel-in-progress: false
-env:                    # the AI switches (repository variables); the gate and the story card read them
-  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
-  AI_REVIEW: ${{ vars.AI_REVIEW }}
-  AI_FIX: ${{ vars.AI_FIX }}
-  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
-  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
-  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   GH_REPO: ${{ github.repository }}
 jobs:
   plan:
@@ -36,18 +41,21 @@ jobs:
       sha: ${{ steps.p.outputs.sha }}
       skip: ${{ steps.p.outputs.skip }}
       tag: ${{ steps.p.outputs.tag }}
+      job: ${{ steps.p.outputs.job }}
+      previous: ${{ steps.p.outputs.previous }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, fetch-depth: 0 }
-      - name: The commit, and whether it already shipped
+      - name: The commit, whether it already shipped, and whether the gate's validation covers it
         id: p
         env:
-          GH_TOKEN: ${{ github.token }}
+          SHA_IN: ${{ inputs.sha }}
+          JOB_IN: ${{ inputs.validated_job }}
+          TREE_IN: ${{ inputs.validated_tree }}
         run: |
-          SHA=$(git rev-parse HEAD); echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          TAG=$(git tag --points-at HEAD | head -1)
-          if [ -n "$TAG" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "tag=$TAG" >> "$GITHUB_OUTPUT"; echo "already released as $TAG"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
-          { echo "### Shipping \`${SHA:0:7}\`"; echo; git log -1 --format='%s' "$SHA"; } >> "$GITHUB_STEP_SUMMARY"
+          [ -z "$SHA_IN" ] || [[ "$SHA_IN" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::not a commit SHA: $SHA_IN"; exit 1; }
+          [ -z "$JOB_IN" ] || [[ "$JOB_IN" =~ ^0Af[A-Za-z0-9]{12,15}$ ]] || { echo "::error::not a deploy ID: $JOB_IN"; exit 1; }
+          node pipeline/bin/pipe.mjs ship plan ${SHA_IN:+--sha "$SHA_IN"} ${JOB_IN:+--validated-job "$JOB_IN"} ${TREE_IN:+--validated-tree "$TREE_IN"} | tee -a "$GITHUB_STEP_SUMMARY"
   deploy:
     name: deploy to production
     needs: plan
@@ -57,24 +65,21 @@ jobs:
     environment: production    # deploys only from main (environment rule)
     steps:
       - uses: actions/checkout@v4
-        with: { ref: "${{ needs.plan.outputs.sha }}" }
+        with: { ref: "${{ needs.plan.outputs.sha }}", fetch-depth: 0 }   # history and tags: deletions since the previous release
       - uses: ./.github/actions/sf-auth
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
-      - name: Production validation (the gate's, or here)
+      - name: Production validation (the gate's, when it covers this exact tree; otherwise here)
         id: validate
         env:
-          GATE_JOB: ${{ inputs.validated_job }}
+          GATE_JOB: ${{ needs.plan.outputs.job }}
           VALIDATE_SHA: ${{ needs.plan.outputs.sha }}
+          DELETIONS_FROM: ${{ needs.plan.outputs.previous }}
           GH_TOKEN: ${{ github.token }}
-          PROD_TEST_LEVEL: ${{ vars.PROD_TEST_LEVEL }}
         run: |
-          if [ -n "$GATE_JOB" ]; then
-            [[ "$GATE_JOB" =~ ^0Af[A-Za-z0-9]{12,15}$ ]] || { echo "::error::not a deploy ID: $GATE_JOB"; exit 1; }
-            echo "job=$GATE_JOB" >> "$GITHUB_OUTPUT"; echo "using the gate's validation $GATE_JOB"; exit 0
-          fi
+          if [ -n "$GATE_JOB" ]; then echo "job=$GATE_JOB" >> "$GITHUB_OUTPUT"; echo "using the gate's validation $GATE_JOB"; exit 0; fi
           echo "job=$(./scripts/ci/validate-prod.sh)" >> "$GITHUB_OUTPUT"
       - name: Quick deploy the validated change
         env:
@@ -138,11 +143,12 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Close out (stories, sprint, orgs, release branch)
         env:
-          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           TAG: ${{ needs.tag.outputs.tag || needs.plan.outputs.tag }}
-        run: node pipeline/bin/pipe.mjs closeout run --tag "$TAG"
+          SHA: ${{ needs.plan.outputs.sha }}
+          PREVIOUS: ${{ needs.plan.outputs.previous }}
+        run: node pipeline/bin/pipe.mjs closeout run --tag "$TAG" --sha "$SHA" ${PREVIOUS:+--previous "$PREVIOUS"}
   backmerge:
     name: back-merge into the open sprint
     needs: [plan, closeout]

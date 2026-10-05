@@ -12,10 +12,12 @@ on:
         description: Release pull request number
         required: true
 permissions:
-  contents: read
+  contents: write       # the event log (the metrics branch); the candidate is data here
   pull-requests: write
   issues: write
   statuses: write
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   deploy:
     if: vars.UAT_ENABLED == 'true'

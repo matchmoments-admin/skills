@@ -5,6 +5,7 @@ name: ai-review
 # that). Release PRs and back-merges are not reviewed: their code was reviewed story by story.
 # Cheap by design: Haiku (pipeline/src/verdict.mjs MODELS), the diff handed over as a file, 15 turns, no review when
 # nothing reviewable changed, and with AI_TRIAGE=true a Jev risk score skips low-risk declarative changes.
+run-name: "${{ inputs.pr && format('ai-review PR #{0}', inputs.pr) || format('ai-review (PR #{0} event)', github.event.pull_request.number) }}"
 on:
   pull_request_target:   # runs the base branch's own copy of this file (never the PR's code), so routing is never stale
     types: [opened, ready_for_review, labeled]
@@ -14,20 +15,15 @@ on:
         description: Pull request number
         required: true
 permissions:
-  contents: read
+  contents: write       # the event log only (the metrics branch); the agent acts as the App
   actions: write        # re-runs the gate
   pull-requests: write
   issues: write
   statuses: write
   id-token: write
   checks: read   # the story card reads checks and verdicts
-env:                    # the AI switches (repository variables); the gate and the story card read them
-  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
-  AI_REVIEW: ${{ vars.AI_REVIEW }}
-  AI_FIX: ${{ vars.AI_FIX }}
-  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
-  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
-  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   off:
     if: github.event.label.name == 'ai:review' && vars.AI_REVIEW != 'true'
@@ -117,22 +113,29 @@ jobs:
         if: steps.id.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "${{ steps.pr.outputs.branch }}" | sed -n 's/^STORY=//p')
-          [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is reviewing the change (2 to 5 minutes)"
-      - name: The story and the diff, as files (fewer agent turns)
+        run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "${{ steps.pr.outputs.branch }}" --now "Claude is reviewing the change (2 to 5 minutes)"
+      - uses: ./.pipeline/.github/actions/sf-auth   # read-only use: production's org-wide defaults for the context pack
+        if: steps.id.outcome == 'success'
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The story (with its context pack), the diff and the access findings, as files (fewer agent turns)
         id: story
         if: steps.id.outcome == 'success'
         run: |
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "${{ steps.pr.outputs.branch }}" | sed -n 's/^STORY=//p')
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
-          if [ -n "$KEY" ]; then node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story.md"; else echo "(no story: a pipeline maintenance PR)" > "$RUNNER_TEMP/story.md"; fi
+          git fetch -q origin "${{ steps.pr.outputs.base }}"
+          if [ -n "$KEY" ]; then node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --base "origin/${{ steps.pr.outputs.base }}" --out "$RUNNER_TEMP/story.md"; else echo "(no story: a pipeline maintenance PR)" > "$RUNNER_TEMP/story.md"; fi
           gh pr diff "$PR" > "$RUNNER_TEMP/pr.diff"
+          node .pipeline/pipeline/bin/pipe.mjs access check --base "origin/${{ steps.pr.outputs.base }}" --out "$RUNNER_TEMP/access.md" --report-only
       - uses: ./.pipeline/.github/actions/claude-agent
         if: steps.id.outcome == 'success'
         with:
           role: review
           key: ${{ steps.story.outputs.key }}
+          pr: ${{ env.PR }}
           model: ${{ vars.AI_MODEL }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ steps.id.outputs.token }}
@@ -140,7 +143,7 @@ jobs:
           max-turns: "15"
           allowed-tools: "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments:*)"
           prompt: |
-            Review pull request #${{ env.PR }} following REVIEW.md and CLAUDE.md. The story and its acceptance criteria are in ${{ runner.temp }}/story.md; the full diff is in ${{ runner.temp }}/pr.diff (read both with the Read tool; open other files only when the diff is not enough).
+            Review pull request #${{ env.PR }} following REVIEW.md and CLAUDE.md. The story and its acceptance criteria are in ${{ runner.temp }}/story.md (it ends with "The codebase today": what already exists and production's org-wide defaults); the full diff is in ${{ runner.temp }}/pr.diff; the access check's findings are in ${{ runner.temp }}/access.md (read all three with the Read tool; open other files only when they are not enough).
             Leave an inline comment for each finding (the inline comment tool, or if it is not available:
             gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments -f commit_id="${{ steps.pr.outputs.head }}" -f path=<file> -F line=<line in the new file> -f side=RIGHT -f body="[minor] ..."),
             then post one summary comment with `gh pr comment ${{ env.PR }}`.
@@ -164,18 +167,17 @@ jobs:
         run: |
           gh pr edit "$PR" --remove-label review:pass --remove-label review:changes 2>/dev/null || true
           if [ -n "$NOT_NEEDED" ]; then
-            node pipeline/bin/pipe.mjs status set pipeline/ai-review success "$HEAD" "not needed: $NOT_NEEDED"; echo "verdict=not-needed" >> "$GITHUB_OUTPUT"; exit 0
+            node pipeline/bin/pipe.mjs status set pipeline/ai-review success "$HEAD" "not needed: $NOT_NEEDED" --pr "$PR"; echo "verdict=not-needed" >> "$GITHUB_OUTPUT"; exit 0
           fi
           V=$(node pipeline/bin/pipe.mjs verdict review "$PR" --since "${{ needs.review.outputs.since }}")
           echo "verdict=$V" >> "$GITHUB_OUTPUT"
           case "$V" in
-            pass)    node pipeline/bin/pipe.mjs status set pipeline/ai-review success "$HEAD" "AI review passed"; gh pr edit "$PR" --add-label review:pass ;;
-            changes) node pipeline/bin/pipe.mjs status set pipeline/ai-review failure "$HEAD" "AI review asks for changes"; gh pr edit "$PR" --add-label review:changes ;;
+            pass)    node pipeline/bin/pipe.mjs status set pipeline/ai-review success "$HEAD" "AI review passed" --pr "$PR"; gh pr edit "$PR" --add-label review:pass ;;
+            changes) node pipeline/bin/pipe.mjs status set pipeline/ai-review failure "$HEAD" "AI review asks for changes" --pr "$PR"; gh pr edit "$PR" --add-label review:changes ;;
             *)       node pipeline/bin/pipe.mjs status set pipeline/ai-review error "$HEAD" "the review posted no verdict"; echo "::warning::no verdict" ;;
           esac
       - name: Merge now if a person already approved
         env:
-          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: node pipeline/bin/pipe.mjs gate nudge "$PR"

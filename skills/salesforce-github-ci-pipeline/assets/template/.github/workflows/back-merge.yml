@@ -7,6 +7,8 @@ permissions:
   contents: write
   pull-requests: write
   actions: write        # starts CI without the App
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   merge:
     runs-on: ubuntu-latest

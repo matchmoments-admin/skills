@@ -33,3 +33,10 @@
 - **macOS bash 3.2**: no `mapfile`, and `"${arr[@]}"` of an empty array fails under `set -u` → the scripts use
   `${arr[@]+"${arr[@]}"}` and temp files.
 - **A cancelled build** sends TERM: the script traps INT/TERM to exit, so its EXIT trap deletes the org.
+
+## One engine
+
+- **The bash test selector had drifted from the pipeline's** (flow-test paths, source folders, what "all" ran). →
+  `select-tests.sh` now runs `engine/select.mjs` over a verbatim copy of the pipeline's `tests.mjs` (66 lines of bash
+  replaced by the tested module); the pipeline's `scripts/skills-sync.sh --check` fails CI if the copy differs, and a
+  pipeline test runs `select-tests.sh` against a throwaway git repo.

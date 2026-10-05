@@ -7,8 +7,10 @@ description: Add a throwaway Salesforce scratch org to an existing CI build (Bui
 
 One script, one step: `scripts/scratch/scratch-ci.sh run` creates a scratch org tagged with the build, deploys the
 branch, runs the relevant tests (JUnit out), and deletes the org on every exit, including a cancelled build.
-`scratch-ci.sh sweep` deletes CI orgs a killed agent left behind. Plain bash with `sf`, `jq` and `git`; no other
-dependencies. Proven end to end against a real Dev Hub: 13 of 27 Apex tests and 1 Flow test selected for a Flow
+`scratch-ci.sh sweep` deletes CI orgs a killed agent left behind. Bash with `sf`, `jq`, `git` and Node (which `sf`
+needs anyway); no other dependencies. Test selection is the GitHub pipeline's own tested engine
+([`scripts/engine/tests.mjs`](scripts/engine/tests.mjs), a verbatim copy of its `pipeline/src/tests.mjs`), so a fix to
+how tests are chosen lands in both skills. Proven end to end against a real Dev Hub: 13 of 27 Apex tests and 1 Flow test selected for a Flow
 change, org created, deployed, passed, deleted, in about 6 minutes.
 
 For the full GitHub delivery pipeline (story orgs, AI, gates, releases), use `salesforce-github-ci-pipeline`
@@ -46,7 +48,7 @@ Done when: a scratch org from the definition deploys the source with no errors.
 
 ## Phase 2: The step
 
-1. Copy [`scripts/`](scripts) to the repo as `scripts/scratch/` (`scratch-ci.sh`, `select-tests.sh`).
+1. Copy [`scripts/`](scripts) to the repo as `scripts/scratch/` (`scratch-ci.sh`, `select-tests.sh`, and `engine/`).
 2. Add the step from [`assets/buildkite/pipeline.scratch.yml`](assets/buildkite/pipeline.scratch.yml) to the
    pipeline (Buildkite). Other CIs: one job that runs `scripts/scratch/scratch-ci.sh run` with the same env, keeps
    `test-results/` as artifacts and test reports, and never runs more jobs at once than the active allowance.
@@ -71,7 +73,9 @@ Done when: `sf data query -o <prod> -q "SELECT Description FROM ScratchOrgInfo W
 [`scripts/select-tests.sh`](scripts/select-tests.sh) `<base>`: a changed test class runs itself; a changed class
 runs every test class that names it; a changed trigger or record-triggered Flow runs the test classes that name its
 object, plus the Flow's own Flow tests; anything else (fields, objects, layouts, permission sets, validation rules),
-any deletion, or code no test names runs **all** local tests. No Salesforce change: no org at all.
+any deletion, or code no test names runs **all** local tests (and every Flow test). No Salesforce change: no org at
+all. `select-tests.sh` runs [`scripts/engine/select.mjs`](scripts/engine/select.mjs) over the pipeline's
+`selectTests()`; do not edit `engine/tests.mjs` here: change it in the pipeline and run its `scripts/skills-sync.sh`.
 
 ## References
 

@@ -21,23 +21,20 @@ permissions:
 concurrency:
   group: ci-${{ github.head_ref || inputs.ref || github.ref_name }}   # one CI per branch, whatever started it
   cancel-in-progress: true
-env:                    # the AI switches (repository variables); the gate and the story card read them
-  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
-  AI_REVIEW: ${{ vars.AI_REVIEW }}
-  AI_FIX: ${{ vars.AI_FIX }}
-  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
-  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
-  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   static:
     name: static checks (no org)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read        # runs the PR's own code (lint, unit tests): no token that can post a verdict
     env:
       REF: ${{ inputs.ref || github.head_ref || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
-        with: { ref: "${{ inputs.ref || github.ref }}", fetch-depth: 0 }
+        with: { ref: "${{ inputs.ref || github.ref }}", fetch-depth: 0, persist-credentials: false }   # no token left in .git/config
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
@@ -47,9 +44,15 @@ jobs:
       - name: Story PRs may not change pipeline code
         run: |
           BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
-          git fetch -q origin "$BASE"
+          git rev-parse -q --verify "origin/$BASE" >/dev/null || { echo "::error::origin/$BASE is not in the checkout"; exit 1; }   # fetch-depth 0 brought every branch
           node .pipeline/pipeline/bin/pipe.mjs gate guard --base "origin/$BASE" --branch "$REF"
-      - run: npm ci --no-audit --no-fund
+      - name: Access check (least privilege; blockers fail, warnings annotate the PR)
+        # The checkout's own pipe.mjs: this job holds no secrets and a read-only token, and the guard above keeps a
+        # story's pipeline/ (and config/access-exceptions.json) identical to its base.
+        run: |
+          BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
+          node pipeline/bin/pipe.mjs access check --base "origin/$BASE"
+      - run: npm ci --no-audit --no-fund --ignore-scripts
       - run: npm run format:check
       - run: npm run lint
       - run: npm run test:unit
@@ -60,15 +63,21 @@ jobs:
         with: { login: "false" }
       - name: Code analyzer (PMD and ESLint)
         run: |
+          sf code-analyzer rules --rule-selector "pmd:Security" --view table 2>/dev/null | grep -E "Apex(CRUD|Sharing|SOQL)" || true   # code-analyzer.yml raises these to 2
           sf code-analyzer run --workspace force-app --severity-threshold 2 --view table
   apex:
     name: deploy and Apex tests (scratch org)
     runs-on: ubuntu-latest
-    # Release PRs and back-merges test on the sprint's staging org (no new scratch org), one at a time with staging-deploy.
-    concurrency:
-      group: ${{ (startsWith(inputs.ref || github.head_ref || github.ref_name, 'release/') || startsWith(inputs.ref || github.head_ref || github.ref_name, 'backmerge-')) && 'org-staging' || format('ci-apex-{0}', github.run_id) }}
-      cancel-in-progress: false
-    timeout-minutes: 30
+    # A story tests in its own org, release PRs and back-merges in the sprint's staging org: each in that org's lane
+    # (pipe lane), so CI never tests code another job deployed meanwhile, and a queued run is never dropped.
+    permissions:
+      contents: write       # the org's lane only (a ref under refs/locks/); the PR is data here, never run
+      pull-requests: write
+      statuses: write       # "UI test not needed" verdict
+      checks: write         # the live "Salesforce tests" check
+      issues: write         # the story card
+      actions: read
+    timeout-minutes: 75   # 45 of them may be waiting for the org's lane
     needs: static
     env:
       REF: ${{ inputs.ref || github.head_ref || github.ref_name }}
@@ -102,7 +111,7 @@ jobs:
         run: |
           node .pipeline/pipeline/bin/pipe.mjs gate ui-needed --base "origin/$BASE" > ui.txt; cat ui.txt
           if grep -q "^no UI-facing" ui.txt; then
-            node .pipeline/pipeline/bin/pipe.mjs status set pipeline/ui-test success "${{ github.event.pull_request.head.sha }}" "not needed: no UI-facing changes"
+            node .pipeline/pipeline/bin/pipe.mjs status set pipeline/ui-test success "${{ github.event.pull_request.head.sha }}" "not needed: no UI-facing changes" --pr "${{ github.event.pull_request.number }}"
           fi
       - uses: ./.pipeline/.github/actions/sf-auth
         if: steps.delta.outputs.none != 'true'
@@ -112,10 +121,7 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: The story card says CI is running
         if: steps.delta.outputs.none != 'true'
-        run: |
-          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$REF" | sed -n 's/^STORY=//p')
-          echo "STORY_KEY=$KEY" >> "$GITHUB_ENV"
-          [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "CI is deploying the change to its scratch org and testing it"
+        run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "$REF" --now "CI is deploying the change to its scratch org and testing it"
       - name: The branch's org (a temporary one, with the full source, if it has none)
         if: steps.delta.outputs.none != 'true'
         id: org
@@ -126,6 +132,7 @@ jobs:
             backmerge-*) TARGET="sprint:${BASE#release/}" ;;    # a back-merge into the release branch: same org
             *)           TARGET="$REF" ;;                       # a story: its own org
           esac
+          if node .pipeline/pipeline/bin/pipe.mjs lane acquire "$TARGET"; then echo "lane=$TARGET" >> "$GITHUB_OUTPUT"; fi   # not an org target: a temporary org needs no lane
           if ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$TARGET"); then echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
           else
             ALIAS="ci-${{ github.run_id }}"
@@ -158,8 +165,11 @@ jobs:
         if: always() && steps.delta.outputs.none != 'true'
         with: { name: apex-results, path: test-results }
       - name: The story card says CI failed, and where to look
-        if: failure() && env.STORY_KEY != ''
-        run: node .pipeline/pipeline/bin/pipe.mjs story card "$STORY_KEY" --now "CI (deploy or tests)" --failed --retry "fix and push; with AI on, the fixer starts by itself"
+        if: failure()
+        run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "$REF" --now "CI (deploy or tests)" --failed --retry "fix and push; with AI on, the fixer starts by itself"
+      - name: Let the next job into the org's lane
+        if: always() && steps.org.outputs.lane != ''
+        run: node .pipeline/pipeline/bin/pipe.mjs lane release "${{ steps.org.outputs.lane }}" || true
       - name: Delete the temporary org
         if: always() && steps.org.outputs.temp == 'true'
         run: node .pipeline/pipeline/bin/pipe.mjs org remove-tagged "${{ steps.org.outputs.alias }}"   # by its tag, via the Dev Hub: works even if creation half-failed
@@ -200,7 +210,6 @@ jobs:
         with: { ref: main }
       - name: Merge now if a person already approved
         env:
-          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: |

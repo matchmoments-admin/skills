@@ -1,5 +1,6 @@
 name: metrics
-# Weekly delivery telemetry (DORA, AI cost per role, workflow health) from GitHub data: written to the run summary,
+# Weekly delivery telemetry from the event log on the `metrics` branch (DORA to production, time per stage, what PRs
+# waited on, org minutes, AI cost per role; pipeline/src/events.mjs) and workflow health from GitHub data: written to the run summary,
 # to METRICS.md on the unprotected `metrics` branch (linked from the README), and to the issue "Delivery metrics".
 # Run by hand any time (days = window).
 on:
@@ -16,6 +17,8 @@ permissions:
   contents: write         # METRICS.md on the metrics branch
   issues: write
   pull-requests: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   report:
     runs-on: ubuntu-latest
@@ -46,4 +49,5 @@ jobs:
             "${{ github.server_url }}/${{ github.repository }}/actions/workflows/metrics.yml" "$(tail -n +2 metrics.md)" > m/METRICS.md
           git -C m add METRICS.md
           git -C m diff --cached --quiet || git -C m commit -qm "metrics: $(date -u +%Y-%m-%d)"
-          git -C m push -q origin metrics
+          # events land on the same branch all the time: rebase onto them and retry
+          for _ in 1 2 3 4 5; do git -C m push -q origin metrics && exit 0; git -C m pull -q --rebase origin metrics; done; exit 1

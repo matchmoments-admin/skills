@@ -34,7 +34,7 @@ export function plan({ releases = [], mergedIntoRelease = {}, sprintStories = {}
   return out;
 }
 
-export async function gather({ gh, git }, tracker) {
+export async function gather({ gh, git }, tracker, { sha = "HEAD", previous = null } = {}) {
   git(["fetch", "-q", "--prune", "origin", "+refs/heads/release/*:refs/remotes/origin/release/*", "--tags"], { allowFail: true });
   const branches = git(["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/release/"]).split("\n").filter(Boolean);
   // A sprint has shipped when its release PR merged into main. (Being an ancestor of main is not enough:
@@ -50,11 +50,12 @@ export async function gather({ gh, git }, tracker) {
     mergedIntoRelease[sprint] = (gh(["pr", "list", "--base", releaseBranch(sprint), "--state", "merged", "--limit", "200", "--json", "headRefName"]) || []).map((p) => p.headRefName);
     sprintStories[sprint] = await tracker.sprintStories(sprint);
   }
-  // New in this release = merged into main, in HEAD, and not already in the previous release's tag.
-  const prevTag = git(["describe", "--tags", "--abbrev=0", "HEAD^"], { allowFail: true }) || null;
+  // New in this release = merged into main, in the shipped SHA, and not already in the previous release's tag (both
+  // given by the release run: main may have moved on since, and HEAD^ is not the previous release).
+  const prevTag = previous;
   const inRef = (oid, ref) => git(["merge-base", "--is-ancestor", oid, ref], { allowFail: true }) !== null;
   const mergedIntoMain = (gh(["pr", "list", "--base", "main", "--state", "merged", "--limit", "100", "--json", "number,headRefName,mergeCommit"]) || [])
-    .filter((p) => p.mergeCommit?.oid && inRef(p.mergeCommit.oid, "HEAD") && !(prevTag && inRef(p.mergeCommit.oid, prevTag)));
+    .filter((p) => p.mergeCommit?.oid && inRef(p.mergeCommit.oid, sha) && !(prevTag && inRef(p.mergeCommit.oid, prevTag)));
   return { releases, mergedIntoRelease, sprintStories, mergedIntoMain };
 }
 
@@ -87,4 +88,18 @@ export async function apply(p, { tag, tracker, orgs, git, gh, log = console.erro
     else log(`deleted ${p.deleteBranch}`);
   }
   log(`close-out: sprint=${p.sprint || "none"} shipped=[${p.ship}] carried=[${p.carry}] hotfixes=[${p.hotfix.map((h) => h.key)}]`);
+}
+
+/** The release PR's body: what merged into the sprint and the sprint's stories. */
+export async function releaseNotes({ gh }, tracker, sprint) {
+  const merged = gh(["pr", "list", "--base", releaseBranch(sprint), "--state", "merged", "--limit", "200", "--json", "number,title,author"]) || [];
+  const stories = await tracker.sprintStories(sprint);
+  return [
+    `## Release ${sprint}`, "", "### Merged changes",
+    ...(merged.length ? merged.map((p) => `- #${p.number} ${p.title} (@${p.author.login})`) : ["none"]), "",
+    "### Sprint stories", ...(stories.length ? stories.map((s) => `- ${s.key} ${s.title} [${s.state}]`) : ["none"]), "",
+    "### How this ships",
+    "- CI and the staging regression must be green on the release branch.",
+    "- Approve this PR (Files changed > Review changes > Approve). The gate validates it against production, merges it, and the release job quick-deploys exactly what was validated.",
+  ].join("\n");
 }

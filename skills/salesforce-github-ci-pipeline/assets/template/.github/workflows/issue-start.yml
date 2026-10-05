@@ -13,18 +13,13 @@ permissions:
   pull-requests: read   # the story card reads checks and verdicts
   checks: read
   statuses: read
-env:                    # the AI switches (repository variables); the gate and the story card read them
-  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
-  AI_REVIEW: ${{ vars.AI_REVIEW }}
-  AI_FIX: ${{ vars.AI_FIX }}
-  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
-  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
-  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   start:
     if: github.event_name == 'repository_dispatch' || github.event.label.name == 'start'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 70   # 45 of them may be waiting for the org's lane
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -68,11 +63,19 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
-      - name: The story's scratch org (production's shape + the branch's code)
+      - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "story:$KEY"
+      - name: The story's scratch org (production's shape + the branch's code; a half-made one is finished)
         run: node .pipeline/pipeline/bin/pipe.mjs org ensure "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}
+      - name: Let the next job into the org's lane
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane release "story:$KEY" || true
       - name: The story card (one comment, kept up to date at every stage)
         env:
-          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
