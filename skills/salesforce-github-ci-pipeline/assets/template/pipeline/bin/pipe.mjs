@@ -245,7 +245,9 @@ async function main() {
       const facts = gate.gather(pr, io, { openReleaseBranch: openRelease(), ai: names.aiFeatures(), uat: process.env.UAT_ENABLED === "true" });
       const d = gate.evaluate(facts);
       const reasons = d.reasons.map((r) => `- ${r}`).join("\n");
+      const gs = gate.gateStatus(d);
       output({
+        gate_state: gs.state, gate_description: gs.description,
         route: d.route || "", mergeable: d.mergeable, story: d.story || "", reasons, head: facts.pr.headRefOid,
         open: facts.pr.state === "OPEN", merge: d.rules?.merge || "", validate: d.validate || false, after: (d.after || []).join(" "),
         lock: ["release", "hotfix", "maintenance"].includes(d.route) ? "main" : `pr-${pr}`,
@@ -282,6 +284,12 @@ async function main() {
       const state = [names.CHECKS.static, names.CHECKS.apex].map((n) => [n, gate.latestCheck(runs, n)]);
       output({ green: state.every(([, c]) => c === "success") });
       return say(state.map(([n, c]) => `${n}: ${c}`).join("\n"));
+    }
+    case "gate followups": {
+      const pr = io.gh(["pr", "view", String(arg(0)), "--json", "headRefName,baseRefName,files"]);
+      const after = gate.followUps(pr, (pr.files || []).map((f) => f.path));
+      output({ after: after.join(" "), route: gate.route(pr) || "", story: names.storyOf(pr.headRefName) || "" });
+      return say(after.join(" ") || "none");
     }
     case "gate nudge": {
       // Runs after every check or verdict lands: re-run the gate if a person signed off, and refresh the story card.

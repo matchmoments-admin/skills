@@ -12,6 +12,27 @@
 import { CHECKS, storyOf, sprintOf, uiFacing, storySpec } from "./conventions.mjs";
 
 export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", uat: "pipeline/uat" };
+/** The gate's own verdict on the PR's head. The branch rules require it, so GitHub's merge button stays locked until
+ *  the gate is satisfied; admins (and any team the rules name) can still bypass in an emergency. */
+export const GATE_STATUS = "pipeline/gate";
+
+/** What pipeline/gate says for a decision: success when it may merge; failure when something failed; else pending. */
+export function gateStatus(decision) {
+  if (decision.mergeable) return { state: "success", description: "All requirements met: the gate merges it" };
+  const r = decision.reasons || [];
+  const failed = r.some((x) => /did not pass|is failure|UAT failed|production rejected|merge conflicts/.test(x));
+  const first = String(r[0] || "waiting").replace(/\s*\(Review changes > Approve\)/, "");
+  const more = r.length > 1 ? ` (+${r.length - 1} more)` : "";
+  return { state: failed ? "failure" : "pending", description: `${first}${more}`.slice(0, 139) };
+}
+
+/** After a merge the gate did not make (an emergency bypass): the follow-ups the gate would have started. */
+export function followUps(pr, files = []) {
+  const r = route(pr);
+  if (!r) return [];
+  const forceApp = files.some((f) => f.startsWith("force-app/"));
+  return RULES[r].after.map((a) => (a === "release-if-force-app" ? (forceApp ? "release" : null) : a)).filter(Boolean);
+}
 export const TRUSTED_STATUS_CREATORS = ["github-actions[bot]"];
 const PIPELINE_AUTHORS = /^(github-actions|app\/.+|.+\[bot\]|.+-pipeline)$/;
 

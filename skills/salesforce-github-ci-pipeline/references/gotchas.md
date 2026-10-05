@@ -120,3 +120,11 @@ Every entry happened in a real run. Search this file for the error text you see.
   → Every agent step passes `allowed-bots: ${{ vars.PIPELINE_BOTS }}`; a pipeline test checks every workflow.
 - **Keep the skill in step**: after a pipeline change run `scripts/skills-sync.sh` (text from the skills repo,
   template from the pipeline); CI's `--check` fails a PR whose skill template is stale.
+
+## Merge button
+
+- **GitHub's merge button ignored the gate** (AI review, UI test, UAT, sign-off are the gate's, not the branch
+  rules'). → The gate posts `pipeline/gate`; the rulesets require it **with `integration_id` 15368** (GitHub Actions),
+  or anyone with write access could post a fake success with their own token.
+- **An emergency merge skipped staging or the release** → the `merged` workflow (on `pull_request_target: closed`,
+  merged by a non-bot) starts the gate's follow-ups; with no gate validation id, `release` validates first.

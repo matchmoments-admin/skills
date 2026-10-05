@@ -1,0 +1,72 @@
+name: merged
+# An emergency merge: someone allowed to bypass the branch rules (admins, plus any team the rules name) merged a PR
+# without the gate. GitHub records the bypass in the audit log; this says so on the PR and the story, and starts the
+# follow-ups the gate would have: staging for sprint work; for main the release, which validates against production
+# itself before it deploys; and deleting the story's org. Merges made by the gate (the pipeline App) need nothing here.
+on:
+  pull_request_target:   # the base branch's own copy of this file; never runs the PR's code
+    types: [closed]
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  pull-requests: write
+  checks: read
+  statuses: read
+env:                    # the AI switches (repository variables); the story card reads them
+  AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
+  AI_REVIEW: ${{ vars.AI_REVIEW }}
+  AI_FIX: ${{ vars.AI_FIX }}
+  AI_UI_TEST: ${{ vars.AI_UI_TEST }}
+  AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
+  AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+jobs:
+  emergency:
+    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.merged_by.login, '[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      BASE: ${{ github.event.pull_request.base.ref }}
+      WHO: ${{ github.event.pull_request.merged_by.login }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: What the gate would have started
+        id: f
+        run: node pipeline/bin/pipe.mjs gate followups "$PR"
+      - name: Say who bypassed the gate
+        if: steps.f.outputs.after != ''
+        env:
+          AFTER: ${{ steps.f.outputs.after }}
+        run: |
+          gh pr comment "$PR" --body "$(printf '**Emergency merge** by @%s: merged without the pipeline gate (branch rules bypass; recorded in the organisation audit log). Follow-ups started as the gate would have: `%s`.' "$WHO" "$AFTER")"
+      - uses: ./.github/actions/sf-auth
+        if: contains(steps.f.outputs.after, 'delete-story-org')
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Follow-ups
+        if: steps.f.outputs.after != ''
+        env:
+          AFTER: ${{ steps.f.outputs.after }}
+          STORY: ${{ steps.f.outputs.story }}
+          BOARD_PROJECT: ${{ vars.BOARD_PROJECT }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+        run: |
+          for step in $AFTER; do
+            case "$step" in
+              staging) gh workflow run staging-deploy.yml --ref "$BASE" ;;
+              release) gh workflow run release.yml --ref main ;;   # no validation id: it validates against production first
+            esac
+          done
+          [ -z "$STORY" ] || node pipeline/bin/pipe.mjs story card "$STORY"
+          for step in $AFTER; do
+            case "$step" in
+              delete-story-org) [ -z "$STORY" ] || node pipeline/bin/pipe.mjs org remove "story:$STORY" || echo "::warning::the janitor will delete it" ;;
+            esac
+          done

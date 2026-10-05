@@ -656,3 +656,19 @@ test("every workflow that runs the Claude agent allows the pipeline's own bots (
     assert.equal(allowed, agents, `${f}: ${agents} agent step(s), ${allowed} with allowed-bots`);
   }
 });
+
+// ---------------------------------------------------------------- the gate's own status and emergency merges
+test("pipeline/gate: success only when mergeable; failure when something failed; pending while waiting", () => {
+  assert.deepEqual(gate.gateStatus({ mergeable: true, reasons: [] }), { state: "success", description: "All requirements met: the gate merges it" });
+  assert.deepEqual(gate.gateStatus({ mergeable: false, reasons: ["not approved (Review changes > Approve)", "AI review has not run on this code"] }), { state: "pending", description: "not approved (+1 more)" });
+  assert.equal(gate.gateStatus({ mergeable: false, reasons: ["UI test did not pass (failure)"] }).state, "failure");
+  assert.ok(gate.gateStatus({ mergeable: false, reasons: ["x".repeat(300)] }).description.length <= 139);
+});
+
+test("follow-ups after an emergency merge are the ones the gate would have started", () => {
+  assert.deepEqual(gate.followUps({ headRefName: "issue-5", baseRefName: "release/w" }), ["staging", "delete-story-org"]);
+  assert.deepEqual(gate.followUps({ headRefName: "issue-5", baseRefName: "main" }), ["release", "delete-story-org"]);
+  assert.deepEqual(gate.followUps({ headRefName: "release/w", baseRefName: "main" }), ["release"]);
+  assert.deepEqual(gate.followUps({ headRefName: "fix/x", baseRefName: "main" }, ["pipeline/a.mjs"]), []);
+  assert.deepEqual(gate.followUps({ headRefName: "fix/x", baseRefName: "main" }, ["force-app/a.cls"]), ["release"]);
+});

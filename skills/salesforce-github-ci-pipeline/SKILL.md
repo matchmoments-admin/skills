@@ -56,7 +56,13 @@ Then the pipeline App, which only a person can confirm: [`scripts/create-app.sh`
 
 Then the variables: `PIPELINE_BOTS=github-actions,<app-slug>` (the only bots allowed to start agents; bare logins, no `[bot]`) and each AI switch the user chose in Phase 0 (`gh variable set AI_REVIEW --body true`). Leave the rest unset.
 
-Done when: a direct `git push` to `main` is refused with GH013, `gh api orgs/<org>/installations` lists the App, the repo's workflow permissions show `can_approve_pull_request_reviews: true`, and `gh variable list` shows exactly the chosen switches.
+**Merge button and emergencies.** Both rulesets require `pipeline/gate` from the GitHub Actions app (integration
+15368): the gate posts it, so GitHub's merge button stays locked until every requirement is met. Emergency approval
+is the rulesets' bypass list ("for pull requests only"): repository admins by default; for a team lead, add their team
+(`{"actor_type":"Team","actor_id":<team id>,"bypass_mode":"pull_request"}`). The `merged` workflow comments who
+bypassed and still starts the follow-ups (a release validates against production itself).
+
+Done when: a direct `git push` to `main` is refused with GH013, a PR's merge button says "pipeline/gate expected", `gh api orgs/<org>/installations` lists the App, the repo's workflow permissions show `can_approve_pull_request_reviews: true`, and `gh variable list` shows exactly the chosen switches.
 
 ## Phase 4 — Tracer story
 

@@ -20,7 +20,7 @@ permissions:
   issues: write         # the story card
   pull-requests: write
   actions: write
-  statuses: read
+  statuses: write       # pipeline/gate: the status the branch rules require before GitHub allows a merge
 env:                    # the AI switches (repository variables); the gate and the story card read them
   AI_IMPLEMENT: ${{ vars.AI_IMPLEMENT }}
   AI_REVIEW: ${{ vars.AI_REVIEW }}
@@ -58,6 +58,12 @@ jobs:
         run: |
           [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::not a PR number: $PR"; exit 1; }
           node pipeline/bin/pipe.mjs gate evaluate "$PR"
+      - name: The gate's verdict on this commit (pipeline/gate, required by the branch rules)
+        if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != ''
+        env:
+          STATE: ${{ steps.gate.outputs.gate_state }}
+          DESC: ${{ steps.gate.outputs.gate_description }}
+        run: node pipeline/bin/pipe.mjs status set pipeline/gate "$STATE" "${{ steps.gate.outputs.head }}" "$DESC"
       - name: Explain what is missing (once per distinct reason list, open PRs only)
         if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != '' && steps.gate.outputs.mergeable != 'true'
         env:
