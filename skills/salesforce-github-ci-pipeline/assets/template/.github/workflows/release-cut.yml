@@ -7,7 +7,7 @@ permissions:
   contents: read
   actions: write        # starts CI on the release candidate without the App
   pull-requests: write
-  issues: read
+  issues: write         # the release card
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
@@ -38,6 +38,7 @@ jobs:
           if [ -n "$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')" ]; then echo "release PR already open"; exit 0; fi
           node pipeline/bin/pipe.mjs release notes "$SPRINT" > notes.md
           gh pr create --base main --head "$REL" --title "Release $SPRINT" --body-file notes.md --label release
+          GH_TOKEN="${{ github.token }}" node pipeline/bin/pipe.mjs pr card "$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number')" || true
           [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$REL" -f ref="$REL"
           # UAT_ENABLED: the release candidate goes to UAT for business sign-off
           if [ "${{ vars.UAT_ENABLED }}" = "true" ]; then

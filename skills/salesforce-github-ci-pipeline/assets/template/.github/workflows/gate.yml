@@ -58,8 +58,8 @@ jobs:
           STATE: ${{ steps.gate.outputs.gate_state }}
           DESC: ${{ steps.gate.outputs.gate_description }}
         run: node pipeline/bin/pipe.mjs status set pipeline/gate "$STATE" "${{ steps.gate.outputs.head }}" "$DESC"
-      - name: Explain what is missing (once per distinct reason list, open PRs only)
-        if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != '' && steps.gate.outputs.mergeable != 'true'
+      - name: Explain what is missing (PRs without a card only, e.g. pipeline maintenance; once per distinct reason list)
+        if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != '' && steps.gate.outputs.mergeable != 'true' && steps.gate.outputs.story == '' && steps.gate.outputs.route != 'release'
         env:
           REASONS: ${{ steps.gate.outputs.reasons }}
         run: |
@@ -68,12 +68,12 @@ jobs:
           case "$REASONS" in *"not approved"*|*"no sign-off"*|*"approve again"*) BODY=$(printf '%s\n\n**Approve here:** %s (Review changes > Approve > Submit review)' "$BODY" "$URL");; esac
           LAST=$(gh pr view "$PR" --json comments --jq '[.comments[] | select(.body | startswith("Not merged yet"))] | last | .body // ""')
           if [ "$LAST" = "$BODY" ]; then echo "already said so"; else gh pr comment "$PR" --body "$BODY"; fi
-      - name: Story card
-        if: steps.gate.outputs.story != ''
+      - name: The card (the story's, or the release card), with what is next
+        if: steps.gate.outputs.story != '' || steps.gate.outputs.route == 'release'
         env:
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
-        run: node pipeline/bin/pipe.mjs story card "${{ steps.gate.outputs.story }}"
+        run: node pipeline/bin/pipe.mjs pr card "$PR"
   ship:
     needs: decide
     if: needs.decide.outputs.mergeable == 'true'
@@ -114,6 +114,11 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The card says what the gate is doing now
+        if: needs.decide.outputs.story != '' || needs.decide.outputs.route == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node pipeline/bin/pipe.mjs pr card "$PR" --now "the gate is ${{ needs.decide.outputs.validate == 'true' && 'validating against production (check-only, the relevant tests), then merging' || 'merging' }}"
       - name: Validate against production (check-only, all tests)
         id: prod
         if: needs.decide.outputs.validate == 'true'
@@ -125,13 +130,8 @@ jobs:
         run: |
           if JOB=$("$GITHUB_WORKSPACE/scripts/ci/validate-prod.sh" 2> "$RUNNER_TEMP/prod-errors.txt"); then echo "job=$JOB" >> "$GITHUB_OUTPUT"; echo "validated as $JOB"; exit 0; fi
           cat "$RUNNER_TEMP/prod-errors.txt"
-          gh pr comment "$PR" --body "$(printf 'Not merged: production rejected this change.\n\n```\n%s\n```' "$(cat "$RUNNER_TEMP/prod-errors.txt")")"
+          node pipeline/bin/pipe.mjs pr card "$PR" --now "production validation" --failed --retry "production rejected it: the Production validation check lists each error"
           exit 1
-      - name: The story card says the gate is merging
-        if: needs.decide.outputs.story != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node pipeline/bin/pipe.mjs story card "${{ needs.decide.outputs.story }}" --now "the gate is ${{ needs.decide.outputs.validate == 'true' && 'validating against production, then merging' || 'merging' }}"
       - name: Merge (only the head the gate decided on)
         id: merge
         env:
@@ -159,10 +159,10 @@ jobs:
           for step in $AFTER; do
             case "$step" in
               staging) gh workflow run staging-deploy.yml --ref "$BASE" ;;      # on the release branch, so the check lands on the release PR's head
-              release) gh workflow run release.yml -f sha="$SHA" -f validated_job="$JOB" -f validated_tree="$TREE" ;;   # quick-deploys only that exact tree
+              release) gh workflow run release.yml --ref main -f sha="$SHA" -f validated_job="$JOB" -f validated_tree="$TREE" ;;   # quick-deploys only that exact tree
             esac
           done
-          [ -z "$STORY" ] || node pipeline/bin/pipe.mjs story card "$STORY"
+          node pipeline/bin/pipe.mjs pr card "$PR"
           for step in $AFTER; do
             case "$step" in
               delete-story-org) [ -z "$STORY" ] || node pipeline/bin/pipe.mjs org remove "story:$STORY" || echo "::warning::could not delete the story org; the janitor will";;

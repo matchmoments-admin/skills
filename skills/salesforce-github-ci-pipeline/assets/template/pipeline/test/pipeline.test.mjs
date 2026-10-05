@@ -23,7 +23,8 @@ import * as closeout from "../src/closeout.mjs";
 import { lane } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
-import { storyCards } from "../src/card.mjs";
+import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
+import * as actions from "../src/actions.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -468,7 +469,8 @@ test("story card: before the PR it says how to build; with a PR it tracks each s
   const base = { key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/2026-w41" };
   const before = storyCard({ ...base, ai: { implement: true } });
   assert.ok(before.startsWith(CARD_MARK));
-  assert.match(before, /\*\*Next:\*\* Build it, or comment \*\*\/build\*\*/);
+  assert.match(before, /\*\*Next:\*\* Build it, or tick \*\*Build it with Claude\*\*/);
+  assert.match(before, /- \[ \] 🤖 Build it with Claude <!-- act:build -->/);
 
   const f = { ...open(fixture(23)), ai: {}, statuses: [], reviews: [] };
   const pr = { ...f.pr, title: "Escalate cases" };
@@ -477,7 +479,7 @@ test("story card: before the PR it says how to build; with a PR it tracks each s
   assert.match(waiting, /➖ \| AI review \| off: your approval is the review/);
 
   const failedReview = { ...f, ai: { review: true, fix: true }, statuses: [{ ...ok(f.pr.headRefOid, gate.STATUS.review), state: "failure" }] };
-  assert.match(storyCard({ ...base, ai: failedReview.ai, pr, facts: failedReview, decision: gate.evaluate(failedReview) }), /Address the review comments .*\*\*ai:fix\*\*/);
+  assert.match(storyCard({ ...base, ai: failedReview.ai, pr, facts: failedReview, decision: gate.evaluate(failedReview) }), /Address the review comments .*tick \*\*Fix … with Claude\*\*[\s\S]*act:fix[\s\S]*act:review/);
 
   const shipped = storyCard({ ...base, pr: { ...pr, state: "MERGED" }, facts: f, shipped: { tag: "v1", url: "https://x/v1" } });
   assert.match(shipped, /Done: live in production since \[v1\]/);
@@ -929,7 +931,7 @@ test("a production validation that cannot start says why", () => {
 
 test("shipping wiring: the gate passes the SHA and the validated tree; nothing queued is lost; UAT signs only what it runs", () => {
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
-  assert.match(wf("gate"), /release.yml -f sha="\$SHA" -f validated_job="\$JOB" -f validated_tree="\$TREE"/);
+  assert.match(wf("gate"), /release.yml --ref main -f sha="\$SHA" -f validated_job="\$JOB" -f validated_tree="\$TREE"/);
   assert.match(wf("gate"), /ship candidate --pr/);
   assert.doesNotMatch(wf("gate"), /refs\/pull\/\$\{\{ env.PR \}\}\/merge/);
   assert.match(wf("gate"), /ship renudge --base/);
@@ -937,7 +939,8 @@ test("shipping wiring: the gate passes the SHA and the validated tree; nothing q
   assert.match(wf("release"), /closeout run --tag "\$TAG" --sha "\$SHA"/);
   assert.match(wf("merged"), /-f sha="\$MERGED_SHA"/);
   assert.match(wf("scratch-janitor"), /ship watchdog/);
-  assert.match(wf("commands"), /startswith\("In UAT"\)/);
+  assert.match(readFileSync(new URL("../src/actions.mjs", import.meta.url), "utf8"), /startsWith\("In UAT"\)/);
+  assert.match(wf("commands"), /pipe.mjs act /);
 });
 
 // ---------------------------------------------------------------- lanes and resumable orgs
@@ -958,8 +961,11 @@ test("org registry: a live org that never finished is completed, not trusted; a 
 /** A fake GitHub git-refs API with the atomic create and fast-forward-only update the lane relies on. */
 function fakeRefs({ runs = {} } = {}) {
   const refs = {}, commits = { base: { tree: { sha: "T" } } };
+  let failClaims = 0;
   let n = 0;
   const api = (method, path, body) => {
+    if (method === "GET" && path.endsWith("/commits/main")) return { commit: { tree: { sha: "T" } } };
+    if (method === "POST" && path.endsWith("/git/commits") && failClaims > 0) { failClaims--; return { status: 422, message: "tree not found" }; }
     if (method === "POST" && path.endsWith("/git/commits")) { const sha = `c${++n}`; commits[sha] = { message: body.message, parents: body.parents, tree: { sha: body.tree } }; return { sha }; }
     if (method === "GET" && path.includes("/git/commits/")) return commits[path.split("/").pop()];
     if (method === "GET" && path.includes("/actions/runs/")) return { status: runs[path.split("/").pop()] || "in_progress" };
@@ -970,7 +976,7 @@ function fakeRefs({ runs = {} } = {}) {
     if (method === "DELETE") { delete refs[name]; return {}; }
     throw new Error(`${method} ${path}`);
   };
-  return { api, refs, commits };
+  return { api, refs, commits, failClaims: (n) => { failClaims = n; } };
 }
 
 test("lane: one holder at a time; the next waits its turn and is never dropped; only the holder releases", () => {
@@ -1215,4 +1221,99 @@ test("the event log is read from a real metrics branch (fetch, ls-tree, one cat-
     assert.deepEqual(got.map((e) => e.kind).sort(), ["agent", "gate"]);
     assert.equal(got.find((e) => e.kind === "gate").why, "→ waiting");
   } finally { process.chdir(here); }
+});
+
+test("every dispatch names its ref (without one, gh needs contents: read to find the default branch)", () => {
+  for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml"))) {
+    const y = readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8");
+    for (const line of y.split("\n").filter((l) => /gh workflow run /.test(l))) assert.match(line, /--ref /, `${f}: ${line.trim()}`);
+  }
+  const calls = [];
+  codeHost({ io: { gh: (a) => calls.push(a.join(" ")) }, env: { GH_REPO: "o/r" } }).dispatch("gate.yml", { pr: 7 });
+  assert.deepEqual(calls, ["workflow run gate.yml --ref main -f pr=7"]);
+});
+
+test("lane: a claim that cannot be written is said and retried, never mistaken for waiting; five in a row fail", () => {
+  const f = fakeRefs();
+  const logs = [];
+  const mk = () => lane({ api: f.api, repo: "o/r", holder: { run: "9", job: "ci", sha: "gone" }, now: () => 0, sleep: () => {}, log: (m) => logs.push(m) });
+  f.failClaims(2);
+  assert.equal(mk().acquire("org-staging"), true);
+  assert.equal(logs.filter((m) => /could not write the claim \(422: tree not found\)/.test(m)).length, 2);
+  mk().release("org-staging");
+  f.failClaims(9);
+  assert.throws(() => mk().acquire("org-staging"), /5 times in a row/);
+});
+
+// ---------------------------------------------------------------- card actions (tick boxes) and the release card
+test("actions: commands and ticked boxes name the same actions; only write access, never a bot", () => {
+  assert.deepEqual(actions.command("/uat-fail the totals are wrong\nmore"), { id: "uat-fail", arg: "the totals are wrong" });
+  assert.deepEqual(actions.command("/SHIP"), { id: "ship", arg: "" });
+  assert.equal(actions.command("ship it please"), null);
+  const card = actions.checklist(["ship", "review"]).join("\n");
+  assert.deepEqual(actions.ticked(card, card.replace("- [ ] 🚀", "- [x] 🚀")), ["ship"]);
+  assert.deepEqual(actions.ticked(card, card), [], "an edit that ticks nothing does nothing");
+  assert.deepEqual(actions.ticked(card.replace("- [ ] 🚀", "- [x] 🚀"), card.replace("- [ ] 🚀", "- [x] 🚀")), [], "already ticked: not a new tick");
+  assert.deepEqual(actions.allowed(["build", "start", "fix"], { implement: true }), ["build", "start"]);
+  assert.equal(actions.mayAct({ login: "dev", type: "User", permission: "write" }), true);
+  for (const bad of [{ login: "dev", type: "User", permission: "read" }, { login: "__owner__-pipeline[bot]", type: "Bot", permission: "admin" }]) assert.equal(actions.mayAct(bad), false);
+});
+
+test("actions: a sign-off is a trusted status on the head (into the sprint); into main it asks for a GitHub approval", () => {
+  const did = [];
+  const host = { repoUrl: "https://github.com/o/r", status: (...a) => did.push(["status", ...a]), dispatch: (...a) => did.push(["dispatch", a[0]]) };
+  const deps = { host, appGh: (a) => did.push(["gh", a.join(" ")]), gh: () => {}, inUat: (sha) => sha === "in-uat" };
+  const story = { headRefName: "issue-106", headRefOid: "h1", baseRefName: "release/w45" };
+  assert.match(actions.perform("ship", "", { number: 108, isPr: true, pr: story }, "dev", deps).done, /signed off by @dev/);
+  assert.deepEqual(did.slice(0, 2), [["status", "h1", "pipeline/sign-off", "success", "Signed off by @dev"], ["dispatch", "gate.yml"]]);
+  assert.match(actions.perform("ship", "", { number: 7, isPr: true, pr: { ...story, baseRefName: "main" } }, "dev", deps).said, /need a GitHub approval/);
+  const release = { headRefName: "release/w45", headRefOid: "not-yet", baseRefName: "main" };
+  assert.match(actions.perform("uat-pass", "", { number: 110, isPr: true, pr: release }, "dev", deps).said, /UAT is not running/);
+  did.length = 0;
+  actions.perform("uat-pass", "", { number: 110, isPr: true, pr: { ...release, headRefOid: "in-uat" } }, "dev", deps);
+  assert.deepEqual(did[0], ["status", "in-uat", "pipeline/uat", "success", "Signed off in UAT by @dev"]);
+  did.length = 0;
+  actions.perform("review", "", { number: 108, isPr: true, pr: story }, "dev", deps);
+  assert.deepEqual(did, [["gh", "issue edit 108 --remove-label ai:review"], ["gh", "issue edit 108 --add-label ai:review"]]);
+  assert.match(actions.perform("build", "", { number: 108, isPr: true, pr: story }, "dev", deps).said, /works on the story/);
+});
+
+test("the gate counts a trusted sign-off status on the head (a ticked box), not one from anyone else", () => {
+  const f = { ...open(fixture(23)), ai: {}, reviews: [], labelEvents: [], comments: [] };
+  const head = f.pr.headRefOid;
+  const signed = (login) => ({ ...f, statuses: [{ sha: head, context: gate.STATUS.signoff, state: "success", created_at: "2026-10-06T00:00:00Z", creator: { login } }] });
+  assert.ok(!gate.evaluate(signed("github-actions[bot]")).reasons.some((r) => /sign-off/.test(r)));
+  assert.ok(gate.evaluate(signed("someone")).reasons.some((r) => /no sign-off/.test(r)));
+});
+
+test("release card: what ships, each stage, what to do next, and only the boxes that make sense", () => {
+  const pr = { number: 110, state: "OPEN", headRefName: "release/2026-w45", baseRefName: "main", headRefOid: "h" };
+  const run = (name, conclusion) => ({ name, conclusion, status: "completed", started_at: "2026-10-05T10:00:00Z" });
+  const green = [run("static checks (no org)", "success"), run("deploy and Apex tests (scratch org)", "success"), run("staging regression", "success")];
+  const st = (state, description = "") => ({ sha: "h", context: gate.STATUS.uat, state, description, created_at: "2026-10-05T11:00:00Z", creator: { login: "github-actions[bot]" } });
+  const base = { repoUrl: "https://github.com/o/r", pr, uat: true, stories: [{ key: "106", title: "Sales region" }] };
+  const inUat = releaseCard({ ...base, facts: { checkRuns: green, statuses: [st("pending", "In UAT")], reviews: [] } });
+  assert.match(inUat, /Release status: sprint 2026-w45/);
+  assert.match(inUat, /#106 Sales region/);
+  assert.match(inUat, /\*\*Next:\*\* Test it in UAT, then tick \*\*UAT passed\*\*/);
+  assert.match(inUat, /- \[ \] ✅ UAT passed.*<!-- act:uat-pass -->/);
+  assert.doesNotMatch(inUat, /act:gate/, "not approved yet: nothing to re-check");
+  const approved = { checkRuns: green, statuses: [st("success")], reviews: [{ user: { type: "User", login: "lead" }, state: "APPROVED", commit_id: "h", submitted_at: "2026-10-05T12:00:00Z" }] };
+  const ready = releaseCard({ ...base, facts: approved, decision: { mergeable: true } });
+  assert.match(ready, /Nothing to do: the gate is validating/);
+  assert.match(ready, /act:gate/, "approved and green but stuck (a cancelled run): the box re-runs the gate");
+  const rejected = releaseCard({ ...base, facts: { ...approved, checkRuns: [...green, run("Production validation", "failure")] } });
+  assert.match(rejected, /Production rejected it/);
+  const shipped = releaseCard({ ...base, pr: { ...pr, state: "MERGED" }, facts: approved, shipped: { tag: "v1", url: "https://x/v1" } });
+  assert.match(shipped, /Done: sprint 2026-w45 is live in production/);
+  assert.doesNotMatch(shipped, /act:/);
+  assert.match(newStoryCard({ key: "120", ai: { plan: true } }), /act:plan[\s\S]*act:start[\s\S]*act:hotfix/);
+});
+
+test("tick boxes: the card-actions workflow acts only on a person's edit of a card, through the same pipe act as commands", () => {
+  const y = readFileSync(new URL("../../.github/workflows/card-actions.yml", import.meta.url), "utf8");
+  assert.match(y, /github.event.sender.type != 'Bot'/);
+  assert.match(y, /contains\(github.event.comment.body, '<!-- pipeline:story-card -->'\)/);
+  assert.match(y, /pipe.mjs act --number .* --before .* --after/);
+  assert.match(readFileSync(new URL("../../.github/workflows/commands.yml", import.meta.url), "utf8"), /pipe.mjs act --number .* --command "\$BODY"/);
 });

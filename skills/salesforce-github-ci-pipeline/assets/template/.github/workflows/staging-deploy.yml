@@ -114,6 +114,6 @@ jobs:
       - name: Ship now if the release PR is already approved
         run: |
           RPR=$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')
-          [ -z "$RPR" ] || node pipeline/bin/pipe.mjs gate nudge "$RPR"
+          [ -z "$RPR" ] || node pipeline/bin/pipe.mjs gate nudge "$RPR"   # also refreshes the release card
           # UAT_ENABLED: keep UAT on the release PR's latest code (a newer head needs a new sign-off anyway)
           [ -z "$RPR" ] || [ "${{ vars.UAT_ENABLED }}" != "true" ] || gh workflow run uat-deploy.yml --ref main -f pr="$RPR"

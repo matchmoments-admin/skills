@@ -49,12 +49,14 @@ jobs:
       - name: The commit, whether it already shipped, and whether the gate's validation covers it
         id: p
         env:
+          GH_TOKEN: ${{ github.token }}
           SHA_IN: ${{ inputs.sha }}
           JOB_IN: ${{ inputs.validated_job }}
           TREE_IN: ${{ inputs.validated_tree }}
         run: |
           [ -z "$SHA_IN" ] || [[ "$SHA_IN" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::not a commit SHA: $SHA_IN"; exit 1; }
           [ -z "$JOB_IN" ] || [[ "$JOB_IN" =~ ^0Af[A-Za-z0-9]{12,15}$ ]] || { echo "::error::not a deploy ID: $JOB_IN"; exit 1; }
+          node pipeline/bin/pipe.mjs pr card ${SHA_IN:+--sha "$SHA_IN"} --now "shipping to production: quick deploy of the validated change, then tag and close out" || true
           node pipeline/bin/pipe.mjs ship plan ${SHA_IN:+--sha "$SHA_IN"} ${JOB_IN:+--validated-job "$JOB_IN"} ${TREE_IN:+--validated-tree "$TREE_IN"} | tee -a "$GITHUB_STEP_SUMMARY"
   deploy:
     name: deploy to production
@@ -87,6 +89,12 @@ jobs:
         run: sf project deploy quick -o devhub --job-id "$JOB" --wait 30
       - name: Smoke check
         run: sf data query -o devhub -q "SELECT COUNT() FROM Account" >/dev/null && echo "production responds"
+      - name: The card says the deploy failed, and where to look
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: node pipeline/bin/pipe.mjs pr card --sha "$SHA" --now "the production deploy" --failed --retry "see the run; re-run the release (it is safe to repeat)" || true
   shape:
     name: refresh org shape
     needs: [plan, deploy]

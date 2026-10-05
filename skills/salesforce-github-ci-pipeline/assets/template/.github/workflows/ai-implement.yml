@@ -141,7 +141,7 @@ jobs:
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
         run: |
           gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
-          gh workflow run ai-review.yml -f pr="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"
+          gh workflow run ai-review.yml --ref main -f pr="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"
       - name: The story card says the build failed, and where to look
         if: failure() && steps.ctx.outcome == 'success'
         env:

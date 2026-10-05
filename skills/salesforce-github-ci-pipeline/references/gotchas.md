@@ -139,6 +139,17 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **The agent's plan must never touch the repo or comment** → plan tools are `Read,Glob,Grep,Write` (one file); an
   agent-free step posts it. No Salesforce login and no scratch org: planning costs no allowance.
 
+## Cards and tick boxes
+
+- **On a release PR it was hard to tell what was next**: story PRs had a card, release PRs only scattered comments. →
+  A release card (contents, CI, staging, UAT, approval, validation, merge, production), refreshed by release-cut, the
+  gate, UAT, staging and the release itself.
+- **Commands had to be remembered.** → Tick boxes on the card. GitHub comments cannot hold buttons, but ticking a task
+  list item edits the comment (`issue_comment: edited`, with `changes.body.from`); compare before and after, check the
+  sender's permission (`collaborators/<login>/permission`), skip bots (the pipeline's own card edits fire the same event).
+- **A sign-off by tick cannot be a label the App adds** (the gate ignores bot labels). → The agent-free job posts the
+  trusted status `pipeline/sign-off` on the head; the gate counts it like an approval for PRs into the sprint.
+
 ## Code layout and API budget
 
 - **The story card refresh cost hundreds of API calls per CI run**: every progress tick (once a minute) re-gathered all
@@ -172,9 +183,17 @@ Every entry happened in a real run. Search this file for the error text you see.
   org). → One lane name per org: `orgFor(target).lock`.
 - **A half-made org was trusted for ever** (created, then packages or the deploy failed). → `org ensure` finishes any org
   without the ready marker (admin user's Title `pipeline: ready`), skipping packages already installed.
+- **The release PR's CI waited 30 minutes for a lane that was free**: the claim commit used the tree of the job's
+  `GITHUB_SHA` (a PR's test-merge commit); when the base moved, GitHub replaced that merge commit, every new claim
+  failed, and the loop read the failure as "still waiting". → Claims use `main`'s tree, and a failed claim or create
+  is logged and retried (five in a row fail the step).
 - Lane refs need `contents: write` in the job; keep the token out of steps that run branch code (`GH_TOKEN: ""`).
 
 ## Shipping
+
+- **`/uat-pass` (and `/ship`) failed: "unable to determine default branch ... Resource not accessible by integration"**:
+  `gh workflow run` without `--ref` looks up the default branch, which a token without `contents: read` cannot.
+  → Every dispatch names `--ref main` (a test enforces it); `commands` also gets `contents: read`.
 
 - **Validation checked GitHub's merge preview** (`refs/pull/N/merge`), which can lag the base. → The gate builds the
   candidate itself (`pipe ship candidate`: base tip + decided head) under the `main` lock.

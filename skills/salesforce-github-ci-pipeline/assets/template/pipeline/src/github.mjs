@@ -50,9 +50,10 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
       return { update: (output, conclusion) => { if (id) api("PATCH", `repos/${repo}/check-runs/${id}`, conclusion ? { status: "completed", conclusion, output } : { output }); } };
     },
 
-    /** Start a workflow on main (or a ref) with inputs. */
-    dispatch(workflow, inputs = {}, ref = null) {
-      io.gh(["workflow", "run", workflow, ...(ref ? ["--ref", ref] : []), ...Object.entries(inputs).flatMap(([k, v]) => ["-f", `${k}=${v}`])]);
+    /** Start a workflow on main (or a ref) with inputs. The ref is always named: without one gh looks up the default
+     *  branch, which a token without contents: read cannot (this broke /ship and /uat-pass). */
+    dispatch(workflow, inputs = {}, ref = "main") {
+      io.gh(["workflow", "run", workflow, "--ref", ref, ...Object.entries(inputs).flatMap(([k, v]) => ["-f", `${k}=${v}`])]);
     },
 
     /** A workflow's runs (newest first). */

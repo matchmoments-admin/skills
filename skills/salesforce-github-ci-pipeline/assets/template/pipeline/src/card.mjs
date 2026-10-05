@@ -2,10 +2,11 @@
 // a non-technical person where the story is, what is next, and links straight to it. storyCard() is pure: built from the
 // same facts and decision the gate uses (gate.gather / gate.evaluate), so the card and the gate cannot disagree.
 // storyCards() puts it on the story and its PR (and moves the board), through the code host and the tracker.
-import { CHECKS, storyBranch, aiFeatures, context, setting } from "./conventions.mjs";
-import { latestCheck, verdictFor, humanApproval, requiredVerdicts, evaluate, STATUS } from "./gate.mjs";
+import { CHECKS, storyBranch, aiFeatures, context, setting, sprintOf, storyOf } from "./conventions.mjs";
+import { latestCheck, verdictFor, humanApproval, requiredVerdicts, evaluate, route, STATUS } from "./gate.mjs";
 import { planContext } from "./plan.mjs";
 import { stageOf, moveCard } from "./board.mjs";
+import { checklist, allowed } from "./actions.mjs";
 
 export const CARD_TITLE = "Pipeline status";
 export const CARD_MARK = "<!-- pipeline:story-card -->";
@@ -29,8 +30,8 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   let next;
   if (!pr) {
     rows.push(["waiting", "Build", ai.implement ? `build on ${branchLink} and open a PR into \`${base}\`, or comment **/build** on this story` : `build on ${branchLink} and open a PR into \`${base}\``]);
-    next = ai.implement ? "Build it, or comment **/build** to have the AI build it." : `Build it on ${branchLink} and open a pull request.`;
-    return render(key, next, rows, now);
+    next = ai.implement ? "Build it, or tick **Build it with Claude** below." : `Build it on ${branchLink} and open a pull request.`;
+    return render(key, next, rows, now, allowed([...(planned ? [] : ["plan"]), "build"], ai));
   }
 
   const merged = pr.state === "MERGED";
@@ -52,8 +53,8 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
     else rows.push(["off", label, v.context === STATUS.review ? "off: your approval is the review" : "not needed"]);
   }
 
-  const approved = merged || humanApproval(ctx);
-  const signOff = base === "main" ? "(Review changes > Approve)" : "(Review changes > Approve), or comment **/ship** on the PR";
+  const approved = merged || humanApproval(ctx) || verdictFor(STATUS.signoff, ctx).state === "success";
+  const signOff = base === "main" ? "(Review changes > Approve)" : "(Review changes > Approve), or tick **Sign off** below";
   rows.push([approved ? "done" : "waiting", "Approval", approved ? "approved" : `**[Approve here](${prUrl}/files)** ${signOff}`]);
   rows.push([shipped ? "done" : merged ? "done" : "waiting", "Merged", merged ? `into \`${base}\`; the staging regression runs next` : "merges by itself when everything above is green"]);
   rows.push([shipped ? "done" : "waiting", "In production", shipped ? `released in [${shipped.tag}](${shipped.url})` : base === "main" ? "ships right after the merge" : "ships with the sprint's release"]);
@@ -65,14 +66,88 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
     const failed = rows.find((r) => r[0] === "failed");
     const waiting = rows.find((r) => r[0] === "waiting" || r[0] === "running");
     if (failed) next = failed[1].startsWith("CI") ? `Fix the failing tests: [see what failed](${prUrl}/checks), then push to ${branchLink}.`
-      : failed[1] === "AI review" ? `Address the review comments on [#${pr.number}](${prUrl})${ai.fix ? ", or add the label **ai:fix**" : ""}.`
-      : `Fix the UI test failure ([report](${prUrl}/checks)), then label the PR **test** again.`;
+      : failed[1] === "AI review" ? `Address the review comments on [#${pr.number}](${prUrl})${ai.fix ? ", or tick **Fix … with Claude** below" : ""}.`
+      : `Fix the UI test failure ([report](${prUrl}/checks)), then tick **Run the UI test** below.`;
     else if (decision?.mergeable) next = "Nothing to do: merging now.";
     else if (waiting && waiting[1] !== "Approval" && waiting[0] === "running") next = `Waiting for ${waiting[1].toLowerCase()}. You can approve now: **[Approve here](${prUrl}/files)**.`;
     else if (waiting && waiting[1] === "Approval") next = `**[Approve here](${prUrl}/files)**: everything else is green.`;
     else next = waiting ? `${waiting[1]}: ${waiting[2]}` : "Waiting.";
   }
-  return render(key, next, rows, now);
+  return render(key, next, rows, now, merged || pr.state === "CLOSED" ? [] : storyActions(rows, { ai, base, ci: ciState, decision }));
+}
+
+/** The boxes a story PR's card offers, from where it stands (pure). */
+function storyActions(rows, { ai, base, ci }) {
+  const at = (stage) => rows.find((r) => r[1] === stage)?.[0];
+  const ids = [];
+  if (ci === "failed") ids.push("fix", "ci");
+  if (at("AI review") === "failed") ids.push("fix", "review");
+  else if (["waiting", "running"].includes(at("AI review"))) ids.push("review");
+  if (["failed", "waiting"].includes(at("UI test"))) ids.push(ai.uiTest ? "ai-test" : "test");
+  if (at("Approval") === "waiting" && base !== "main") ids.push("ship");
+  return allowed([...new Set(ids)], ai);
+}
+
+/** The card on a story before /start: what to do first. */
+export function newStoryCard({ key, ai = {} }) {
+  return render(key, ai.plan ? "Bigger story? Tick **Plan it with Claude** first. Small story? Tick **Start**." : "Tick **Start** when you are ready to work on it.",
+    [["waiting", "Branch and scratch org", "created when you start the story"]], null, allowed(["plan", "start", "hotfix"], ai));
+}
+
+/**
+ * The release card: one comment on the release PR (release/<sprint> -> main) that says what ships, where it stands and
+ * what to do next, with the same boxes as a story card. Pure: built from the gate's facts and decision.
+ * input: { repoUrl, pr, facts, decision, uat (UAT_ENABLED), stories: [{ key, title, state }], shipped, activity }
+ */
+export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = false, stories = [], shipped = null, activity = null }) {
+  const prUrl = `${repoUrl}/pull/${pr.number}`;
+  const sprint = sprintOf(pr.headRefName) || pr.headRefName;
+  const runs = facts.checkRuns || [];
+  const ctx = { ...facts, head: pr.headRefOid };
+  const merged = pr.state === "MERGED";
+  const rows = [];
+  rows.push(["done", "What ships", stories.length ? stories.map((s) => `#${s.key} ${s.title}`).join("; ") : `everything merged into \`${pr.headRefName}\``]);
+  const ci = [CHECKS.static, CHECKS.apex].map((n) => stateOf(latestCheck(runs, n)));
+  const ciState = merged ? "done" : ci.includes("failed") ? "failed" : ci.every((s) => s === "done") ? "done" : "running";
+  rows.push([ciState, "CI (every test, staging org)", ciState === "failed" ? `[see what failed](${prUrl}/checks)` : ciState === "done" ? "passed" : `[running](${prUrl}/checks)`]);
+  const staging = merged ? "done" : stateOf(latestCheck(runs, CHECKS.staging));
+  rows.push([staging, "Staging regression (Apex, Flow and UI)", staging === "failed" ? `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)` : staging === "done" ? "passed on this commit" : "runs after each merge into the sprint"]);
+  if (uat) {
+    const u = merged ? { state: "success" } : verdictFor(STATUS.uat, ctx);
+    const row = { success: ["done", "signed off"], failure: ["failed", `failed: ${u.description || "see the comments"}`], pending: ["running", "in UAT now: test it, then tick **UAT passed**"],
+      stale: ["waiting", "signed off an older commit: it redeploys, then sign off again"], missing: ["waiting", "deploys after the staging regression"] }[u.state] || ["waiting", u.state];
+    rows.push([row[0], "UAT sign-off", row[1]]);
+  }
+  const approved = merged || humanApproval(ctx);
+  rows.push([approved ? "done" : "waiting", "Approval", approved ? "approved" : `**[Approve here](${prUrl}/files)** (Review changes > Approve)`]);
+  const v = stateOf(latestCheck(runs, "Production validation"));
+  const validation = merged ? "done" : latestCheck(runs, "Production validation") === "missing" ? "waiting" : v;
+  rows.push([validation, "Production validation", validation === "failed" ? `production rejected it: [see why](${prUrl}/checks)` : validation === "done" ? "passed (check-only deploy with the relevant tests)" : validation === "running" ? `[running](${prUrl}/checks)` : "runs when everything above is green"]);
+  rows.push([merged ? "done" : "waiting", "Merged into main", merged ? "merged" : "the gate merges it after the validation"]);
+  rows.push([shipped ? "done" : merged ? "running" : "waiting", "In production", shipped ? `released as [${shipped.tag}](${shipped.url}); stories closed, sprint closed, its orgs deleted` : merged ? "deploying the validated change" : "quick-deploys exactly what was validated"]);
+
+  const at = (stage) => rows.find((r) => r[1] === stage)?.[0];
+  const failed = rows.find((r) => r[0] === "failed");
+  let next;
+  if (shipped) next = `Done: sprint ${sprint} is live in production ([${shipped.tag}](${shipped.url})).`;
+  else if (merged) next = "Nothing to do: it is deploying to production.";
+  else if (pr.state === "CLOSED") next = "The release pull request was closed without merging.";
+  else if (failed) next = failed[1].startsWith("Production") ? "Production rejected it: fix it on the sprint branch (a story PR), then tick **Check again**." : `${failed[1]} failed: ${failed[2]}`;
+  else if (at("UAT sign-off") === "running") next = "Test it in UAT, then tick **UAT passed** below (or comment `/uat-fail <why>`).";
+  else if (at("Approval") === "waiting") next = `**[Approve here](${prUrl}/files)** when you are happy for sprint ${sprint} to go to production${at("UAT sign-off") && at("UAT sign-off") !== "done" ? " (it also needs the UAT sign-off)" : ""}.`;
+  else if (decision?.mergeable || validation === "running") next = "Nothing to do: the gate is validating it against production, then it merges and ships.";
+  else next = `Waiting: ${(decision?.reasons || ["the checks above"])[0]}.`;
+
+  const ids = [];
+  if (!merged && pr.state === "OPEN") {
+    if (ciState === "failed") ids.push("ci");
+    if (staging === "failed") ids.push("staging");
+    if (at("UAT sign-off") === "running") ids.push("uat-pass");
+    if (at("UAT sign-off") === "waiting" && staging === "done") ids.push("uat");
+    if (approved && !failed) ids.push("gate");
+    if (validation === "failed") ids.push("gate");
+  }
+  return render(`release ${sprint}`, next, rows, activityLine(activity), [...new Set(ids)], { release: true });
 }
 
 /**
@@ -113,14 +188,15 @@ export function storyMap(rows) {
 /** Remove the diagram (for trackers that cannot draw Mermaid). */
 export const withoutMap = (body) => body.replace(/```mermaid[\s\S]*?```\n*/g, "");
 
-function render(key, next, rows, now = null) {
+function render(key, next, rows, now = null, actions = [], { release = false } = {}) {
   return [
     CARD_MARK,
-    `### ${CARD_TITLE} (kept up to date by the pipeline)`,
+    `### ${release ? `Release status: ${key.replace(/^release /, "sprint ")}` : CARD_TITLE} (kept up to date by the pipeline)`,
     "",
     ...(now ? [now, ""] : []),
     `**Next:** ${next}`,
     "",
+    ...(actions.length ? [...checklist(actions), ""] : []),
     storyMap(rows),
     "",
     "| | Stage | Details |",
@@ -159,6 +235,27 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
     },
     async starting(key, activity) {
       await tracker.card(key, startingCard({ key, activity }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
+    },
+    /** A new story's card (before /start): what to do first, with the boxes to do it. */
+    async newStory(key) {
+      await tracker.card(key, newStoryCard({ key, ai: aiFeatures() }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
+    },
+    /** The card for a pull request, whatever it is: a release PR gets the release card; a story PR its story's. */
+    async refreshPr(number, { activity = null, tag = null } = {}) {
+      try {
+        const facts = host.prFacts(number, { openReleaseBranch: host.openRelease(), ai: aiFeatures(), uat: setting("UAT_ENABLED") === "true" });
+        const pr = facts.pr;
+        if (route(pr) === "release") {
+          const stories = await tracker.sprintStories(sprintOf(pr.headRefName)).catch(() => []);
+          const body = releaseCard({ repoUrl: host.repoUrl, pr, facts, decision: evaluate(facts), uat: facts.uat, stories, activity,
+            shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null });
+          await prTracker.card(pr.number, body, CARD_MARK, CARD_TITLE);
+          return "release";
+        }
+        const key = storyOf(pr.headRefName);
+        if (key) { await this.refresh(key, { activity, tag }); return "story"; }
+        return null;
+      } catch (e) { log(`::warning::card for PR #${number} not updated: ${e.message}`); return null; }
     },
   };
 }

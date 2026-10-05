@@ -145,7 +145,7 @@ jobs:
         if: always()
         run: |
           gh pr edit "$PR" --remove-label ai:fix || true
-          [ "${{ vars.AI_REVIEW }}" != "true" ] || gh workflow run ai-review.yml -f pr="$PR"
+          [ "${{ vars.AI_REVIEW }}" != "true" ] || gh workflow run ai-review.yml --ref main -f pr="$PR"
           [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
       - name: The story card says the fix failed, and where to look
         if: failure() && env.STORY_KEY != ''

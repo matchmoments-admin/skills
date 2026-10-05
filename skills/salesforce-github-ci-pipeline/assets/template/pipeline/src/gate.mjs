@@ -11,7 +11,8 @@
 // verdict on the code always blocks, whatever the flags. With every flag off, CI plus a person's approval is the gate.
 import { CHECKS, storyOf, sprintOf, uiFacing, storySpec, isPipelineAuthor } from "./conventions.mjs";
 
-export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", uat: "pipeline/uat" };
+// signoff: a person's sign-off on a story PR into the sprint (a ticked box or /ship), recorded by an agent-free job.
+export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", uat: "pipeline/uat", signoff: "pipeline/sign-off" };
 /** The gate's own verdict on the PR's head. The branch rules require it, so GitHub's merge button stays locked until
  *  the gate is satisfied; admins (and any team the rules name) can still bypass in an emergency. */
 export const GATE_STATUS = "pipeline/gate";
@@ -165,7 +166,8 @@ export function evaluate(facts) {
   const approved = humanApproval(ctx);
   const staleApproval = !approved && (facts.reviews || []).some((x) => x.user?.type === "User" && x.state === "APPROVED");
   if (rules.approval === "review" && !approved) reasons.push(staleApproval ? "your approval was for an older commit; approve again" : "not approved (Review changes > Approve)");
-  if (rules.approval === "sign-off" && !approved && !readyAfterPush(facts)) reasons.push(staleApproval ? "your approval was for an older commit; approve again" : "no sign-off (approve it, or comment /ship)");
+  const signedOff = verdictFor(STATUS.signoff, ctx).state === "success";
+  if (rules.approval === "sign-off" && !approved && !signedOff && !readyAfterPush(facts)) reasons.push(staleApproval ? "your approval was for an older commit; approve again" : "no sign-off (approve it, or comment /ship)");
 
   const forceApp = Boolean(compare.forceAppChanged);
   const validate = rules.validate === true || (rules.validate === "if-force-app" && forceApp);

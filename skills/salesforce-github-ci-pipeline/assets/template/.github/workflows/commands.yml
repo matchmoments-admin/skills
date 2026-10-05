@@ -1,15 +1,15 @@
 name: commands
-# Comment commands, so nobody has to find labels. On a story (issue): /plan, /start, /build, /hotfix.
-# On a pull request: /test, /review, /fix, /ship, /help. Only people with write access; the pipeline reacts with 👀,
-# applies the matching label as the App (so the label's workflow starts), and the story card shows what happens.
-# /ship is a sign-off on story PRs into the release branch (the gate reads it); PRs into main need a GitHub approval.
-# /uat-pass and /uat-fail <why> on a release PR record the UAT sign-off on its current commit (UAT_ENABLED).
+# Comment commands, so nobody has to find labels: on a story /plan, /start, /build, /hotfix; on a pull request /review,
+# /fix, /test, /ui-test, /ship, /gate, /ci; on a release PR /uat-pass, /uat-fail <why>, /uat, /staging; /help anywhere.
+# The same actions as the card's tick boxes (card-actions.yml): both go through pipe act (pipeline/src/actions.mjs).
+# Only people with write access; the pipeline reacts with 👀 and the card shows what happens.
 on:
   issue_comment:
     types: [created]
 permissions:
-  actions: write         # /ship re-runs the gate
-  statuses: write        # /uat-pass, /uat-fail
+  actions: write         # dispatches the gate, CI, staging, UAT
+  contents: read
+  statuses: write        # sign-off and UAT verdicts
   issues: write
   pull-requests: write
 env:
@@ -18,70 +18,26 @@ jobs:
   run:
     if: startsWith(github.event.comment.body, '/') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       N: ${{ github.event.issue.number }}
-      IS_PR: ${{ github.event.issue.pull_request != null }}
       BODY: ${{ github.event.comment.body }}
-      CID: ${{ github.event.comment.id }}
+      WHO: ${{ github.event.comment.user.login }}
+      WHO_TYPE: ${{ github.event.comment.user.type }}
     steps:
-      - name: Which command?
-        id: c
-        run: |
-          CMD=$(printf '%s' "$BODY" | head -1 | awk '{print $1}' | tr -d '\r')
-          if [ "$IS_PR" = "true" ]; then
-            case "$CMD" in
-              /test) LABEL=test ;; /review) LABEL=ai:review ;; /fix) LABEL=ai:fix ;; /ship) LABEL=ship ;; /help) LABEL=help ;;
-              /uat-pass) LABEL=uat-pass ;; /uat-fail) LABEL=uat-fail ;; *) LABEL="" ;;
-            esac
-          else
-            case "$CMD" in
-              /plan) LABEL=ai:plan ;; /start) LABEL=start ;; /build) LABEL=ai:implement ;; /hotfix) LABEL="hotfix start" ;; /help) LABEL=help ;; *) LABEL="" ;;
-            esac
-          fi
-          echo "label=$LABEL" >> "$GITHUB_OUTPUT"; echo "cmd=$CMD" >> "$GITHUB_OUTPUT"
-          [ -z "$LABEL" ] || gh api -X POST "repos/$GH_REPO/issues/comments/$CID/reactions" -f content=eyes >/dev/null
-      - name: Help
-        if: steps.c.outputs.label == 'help' || (steps.c.outputs.label == '' && steps.c.outputs.cmd != '')
-        run: |
-          if [ "$IS_PR" = "true" ]; then T='**On a pull request:** `/test` runs the story'"'"'s UI test · `/review` AI review · `/fix` AI fixes the review comments · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/uat-pass`, `/uat-fail <why>` record UAT on a release PR.'
-          else T='**On a story:** `/plan` has Claude propose the build and ask its questions (bigger stories, before starting) · `/start` creates its branch and scratch org · `/build` has the AI build it · `/hotfix` starts it as an urgent production fix.'; fi
-          gh issue comment "$N" --body "$T"
-      - name: UAT sign-off on the release PR's current commit
-        if: steps.c.outputs.label == 'uat-pass' || steps.c.outputs.label == 'uat-fail'
-        env:
-          WHO: ${{ github.event.comment.user.login }}
-          KIND: ${{ steps.c.outputs.label }}
-        run: |
-          J=$(gh pr view "$N" --json headRefName,headRefOid,baseRefName)
-          [[ "$(jq -r .headRefName <<<"$J")" == release/* && "$(jq -r .baseRefName <<<"$J")" == main ]] || { gh pr comment "$N" --body "/uat-pass and /uat-fail apply to release PRs only."; exit 0; }
-          SHA=$(jq -r .headRefOid <<<"$J")
-          # a sign-off covers only what UAT is running: uat-deploy marks the commit it deployed ("In UAT")
-          IN_UAT=$(gh api "repos/$GH_REPO/commits/$SHA/statuses?per_page=100" --jq '[.[] | select(.context=="pipeline/uat" and .creator.login=="github-actions[bot]" and (.description|startswith("In UAT")))] | length')
-          if [ "$IN_UAT" = "0" ]; then gh pr comment "$N" --body "UAT is not running \`${SHA:0:7}\` (the release PR's latest commit) yet: it redeploys after the staging regression. Sign off when **Ready for UAT** names this commit."; exit 0; fi
-          if [ "$KIND" = uat-pass ]; then STATE=success; DESC="Signed off in UAT by @$WHO"
-          else STATE=failure; DESC="UAT failed (@$WHO): $(printf '%s' "$BODY" | head -1 | sed 's#^/uat-fail *##' | cut -c1-100)"; fi
-          gh api "repos/$GH_REPO/statuses/$SHA" -f state="$STATE" -f context=pipeline/uat -f description="${DESC:0:139}" >/dev/null
-          gh workflow run gate.yml -f pr="$N"
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - name: 👀 (the command was seen)
+        run: gh api -X POST "repos/$GH_REPO/issues/comments/${{ github.event.comment.id }}/reactions" -f content=eyes >/dev/null || true
       - id: app
-        if: steps.c.outputs.label != '' && steps.c.outputs.label != 'help' && steps.c.outputs.label != 'ship' && steps.c.outputs.label != 'uat-pass' && steps.c.outputs.label != 'uat-fail'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v1   # labels the App applies start their workflows (the Actions token's start nothing)
         with:
           app-id: ${{ secrets.PIPELINE_APP_ID }}
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
-      - name: Apply the label as the pipeline (labels the Actions token adds start nothing)
-        if: steps.app.outcome == 'success'
+      - name: Do it
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          LABELS: ${{ steps.c.outputs.label }}
-        run: |
-          # remove first: adding a label that is already there fires no event, so a repeated command would do nothing
-          for l in $LABELS; do gh issue edit "$N" --remove-label "$l" >/dev/null 2>&1 || true; gh issue edit "$N" --add-label "$l"; done
-      - name: /ship is a sign-off; let the gate decide
-        if: steps.c.outputs.label == 'ship'
-        run: |
-          BASE=$(gh pr view "$N" --json baseRefName --jq .baseRefName)
-          if [ "$BASE" = "main" ]; then gh pr comment "$N" --body "PRs into main need a GitHub approval: **[Approve here](${{ github.server_url }}/$GH_REPO/pull/$N/files)** (Review changes > Approve)."
-          else gh workflow run gate.yml -f pr="$N"; fi
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --command "$BODY"

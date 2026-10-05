@@ -24,6 +24,10 @@
 //   event     agent --role R --file transcript [--key K] [--pr N] · rollback --tag T --sha S   (the event log; the
 //             commands above record their own: stage, tests, validation, gate, org, verdict, lane, release)
 //   metrics   [--days N] [--out file]                   DORA and pipeline telemetry as markdown
+//   act       --number N [--pr] --by LOGIN [--by-type T] (--command "/x ..." | --before F --after F)   a person's
+//             action from a comment command or a ticked card box (pipeline/src/actions.mjs)
+//   pr        card <n> | --sha S [--now "what" [--failed]] [--tag T]   the release card, or the story card of a story PR
+//   story     new <key>                                  the card of a story not started yet (boxes: plan, start)
 import { appendFileSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { io, PIPELINE_ROOT } from "../src/io.mjs";
@@ -45,9 +49,10 @@ import * as shipping from "../src/shipping.mjs";
 import { lane } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
+import * as actions from "../src/actions.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -186,8 +191,7 @@ const commands = {
     const pr = arg(0);
     const n = gate.nudge(pr, io);
     if (n.action === "dispatch") host.dispatch("gate.yml", { pr });
-    const key = names.storyOf(io.gh(["pr", "view", String(pr), "--json", "headRefName"], { allowFail: true })?.headRefName || "");
-    if (key) await cards.refresh(key);
+    await cards.refreshPr(pr);
     return say(n.action === "dispatch" ? `re-ran the gate for approved PR #${pr}` : `nothing to do: ${n.why}`);
   },
   "status set": () => {
@@ -249,6 +253,21 @@ const commands = {
     if (has("starting")) { await cards.starting(key, activity); return say(`starting card for ${key}`); }
     await cards.refresh(key, { base: flag("base"), tag: flag("tag"), activity });
     return say(`card updated for ${key}`);
+  },
+  "story new": async () => { await cards.newStory(arg(0)); return say(`card for new story ${arg(0)}`); },
+  "pr card": async () => {
+    // the card of a pull request (release card or its story's); --sha finds the PR a commit was merged by
+    const n = arg(0) || (io.gh(["api", `repos/${host.repo}/commits/${flag("sha")}/pulls`], { allowFail: true }) || [])[0]?.number;
+    if (!n) return say("no pull request: no card");
+    const activity = flag("now") ? { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl, retry: flag("retry") } : null;
+    return say(`card on #${n}: ${(await cards.refreshPr(n, { activity, tag: flag("tag") })) || "not a story or release PR"}`);
+  },
+  "act ": async () => {
+    // a person's action from a comment command (--command) or a ticked card box (--before/--after the edit)
+    const said = await actions.act({ number: flag("number"), isPr: has("pr"), who: flag("by"), whoType: flag("by-type"),
+      command: flag("command"), before: flag("before") && readFileSync(flag("before"), "utf8"), after: flag("after") && readFileSync(flag("after"), "utf8") },
+      { io, host, cards, log, appToken: process.env.APP_TOKEN });
+    return say(said);
   },
   "story plan-pending": async () => {
     // the Build plan comment appears at once, saying Claude is planning (or that it failed), with a link
@@ -366,8 +385,11 @@ async function closeoutCmd(run) {
   await closeout.apply(p, { tag: flag("tag"), tracker, orgs: orgs(), git: io.git, gh: io.gh, log });
   record("release", { tag: flag("tag"), sha: flag("sha"), previous: flag("previous"), sprint: p.sprint, shipped: p.ship, hotfixes: p.hotfix.map((h) => h.key), carried: p.carry });
   for (const key of [...p.ship, ...p.hotfix.map((h) => h.key)]) await cards.refresh(key, { tag: flag("tag") });
+  // the release card on the PR that shipped (found from the shipped commit): Done, with the tag
+  const shippedBy = flag("sha") ? (io.gh(["api", `repos/${host.repo}/commits/${flag("sha")}/pulls`], { allowFail: true }) || [])[0]?.number : null;
+  if (shippedBy) await cards.refreshPr(shippedBy, { tag: flag("tag") });
 }
 
-const run = commands[`${cmd} ${cmd === "metrics" ? "" : sub ?? ""}`];
+const run = commands[`${cmd} ${["metrics", "act"].includes(cmd) ? "" : sub ?? ""}`];
 if (!run) { log(`::error::Unknown command: ${cmd} ${sub ?? ""}. See the header of pipeline/bin/pipe.mjs.`); process.exit(1); }
 Promise.resolve().then(run).catch((e) => { log(`::error::${e.message}`); process.exit(1); });
