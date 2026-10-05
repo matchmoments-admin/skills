@@ -15,6 +15,10 @@ export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || proce
       return { key: String(i.number), title: i.title, body: i.body, state: i.state, labels: i.labels.map((l) => l.name), url: i.url, sprint: i.milestone?.title || null };
     },
     async comment(key, text) { gh(["issue", "comment", String(key), "--body", text]); },
+    /** Comments oldest first: { author, body, created }. */
+    async comments(key) {
+      return list(`repos/${repo}/issues/${key}/comments?per_page=100`).map((c) => ({ author: c.user?.login || "", body: c.body || "", created: c.created_at }));
+    },
     /** Create or update the one story card comment (found by its marker). */
     async card(key, body, mark) {
       const mine = list(`repos/${repo}/issues/${key}/comments?per_page=100`).find((c) => String(c.body || "").includes(mark));
@@ -76,6 +80,11 @@ export function jiraTracker({ fetch = globalThis.fetch, base = process.env.JIRA_
       return { key: i.key, title: i.fields.summary, body: adfToText(i.fields.description).trim(), state: isDone(i.fields.status) ? "CLOSED" : "OPEN", labels: i.fields.labels || [], url: `${base.replace(/\/$/, "")}/browse/${i.key}` };
     },
     async comment(key, text) { await call("POST", `/rest/api/3/issue/${key}/comment`, { body: adfDoc(text) }); },
+    /** Comments oldest first; the pipeline's own (posted as the API user) read as "app/pipeline". */
+    async comments(key) {
+      const all = (await call("GET", `/rest/api/3/issue/${key}/comment?maxResults=100&orderBy=created`))?.comments || [];
+      return all.map((c) => ({ author: c.author?.emailAddress === email ? "app/pipeline" : (c.author?.displayName || ""), body: adfToText(c.body), created: c.created }));
+    },
     async card(key, body, mark, title) {
       const text = body.replace(mark, "").replace(/```mermaid[\s\S]*?```\n*/g, "").trim();   // Jira draws no Mermaid and shows HTML comments as text
       const all = (await call("GET", `/rest/api/3/issue/${key}/comment?maxResults=100`))?.comments || [];

@@ -5,6 +5,7 @@ export const LABELS = {
   feature: { color: "0E8A16", description: "A story" },
   hotfix: { color: "B60205", description: "Urgent production fix: branches from main, ships after its gates" },
   start: { color: "1D76DB", description: "BUTTON: create the story branch and its scratch org" },
+  "ai:plan": { color: "C2E0C6", description: "BUTTON (AI_PLAN): Claude proposes the build and asks its open questions (before /start)" },
   "ai:implement": { color: "5319E7", description: "BUTTON (AI_IMPLEMENT): AI builds the story in its scratch org and opens a PR" },
   "ai:review": { color: "C5DEF5", description: "BUTTON (AI_REVIEW): run the AI review again" },
   "ai:fix": { color: "FBCA04", description: "BUTTON (AI_FIX): AI fixes what the reviewers found" },
@@ -41,7 +42,7 @@ export const uiFacing = (files) => files.filter((f) => f.startsWith("force-app/"
 // ---- AI feature flags ---------------------------------------------------------------------------------------
 // Each AI step is its own repo variable (Settings > Secrets and variables > Actions > Variables); unset = off, so
 // the pipeline is fully manual by default. Workflows pass them as env; nothing else reads them.
-export const AI_FLAGS = { implement: "AI_IMPLEMENT", review: "AI_REVIEW", fix: "AI_FIX", uiTest: "AI_UI_TEST", autoChain: "AI_AUTO_CHAIN", triage: "AI_TRIAGE" };
+export const AI_FLAGS = { plan: "AI_PLAN", implement: "AI_IMPLEMENT", review: "AI_REVIEW", fix: "AI_FIX", uiTest: "AI_UI_TEST", autoChain: "AI_AUTO_CHAIN", triage: "AI_TRIAGE" };
 export function aiFeatures(env = process.env) {
   const on = (name) => String(env[name] || "").trim().toLowerCase() === "true";
   return Object.fromEntries(Object.entries(AI_FLAGS).map(([k, v]) => [k, on(v)]));

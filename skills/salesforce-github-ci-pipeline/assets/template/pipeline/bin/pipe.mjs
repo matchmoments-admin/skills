@@ -15,6 +15,7 @@
 //   verdict   model <role>                              the model for an AI role (AI_MODEL overrides)
 //   prod      validate [--sha S] [--level L] [--deletions-from REF]   check-only deploy, live; prints the job id
 //   tests     run <alias> --base B [--sha S] [--all] [--min 75] [--out dir]   relevant (or all) tests, live check run
+//   story     plan-post <key> --file F · readiness <key>    the build plan comment; the Jev readiness check
 //   story     card <key> [--base B] [--tag T] [--now "what" [--failed] [--retry "how"]]   refresh the story card;
 //             --now shows what is running (or failed) with a link to this run; --starting before a branch exists
 //   metrics   [--days N] [--out file]                   DORA and pipeline telemetry as markdown
@@ -25,7 +26,8 @@ import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
 import * as closeout from "../src/closeout.mjs";
 import * as metrics from "../src/metrics.mjs";
-import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
+import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
+import * as plans from "../src/plan.mjs";
 import { storyCard, startingCard, CARD_MARK, CARD_TITLE } from "../src/card.mjs";
 import * as board from "../src/board.mjs";
 import * as tests from "../src/tests.mjs";
@@ -36,7 +38,7 @@ import { join } from "node:path";
 import { orgRegistry } from "../src/org.mjs";
 import { tracker as makeTracker } from "../src/tracker.mjs";
 
-const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "tag", "sha", "min", "level", "deletions-from", "now", "retry"]);
+const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "tag", "sha", "min", "level", "deletions-from", "now", "retry", "file"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -82,8 +84,9 @@ async function refreshCard(key, { base = null, tag = null, activity = null } = {
     const ai = names.aiFeatures();
     const openRel = openRelease();
     const facts = pr ? gate.gather(pr.number, io, { openReleaseBranch: openRel, ai }) : null;
+    const planned = Boolean(plans.planContext(await makeTracker(io).comments(key).catch(() => [])).plan);
     const body = storyCard({
-      key, repoUrl, branch, ai, pr, facts, decision: facts ? gate.evaluate(facts) : null,
+      key, repoUrl, branch, ai, pr, facts, decision: facts ? gate.evaluate(facts) : null, planned,
       base: pr?.baseRefName || base || names.context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main",
       shipped: tag ? { tag, url: `${repoUrl}/releases/tag/${tag}` } : null, activity,
     });
@@ -313,6 +316,22 @@ async function main() {
     case "verdict model": return say(verdict.modelFor(arg(0)));
     case "tests run": return testsRun(arg(0));
     case "prod validate": return prodValidate();
+    case "story plan-post": {
+      const t = makeTracker(io);
+      const s = await t.story(arg(0));
+      const readiness = await storyReadiness(typesafeJev(process.env.TYPESAFE_API_KEY), { criteria: plans.criteria(s.body), title: s.title, body: s.body });
+      await t.card(arg(0), plans.planComment(readFileSync(flag("file"), "utf8"), { readiness, started: has("started") }), plans.PLAN_MARK, plans.PLAN_TITLE);
+      return say(`build plan posted on ${arg(0)}`);
+    }
+    case "story readiness": {
+      const t = makeTracker(io);
+      const s = await t.story(arg(0));
+      const r = await storyReadiness(typesafeJev(process.env.TYPESAFE_API_KEY), { criteria: plans.criteria(s.body), title: s.title, body: s.body });
+      const body = plans.readinessComment(r);
+      if (body) await t.card(arg(0), body, plans.READINESS_MARK, plans.READINESS_TITLE);
+      output({ weak: r?.weak.length ?? 0, size: r?.size || "unknown" });
+      return say(r ? `readiness: ${r.weak.length} weak criteria, size ${r.size}${body ? " (posted)" : ""}` : "readiness: no answer from Jev (skipped)");
+    }
     case "story card": {
       const activity = flag("now") ? { state: has("failed") ? "failed" : "running", what: flag("now"), url: runUrl(), retry: flag("retry") } : null;
       if (has("starting")) {
@@ -352,8 +371,12 @@ async function main() {
     }
 
     case "tracker story": {
-      const s = await makeTracker(io).story(arg(0));
-      const md = `# Story ${s.key}: ${s.title}\n\nTracker: ${s.url}\n\n${s.body || "(no description)"}\n`;
+      // the story, plus the agreed build plan and the answers to it (when /plan was used): the spec every agent reads
+      const t = makeTracker(io);
+      const s = await t.story(arg(0));
+      const ctx = plans.planContext(await t.comments(arg(0)).catch(() => []));
+      const md = plans.storyFile(s, ctx);
+      output({ planned: Boolean(ctx.plan) });
       if (flag("out")) writeFileSync(flag("out"), md);
       output({ title: s.title, state: s.state, url: s.url });
       return say(flag("out") ? `wrote ${flag("out")}` : md);

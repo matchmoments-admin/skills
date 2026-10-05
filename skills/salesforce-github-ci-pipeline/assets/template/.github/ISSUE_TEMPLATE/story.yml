@@ -6,8 +6,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        Write it the way a user would check it. When you submit, add the label **start**; the pipeline then posts a
-        **Pipeline status** card on this story with the next step and a link for every stage.
+        Write it the way a user would check it. Then comment on the story:
+        - **/plan** (bigger stories): Claude proposes the build and asks its questions; answer them, then /start.
+        - **/start** (small stories): the branch and scratch org are created and a **Pipeline status** card shows
+          the next step and a link for every stage.
   - type: textarea
     id: summary
     attributes:

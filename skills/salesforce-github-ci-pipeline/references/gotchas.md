@@ -128,3 +128,13 @@ Every entry happened in a real run. Search this file for the error text you see.
   or anyone with write access could post a fake success with their own token.
 - **An emergency merge skipped staging or the release** → the `merged` workflow (on `pull_request_target: closed`,
   merged by a non-bot) starts the gate's follow-ups; with no gate validation id, `release` validates first.
+
+## Planning
+
+- **A story asked for something the platform cannot do** (a negative Flow test) and it was found only in review. →
+  `/plan` before `/start`: Claude proposes the build and asks; the agreed plan and the answers join the story file
+  every agent reads (`pipe tracker story`), so the review holds the build to them. Jev's readiness check flags
+  untestable criteria on `/start`.
+- **The plan's next step said `/start` on a started story** → `plan-post --started` makes it `/build`.
+- **The agent's plan must never touch the repo or comment** → plan tools are `Read,Glob,Grep,Write` (one file); an
+  agent-free step posts it. No Salesforce login and no scratch org: planning costs no allowance.

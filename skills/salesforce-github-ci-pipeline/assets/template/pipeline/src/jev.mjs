@@ -91,3 +91,26 @@ export async function triageReview(jev, { files, diff }) {
     ? { review: false, why: `low risk per Jev (${a.score.toFixed(2)} of 0-3)` }
     : { review: true, why: `risk ${a.score.toFixed(2)} of 0-3 per Jev` };
 }
+
+// ---- Story readiness ----------------------------------------------------------------------------------------
+export const SIZES = {
+  small: "one or two components; a day or less",
+  medium: "a few components; a few days",
+  large: "many components, integrations or data changes; more than a week",
+};
+
+/** Are the acceptance criteria testable, and how big is the story? Returns { weak[], size } or null without an answer. */
+export async function storyReadiness(jev, { criteria, title = "", body = "" }) {
+  if (!criteria.length) return null;
+  const questions = {};
+  criteria.forEach((c, i) => {
+    questions[`c${i + 1}`] = { type: "noul", instructions: `An acceptance criterion of a Salesforce story: "${c}". Could a tester check it pass or fail without asking anyone what it means?`,
+      criteria: { true: "specific and testable", false: "vague, ambiguous or untestable" } };
+  });
+  questions.size = { type: "choice", instructions: "How big is this Salesforce story to build and test?", criteria: SIZES };
+  const r = await jev({ story: clip(`${title}\n\n${body}`).slice(0, 8000) }, questions);
+  if (!r.ok) return null;
+  const weak = criteria.map((text, i) => ({ n: i + 1, text, p: r.answers[`c${i + 1}`]?.noul ?? 1 })).filter((w) => w.p < 0.5);
+  const s = r.answers.size;
+  return { weak, size: s && s.confidence >= MIN_CONFIDENCE ? s.choice : "unknown" };
+}

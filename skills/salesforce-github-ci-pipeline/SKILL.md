@@ -1,11 +1,11 @@
 ---
 name: salesforce-github-ci-pipeline
-description: Set up a Salesforce delivery pipeline on GitHub Actions end to end, manual by default with each AI step (Claude build/review/fix/UI test, Jev triage) behind its own switch (scratch orgs per story, gated release train to production). Use when the user wants Salesforce CI/CD, a release train, or scratch-org-per-story development on GitHub; when standing up a new Salesforce repo with Claude in CI; or when an existing pipeline built from this skill fails (GH013, scratch org allocation, sfdxAuthUrl null, gate not merging).
+description: Set up a Salesforce delivery pipeline on GitHub Actions end to end, manual by default with each AI step (Claude plan/build/review/fix/UI test, Jev triage) behind its own switch (optional build plan before starting, scratch orgs per story, live test views, a gate that locks the merge button, optional UAT, gated release train to production). Use when the user wants Salesforce CI/CD, a release train, or scratch-org-per-story development on GitHub; when standing up a new Salesforce repo with Claude in CI; or when an existing pipeline built from this skill fails (GH013, scratch org allocation, sfdxAuthUrl null, gate not merging).
 ---
 
 # Salesforce GitHub CI pipeline
 
-Stands up a proven pipeline: GitHub issue → story branch + production-shaped scratch org → a person (or Claude) builds, CI checks, optional AI review and UI test → a person approves → gate merges into the sprint's release branch → staging regression → release PR → approve → production validation → quick deploy → close-out. Hotfixes take the same gates straight to `main`.
+Stands up a proven pipeline: GitHub issue → optional **build plan** (Claude proposes, asks questions; the agreed plan joins the spec) → story branch + production-shaped scratch org → a person (or Claude) builds → CI runs the change's tests (live on the PR) → optional AI review and UI test → a person signs off → the gate merges into the sprint (GitHub's merge button stays locked until it does) → staging runs everything → release PR → optional UAT sign-off → approve → production validation (`RunRelevantTests`, live) → quick deploy → close-out. Hotfixes take the same gates straight to `main`. A **story card** on each issue shows what is running now, with a link, and every stage.
 
 The template in [`assets/template/`](assets/template/) is the working implementation. Copy it; do not re-derive it. Every rule in it exists because a run failed without it; [`references/gotchas.md`](references/gotchas.md) says which.
 
@@ -18,7 +18,7 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
 1. **GitHub owner.** Branch rules on a private repo need GitHub Pro (personal) or Team (organisation). Recommend an organisation on Team: it also enables the pipeline App identity and org-level Actions policy.
 2. **Production org and Dev Hub.** Often the same org. Note its edition: Developer Edition allows 3 active / 6 daily scratch orgs, which caps the team at about two stories in flight (see gotchas, *Scaling*).
 3. **Tracker.** GitHub Issues (default) or Jira ([`references/jira.md`](references/jira.md)).
-4. **AI switches.** All off by default: the pipeline is complete without AI (CI + a person's approval). Turn on only what the user wants, each a repository variable: `AI_IMPLEMENT`, `AI_REVIEW`, `AI_FIX`, `AI_UI_TEST`, `AI_AUTO_CHAIN`, `AI_TRIAGE` (Jev), optional `AI_MODEL`. Cheapest useful preset: `AI_REVIEW` + `AI_TRIAGE`. See [`references/architecture.md`](references/architecture.md), *AI switches*.
+4. **AI switches.** All off by default: the pipeline is complete without AI (CI + a person's approval). Turn on only what the user wants, each a repository variable: `AI_PLAN`, `AI_IMPLEMENT`, `AI_REVIEW`, `AI_FIX`, `AI_UI_TEST`, `AI_AUTO_CHAIN`, `AI_TRIAGE` (Jev), optional `AI_MODEL`. Pipeline switches (not AI): `UAT_ENABLED` (a UAT stage with `/uat-pass`; sandbox via secret `SF_UAT_USERNAME`, else a scratch stand-in) and `PROD_TEST_LEVEL` (default `RunRelevantTests`, falling back to every test class). Cheapest useful preset: `AI_REVIEW` + `AI_TRIAGE`. See [`references/architecture.md`](references/architecture.md), *AI switches*.
 5. **Claude auth in CI** (only if any Claude switch is on). Subscription token (`claude setup-token`) or an API key. Subscription usage counts against the user's plan limits; the template already uses Haiku for review and UI test.
 6. **Jev** (only with `AI_TRIAGE`): a TypeSafe key (`apik…`) as secret `TYPESAFE_API_KEY`. Reuse an existing one from another project by piping it into `gh secret set` without printing it.
 7. **Sprint naming** (e.g. `2026-w42`).
@@ -54,7 +54,7 @@ Run [`scripts/github-setup.sh`](scripts/github-setup.sh) `<owner/repo> <ci-usern
 
 Then the pipeline App, which only a person can confirm: [`scripts/create-app.sh`](scripts/create-app.sh) `<owner> <repo>` opens a pre-filled manifest page; the user clicks Create, pastes back the `code`, the script stores `PIPELINE_APP_ID` and `PIPELINE_APP_PRIVATE_KEY` without printing the key; the user installs the App on the repo.
 
-Then the variables: `PIPELINE_BOTS=github-actions,<app-slug>` (the only bots allowed to start agents; bare logins, no `[bot]`) and each AI switch the user chose in Phase 0 (`gh variable set AI_REVIEW --body true`). Leave the rest unset.
+Then the variables: `PIPELINE_BOTS=github-actions,<app-slug>` (the only bots allowed to start agents; bare logins, no `[bot]`; every agent step reads it, and a pipeline test checks each workflow does) and each switch the user chose in Phase 0 (`gh variable set AI_REVIEW --body true`). Leave the rest unset.
 
 **Merge button and emergencies.** Both rulesets require `pipeline/gate` from the GitHub Actions app (integration
 15368): the gate posts it, so GitHub's merge button stays locked until every requirement is met. Emergency approval
@@ -66,33 +66,26 @@ Done when: a direct `git push` to `main` is refused with GH013, a PR's merge but
 
 ## Phase 4 — Tracer story
 
-Prove the whole path with one small real story before anyone relies on it. Drive it exactly as a user would, and fix forward through the template (then re-sync the skill) whenever a step fails.
+Prove the whole path with one small real story before anyone relies on it. Drive it exactly as a user would, and fix forward through the template (then `scripts/skills-sync.sh`) whenever a step fails.
 
-1. Push a commit to `main` and wait for **CI on main** to go green (release branches are cut only from commits with green required checks).
+1. Push a commit to `main` and wait for **CI on main** to go green (release branches are cut only from commits with green required checks; do not merge to `main` while a sprint is starting).
 2. Actions → `sprint-start` with the sprint name.
-3. Create the story with the **New story** issue form (acceptance criteria say **what the user sees**), label `start`, and follow the **Pipeline status** card it gets. Build on the branch and push (the pipeline opens the PR), or label `ai:implement` if `AI_IMPLEMENT` is on.
-4. CI (and `ai-review`, if on) start by themselves. For the UI test, commit `e2e/story-<key>.spec.ts` and label `test`, or label `ai:test` if `AI_UI_TEST` is on. Approve the PR; the gate waits for whatever is still running.
-   Run the tracer twice if the user wants AI: once with every switch off, once with their chosen switches.
-5. The gate merges into the release branch and starts the staging regression.
-6. Actions → `release-cut`; approve the release PR.
+3. Create the story with the **New story** issue form (acceptance criteria say **what the user sees**). With `AI_PLAN` on, comment `/plan`: a **Build plan** comment appears (proposed build, tests, risks, size, numbered questions); answer in a comment, `/plan` again if it should change.
+4. Comment `/start`. Within seconds the **Pipeline status** card shows **⏳ Now:** with a *watch it live* link; when the branch and org exist, its **Next** line says what to do.
+5. Build on the branch and push (the pipeline opens the PR), or comment `/build`. On the PR's *Checks* tab, **Salesforce tests** shows the change's tests running; the AI review and UI test (if on) run by themselves; a failure starts `ai:fix` (if on).
+6. Sign off: **Approve here** on the card, or `/ship`. The gate posts `pipeline/gate` and merges; staging runs every test.
+7. Actions → `release-cut`; with UAT on, test in UAT and comment `/uat-pass`; approve the release PR. Watch **Production validation** on it, then the release graph (deploy → tag + org shape → close-out → back-merge).
 
-Then a hotfix with every AI switch off (**Urgent production fix** form; it starts on submit), built by hand.
+Run it with every AI switch off first (manual path), then with the chosen switches. Then a hotfix (**Urgent production fix** form; it starts on submit), built by hand.
 
-Done when: a GitHub Release tag exists for both, the change is visible in production Setup, the story is closed, the milestone is closed, and `sf data query -o <prod> -q "SELECT Description FROM ScratchOrgInfo WHERE Status='Active'"` returns no orgs from that sprint.
+Done when: a GitHub Release tag exists for both, the change is visible in production Setup, the story card ends "Done: live in production", the milestone is closed, and `scratch-janitor` (every 6 hours; or run it) leaves no orgs from that sprint: `sf data query -o <prod> -q "SELECT Description FROM ScratchOrgInfo WHERE Status='Active'"`.
 
 ## Operating it
 
-- The user's actions are only: `sprint-start`, label `start`, build (or `ai:implement`), label `test` (or `ai:test`), **Approve**, `release-cut`, **Approve**. Hotfix: labels `hotfix` + `start`. Undo: Actions → `rollback` with a tag.
-- When a gate does not merge, its PR comment names every missing input; fix that input, the gate re-runs itself.
-- People follow the **story card** on each issue (next step, a link per stage, a live flow diagram) and can use
-  comment commands (`/start`, `/build`, `/test`, `/review`, `/fix`, `/ship`, `/help`). Optional delivery board:
-  create a Project with a Status field (Ready, Building, In review, Approved, In staging, Live), give the App
-  organisation **Projects: Read and write**, and set `BOARD_PROJECT` to the project number
-  ([`scripts/create-board.sh`](scripts/create-board.sh) `<org> <repo>` does the project, the stages and the variable).
-- Tests per stage: a story runs only what its change needs (live **Salesforce tests** check on the PR); staging runs
-  everything; production validates with `RunRelevantTests` (beta) and falls back to every test class (live
-  **Production validation** check, plus Setup › Deployment Status). Optional UAT: `UAT_ENABLED`, sandbox through
-  `SF_UAT_USERNAME`, sign-off with `/uat-pass`.
-- Telemetry: the weekly `metrics` workflow keeps a "Delivery metrics" issue (DORA, AI first-pass rate, workflow health); transcripts of every AI run are artifacts (`claude-transcript-*`).
-- A fix to `.github/` or `pipeline/` reaches an open release branch only after `gh workflow run back-merge.yml` (PR workflows run the merge result's copy).
+- The user's actions are comments on the story and PR: `/plan` (bigger stories) → `/start` → push or `/build` → **Approve** or `/ship` → (once a sprint) `release-cut` → `/uat-pass` (if UAT) → **Approve**. `/help` lists them. Hotfix: the **Urgent production fix** form. Undo: Actions → `rollback` with a tag. Emergency: someone on the rules' bypass list merges; the `merged` workflow still runs the follow-ups.
+- People watch the **story card**: **⏳ Now:** what is running with a *watch it live* link (or **❌ Failed:** with where to look and how to retry), the **Next** step, a live diagram, a row per stage. Optional delivery board: a Project with a Status field (Ready, Building, In review, Approved, In staging, Live), the App's organisation **Projects: Read and write**, and `BOARD_PROJECT` ([`scripts/create-board.sh`](scripts/create-board.sh) `<org> <repo>`).
+- Tests per stage: a story runs only what its change needs (live **Salesforce tests** check on the PR); staging runs everything; production validates with `RunRelevantTests` (beta), falling back to every test class (live **Production validation** check, plus Setup › Deployment Status).
+- Scratch orgs: every creator has a cleaner, and `scratch-janitor` sweeps orphans every 6 hours (CI orgs whose run died, closed stories, staging and UAT of sprints no longer open), deleting through the Dev Hub record.
+- Telemetry: the weekly `metrics` workflow publishes `METRICS.md` on the `metrics` branch and a "Delivery metrics" issue (DORA, AI cost per role, workflow health); transcripts of every AI run are artifacts (`claude-transcript-*`, 30 days).
+- Pipeline changes: AI steps always run `main`'s workflow file (dispatched); CI and other PR-event workflows use the PR's merge result, so a workflow fix reaches an open sprint through `gh workflow run back-merge.yml`. After any pipeline change run `scripts/skills-sync.sh` (CI's `--check` fails a stale skill).
 - When something fails, look it up in [`references/gotchas.md`](references/gotchas.md) by its error text first.

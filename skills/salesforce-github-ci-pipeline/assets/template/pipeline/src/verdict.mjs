@@ -15,6 +15,7 @@ export const MAX_FIX_ROUNDS = 2;
 export const MODELS = {
   implement: "claude-sonnet-5-5",
   fix: "claude-sonnet-5-5",
+  plan: "claude-sonnet-5-5",
   review: "claude-haiku-4-5-20251001",
   "ui-test": "claude-haiku-4-5-20251001",
 };
@@ -41,6 +42,8 @@ export function instructions(role, { key = "N" } = {}) {
       return `${common}\nCommit as \`${COMMIT.fix}\` and push. Do not open a new PR.`;
     case "review":
       return `${common}\nDo not push commits. Do not approve or merge. Post ONE summary comment that ends with exactly one line: \`${REVIEW_LINE.pass}\` or \`${REVIEW_LINE.changes}\`.`;
+    case "plan":
+      return `${common}\nDo not change any file except the plan file named in the prompt. Do not commit, push or comment. Write the plan in markdown with these sections, in order: \`### Proposed build\` (objects and fields, Flows, Apex, permission sets, layouts and pages; say what you would reuse), \`### Tests\` (Apex, Flow and UI tests, by acceptance criterion), \`### Risks\`, \`### Open questions\` (numbered; only what you cannot decide from the story and the repo; none if there are none). End with one line: \`PLAN-SIZE: S\`, \`PLAN-SIZE: M\` or \`PLAN-SIZE: L\`.`;
     case "ui-test":
       return `${common}\nCommit the spec as \`${COMMIT.uiTest(key)}\` and push. Never print or commit login URLs.`;
     default:

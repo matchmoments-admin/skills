@@ -9,7 +9,8 @@ import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
 import { orgRegistry, packageList, findOrphans } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
-import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
+import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
+import * as plans from "../src/plan.mjs";
 import { storyCard, CARD_MARK, withoutMap, startingCard, activityLine } from "../src/card.mjs";
 import * as board from "../src/board.mjs";
 import * as tests from "../src/tests.mjs";
@@ -396,7 +397,7 @@ test("metrics: DORA from releases and PR routes, AI first-pass rate from fix com
 
 // ---------------------------------------------------------------- AI flags, models, Jev triage
 test("AI flags are off unless set to true; models are the cheapest per role, AI_MODEL overrides", () => {
-  assert.deepEqual(names.aiFeatures({}), { implement: false, review: false, fix: false, uiTest: false, autoChain: false, triage: false });
+  assert.deepEqual(names.aiFeatures({}), { plan: false, implement: false, review: false, fix: false, uiTest: false, autoChain: false, triage: false });
   assert.equal(names.aiFeatures({ AI_REVIEW: "true", AI_FIX: "yes" }).review, true);
   assert.equal(names.aiFeatures({ AI_REVIEW: "true", AI_FIX: "yes" }).fix, false);
   assert.match(verdict.modelFor("review", ""), /haiku/);
@@ -683,4 +684,47 @@ test("story card says what is running right now, with a link; failures say where
   assert.match(first, /CARD|pipeline:story-card/);
   const card = storyCard({ key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/w", activity: { state: "running", what: "Claude is building the story", url } });
   assert.ok(card.indexOf("Now:") < card.indexOf("Next:"));
+});
+
+// ---------------------------------------------------------------- build plan and readiness
+test("plan context: the latest build plan and only people's answers after it become part of the spec", () => {
+  const c = (author, body, created) => ({ author, body, created });
+  const comments = [
+    c("ann", "first thoughts", "1"),
+    c("__owner__-pipeline[bot]", `${plans.PLAN_MARK}\n### Build plan (size M)\nold plan`, "2"),
+    c("ann", "answer to the old plan", "3"),
+    c("__owner__-pipeline[bot]", `${plans.PLAN_MARK}\n### Build plan (size M)\nnew plan\n### Open questions\n1. Which date?`, "4"),
+    c("ann", "/start", "5"),
+    c("ann", "1. Use the Close Date", "6"),
+    c("github-actions[bot]", "<!-- pipeline:story-card -->", "7"),
+  ];
+  const ctx = plans.planContext(comments);
+  assert.match(ctx.plan, /new plan/);
+  assert.deepEqual(ctx.answers, [{ author: "ann", body: "1. Use the Close Date" }]);
+  const md = plans.storyFile({ key: "84", title: "T", url: "u", body: "story body" }, ctx);
+  assert.match(md, /## Agreed plan[\s\S]*new plan[\s\S]*## Answers[\s\S]*\*\*ann:\*\* 1\. Use the Close Date/);
+  assert.doesNotMatch(plans.storyFile({ key: "1", title: "T", url: "u", body: "b" }, { plan: null, answers: [] }), /Agreed plan/);
+});
+
+test("plan comment: the next step follows from the size and the open questions; criteria parse from the story", () => {
+  const withQs = plans.planComment("### Proposed build\nx\n### Open questions\n1. A?\n2. B?\nPLAN-SIZE: M");
+  assert.match(withQs, /### Build plan \(size M\)/);
+  assert.match(withQs, /answer the 2 questions in a comment, then comment \*\*\/plan\*\*/);
+  assert.doesNotMatch(withQs, /PLAN-SIZE/);
+  assert.match(plans.planComment("### Proposed build\nx\n### Open questions\nnone\nPLAN-SIZE: S"), /\*\*Next:\*\* ready\. Comment \*\*\/start\*\*/);
+  assert.match(plans.planComment("### Proposed build\nx\nPLAN-SIZE: S", { started: true }), /\*\*Next:\*\* ready\. Comment \*\*\/build\*\*/);   // already started
+  assert.match(plans.planComment("### Proposed build\nx\nPLAN-SIZE: S"), /\(size S\)\n\n### Proposed build/);
+  assert.deepEqual(plans.criteria("### Summary\nx\n\n### Acceptance criteria\n- one\n* two\n\n### Where to see it\n- not this"), ["one", "two"]);
+  assert.equal(verdict.modelFor("plan", ""), "claude-sonnet-5-5");
+  assert.match(verdict.instructions("plan"), /PLAN-SIZE: S/);
+});
+
+test("readiness: vague criteria and large stories are flagged; Jev down or all fine says nothing", async () => {
+  const jev = (answers) => typesafeJev("apik-x", async () => ({ ok: true, status: 200, json: async () => ({ model: "jev-1", answers }) }));
+  const r = await storyReadiness(jev({ c1: { type: "noul", noul: 0.9 }, c2: { type: "noul", noul: 0.2 }, size: { type: "choice", choice: "large", confidence: 0.8 } }), { criteria: ["Customer Since is set to the Close Date", "It works well"] });
+  assert.deepEqual(r.weak.map((w) => w.n), [2]);
+  assert.equal(r.size, "large");
+  assert.match(plans.readinessComment(r), /Criterion 2 may not be testable \(20%\): "It works well"[\s\S]*large story/);
+  assert.equal(await storyReadiness(typesafeJev(""), { criteria: ["x"] }), null);
+  assert.equal(plans.readinessComment({ weak: [], size: "small" }), null);
 });

@@ -44,6 +44,14 @@ jobs:
           node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
       - name: The story card says what is happening (seconds after /start)
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "creating the branch and a production-shaped scratch org (3 to 5 minutes)"
+      - name: Readiness check (Jev, AI_TRIAGE) - are the criteria testable, is the story large (skipped when planned)
+        if: vars.AI_TRIAGE == 'true'
+        continue-on-error: true
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story.md" > /dev/null
+          grep -q "^## Agreed plan" "$RUNNER_TEMP/story.md" || node .pipeline/pipeline/bin/pipe.mjs story readiness "$KEY"
       - name: The story branch (from its base; an existing one is kept)
         env:
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}

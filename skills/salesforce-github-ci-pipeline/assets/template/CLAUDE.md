@@ -27,6 +27,10 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
 - A field users edit must also be on the page layout they use. Retrieve the layout from the scratch org first (`sf project retrieve start -o issue-12 -m "Layout:Account-Account Layout"`), add the field, and commit the layout. Scratch orgs copy production's shape, so a retrieved layout only references what production has.
 - Reference data (settings an admin changes) goes in custom metadata, not hard-coded constants.
 
+## The agreed plan
+When the story file has an "Agreed plan" (from `/plan`) and "Answers", build what the plan says; where an answer
+differs from the plan, the answer wins. Do not build anything the plan and the acceptance criteria do not ask for.
+
 ## Flows
 - Prefer a record-triggered Flow for declarative automation. Before-save (`RecordBeforeSave`) for field updates on the
   same record; after-save only for related records or actions. One flow per object and trigger type where possible.

@@ -15,11 +15,12 @@ const stateOf = (c) => (c === "success" ? "done" : ["failure", "error", "cancell
  *   pr/facts/decision are absent before the PR exists. facts = gate.gather(), decision = gate.evaluate(facts).
  * returns markdown.
  */
-export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null }) {
+export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null, planned = false }) {
   const now = activityLine(activity);
   const rows = [];
   const prUrl = pr ? `${repoUrl}/pull/${pr.number}` : null;
   const branchLink = pr?.state === "MERGED" ? `\`${branch}\`` : `[\`${branch}\`](${repoUrl}/tree/${encodeURIComponent(branch)})`;   // merged branches are deleted
+  if (planned) rows.push(["done", "Plan agreed", "the **Build plan** comment on this story, with the answers to it, is part of the spec"]);
   rows.push(["done", "Branch and scratch org", `${branchLink} from \`${base}\`; org \`${branch}\` (production's shape)`]);
 
   let next;
@@ -86,7 +87,7 @@ export function startingCard({ key, activity }) {
   return render(key, "Wait: the pipeline is setting this story up.", [["running", "Branch and scratch org", "being created"]], activityLine(activity));
 }
 
-const SHORT = { "Branch and scratch org": "Branch + org", "Build": "Build", "Pull request": "Pull request", "CI (tests in a scratch org)": "CI",
+const SHORT = { "Plan agreed": "Plan", "Branch and scratch org": "Branch + org", "Build": "Build", "Pull request": "Pull request", "CI (tests in a scratch org)": "CI",
   "AI review": "AI review", "UI test": "UI test", "Approval": "Approval", "Merged": "Merged", "In production": "Production" };
 
 /** The stages as a left-to-right flow, coloured by state (GitHub draws Mermaid in comments; Jira gets the table only). */
