@@ -82,6 +82,7 @@ jobs:
           model: ${{ vars.AI_MODEL }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ steps.id.outputs.token }}
+          allowed-bots: ${{ vars.PIPELINE_BOTS }}   # /build and Jira dispatches arrive as the pipeline App; empty = none
           max-turns: "60"   # a story with trigger, handler, field, permission set, layout and four test categories took 42
           allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(sf:*),Bash(git:*),Bash(npm run:*),Bash(npm install:*),Bash(npx prettier:*),Bash(npx sfdx-lwc-jest:*),Bash(ls:*),Bash(jq:*),Bash(gh pr create:*),Bash(gh pr view:*)"
           prompt: |

@@ -54,6 +54,8 @@ jobs:
       - run: npm run lint
       - run: npm run test:unit
       - run: npm run test:pipeline
+      - name: The salesforce-github-ci-pipeline skill matches this pipeline
+        run: scripts/skills-sync.sh --check
       - uses: ./.pipeline/.github/actions/sf-auth   # the cached CLI only
         with: { login: "false" }
       - name: Code analyzer (PMD and ESLint)

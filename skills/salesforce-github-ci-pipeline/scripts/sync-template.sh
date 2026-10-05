@@ -9,7 +9,7 @@ SKILL="$(cd "$(dirname "$0")/.." && pwd)"
 T="$SKILL/assets/template"
 rm -rf "$T" && mkdir -p "$T"
 copy() { for p in "$@"; do [ -e "$SRC/$p" ] || continue; mkdir -p "$T/$(dirname "$p")"; cp -R "$SRC/$p" "$T/$p"; done; }
-copy pipeline .github scripts/ci config e2e/support playwright.config.ts \
+copy pipeline .github scripts/ci scripts/skills-sync.sh config e2e/support playwright.config.ts \
      devhub-setup/main/default/settings \
      CLAUDE.md REVIEW.md CONTEXT.md package.json .prettierrc .eslintrc.json jest.config.js .forceignore \
      sfdx-project.json code-analyzer.yml .gitignore

@@ -71,7 +71,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           LABELS: ${{ steps.c.outputs.label }}
-        run: for l in $LABELS; do gh issue edit "$N" --add-label "$l"; done
+        run: |
+          # remove first: adding a label that is already there fires no event, so a repeated command would do nothing
+          for l in $LABELS; do gh issue edit "$N" --remove-label "$l" >/dev/null 2>&1 || true; gh issue edit "$N" --add-label "$l"; done
       - name: /ship is a sign-off; let the gate decide
         if: steps.c.outputs.label == 'ship'
         run: |

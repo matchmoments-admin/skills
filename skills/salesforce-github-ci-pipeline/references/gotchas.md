@@ -111,3 +111,12 @@ Every entry happened in a real run. Search this file for the error text you see.
   → `findOrphans` + `scratch-janitor` every 6 hours.
 - **Delete through the Dev Hub** (`ActiveScratchOrg` record by `SignupUsername`), not by logging in to the org: a
   failed JWT login or a missing alias otherwise leaves the org alive.
+
+## Comment commands
+
+- **A repeated command did nothing** (a second `/start`) → the command adds a label, and adding a label that is
+  already there fires no event. → Remove the label, then add it.
+- **`/build` failed with "non-human actor"** → commands act as the App, and `ai-implement` had no `allowed_bots`.
+  → Every agent step passes `allowed-bots: ${{ vars.PIPELINE_BOTS }}`; a pipeline test checks every workflow.
+- **Keep the skill in step**: after a pipeline change run `scripts/skills-sync.sh` (text from the skills repo,
+  template from the pipeline); CI's `--check` fails a PR whose skill template is stale.

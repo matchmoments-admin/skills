@@ -644,3 +644,15 @@ test("removing an org goes through the Dev Hub record, never a login to the org;
   assert.ok(calls.some((c) => c.includes("SignupUsername='c9@x'")));
   assert.ok(!calls.some((c) => c.startsWith("org login") || c.startsWith("org delete")));
 });
+
+// ---------------------------------------------------------------- workflow wiring
+test("every workflow that runs the Claude agent allows the pipeline's own bots (commands and auto-chain act as the App)", async () => {
+  const { readdirSync } = await import("node:fs");
+  const dir = new URL("../../.github/workflows/", import.meta.url);
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".yml"))) {
+    const y = readFileSync(new URL(f, dir), "utf8");
+    const agents = y.split("uses: ./.pipeline/.github/actions/claude-agent").length - 1;
+    const allowed = (y.match(/allowed-bots: \$\{\{ vars\.PIPELINE_BOTS \}\}/g) || []).length;
+    assert.equal(allowed, agents, `${f}: ${agents} agent step(s), ${allowed} with allowed-bots`);
+  }
+});

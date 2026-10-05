@@ -7,6 +7,8 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
 - Never edit `.github/` or `pipeline/` in story work (the delivery pipeline itself; see `CONTEXT.md`). Pipeline
   maintenance happens on non-story branches into main, reviewed against `REVIEW.md` only; CI blocks story PRs that touch it.
 - Keep the change scoped to the issue's acceptance criteria. Do not refactor unrelated code.
+- Pipeline maintenance: after changing `pipeline/`, `.github/`, `scripts/` or `config/`, run `scripts/skills-sync.sh`
+  and commit `.claude/skills` (and the skills repo), so the reusable skill rebuilds exactly this. CI checks it.
 - Never commit secrets, auth URLs, keys or `.sfdx`/`.sf` folders.
 - Commit messages: `type(scope): summary (#<issue>)`, for example `feat(account): add tier field (#12)`.
 - The PR body must contain `Closes #<issue>` and a short test plan.
