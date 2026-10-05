@@ -8,6 +8,8 @@
   `SF_DEVHUB_CLIENT_ID` is the connected app's consumer key and the CI user has the app's permission set.
 - **Deleting an org you are not logged in to** → delete its `ActiveScratchOrg` record in the Dev Hub
   (`sf data delete record -s ActiveScratchOrg -w "SignupUsername='…'"`); no org login needed.
+- **The script logs in as alias `ci-devhub`**; logging the same user in under a new alias drops its other alias on
+  that machine. On a developer laptop, `sf alias set <old>=<username>` restores it.
 - **`ScratchOrgInfo.Description` cannot be filtered in SOQL** (long text). → Query active orgs, filter in jq.
 - **A failed creation can still use allowance**; creation also fails transiently. → One retry; the sweep cleans up.
 - **Daily allowance is a rolling 24 hours** in the docs; observed resets at 00:00 UTC on Developer Edition.

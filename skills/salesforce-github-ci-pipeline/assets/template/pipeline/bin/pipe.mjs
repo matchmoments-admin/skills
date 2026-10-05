@@ -13,6 +13,8 @@
 //   closeout  plan|run --tag <tag>
 //   triage    ui --log file [--story file] · review --base B --head H   (Jev, behind AI_TRIAGE; falls back safely)
 //   verdict   model <role>                              the model for an AI role (AI_MODEL overrides)
+//   prod      validate [--sha S] [--level L] [--deletions-from REF]   check-only deploy, live; prints the job id
+//   tests     run <alias> --base B [--sha S] [--all] [--min 75] [--out dir]   relevant (or all) tests, live check run
 //   story     card <key> [--base B] [--tag T]                refresh the story card on the issue / ticket
 //   metrics   [--days N] [--out file]                   DORA and pipeline telemetry as markdown
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -25,10 +27,15 @@ import * as metrics from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
 import { storyCard, CARD_MARK, CARD_TITLE } from "../src/card.mjs";
 import * as board from "../src/board.mjs";
+import * as tests from "../src/tests.mjs";
+import * as production from "../src/production.mjs";
+import { mkdtempSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { orgRegistry } from "../src/org.mjs";
 import { tracker as makeTracker } from "../src/tracker.mjs";
 
-const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "tag"]);
+const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "tag", "sha", "min", "level", "deletions-from"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -79,6 +86,93 @@ async function refreshCard(key, { base = null, tag = null } = {}) {
     await makeTracker(io).card(key, body, CARD_MARK, CARD_TITLE);
     await syncBoard(key, { repo, pr, facts, shipped: Boolean(tag) });
   } catch (e) { log(`::warning::story card for ${key} not updated: ${e.message}`); }
+}
+
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/** A GitHub check run on a commit, created once and updated as tests progress (the live view on the PR). */
+function checkRun(sha, name) {
+  const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
+  if (!sha || !repo) return { update: () => {} };
+  const call = (method, path, body) => io.run("gh", ["api", "-X", method, path, "--input", "-"], { input: JSON.stringify(body), quiet: true, allowFail: true });
+  const runUrl = process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}` : undefined;
+  const made = call("POST", `repos/${repo}/check-runs`, { name, head_sha: sha, status: "in_progress", details_url: runUrl, output: { title: "Starting", summary: "Creating the test run" } });
+  const id = made ? JSON.parse(made).id : null;
+  return {
+    update(output, conclusion) {
+      if (!id) return;
+      call("PATCH", `repos/${repo}/check-runs/${id}`, conclusion ? { status: "completed", conclusion, output } : { output });
+    },
+  };
+}
+
+/** Run the tests a change needs (or all), live: a "Salesforce tests" check on the commit and the story card. */
+async function testsRun(alias) {
+  const dirs = (process.env.SOURCE_DIRS || "force-app").split(/\s+/).filter(Boolean);
+  const baseRef = flag("base", "origin/main");
+  const list = (args) => (io.git(args) || "").split("\n").filter(Boolean);
+  const changed = list(["diff", "--name-only", "--diff-filter=ACMR", `${baseRef}...HEAD`, "--", ...dirs]);
+  const deleted = list(["diff", "--name-only", "--diff-filter=D", `${baseRef}...HEAD`, "--", ...dirs]);
+  const files = list(["ls-files", ...dirs]);
+  const read = (p) => { try { return readFileSync(p, "utf8"); } catch { return ""; } };
+  const plan = tests.selectTests({ changed, deleted, files, read, mode: has("all") ? "all" : "relevant" });
+  log(`tests: ${plan.mode} (${plan.why})${plan.mode === "relevant" ? `: ${[...plan.apex, ...plan.flows].join(", ")}` : ""}`);
+  const check = checkRun(flag("sha"), "Salesforce tests");
+  if (plan.mode === "none") { check.update({ title: "No Salesforce changes", summary: plan.why }, "success"); return say("no Salesforce changes"); }
+  const classPath = (cls) => files.find((p) => p.endsWith(`/${cls}.cls`)) || null;
+  const story = names.storyOf(process.env.REF || process.env.GITHUB_HEAD_REF || "");
+  let polls = 0;
+  const state = tests.runTests(io, {
+    alias, plan, sleep: sleepSync, outDir: flag("out", "test-results"),
+    onProgress: (st) => {
+      check.update(tests.checkOutput(st, { plan, classPath }));
+      log(`  apex ${st.apex.passed}/${st.apex.ran} passed (${st.apex.classesDone}/${st.apex.classes} classes)${st.phase === "flows" ? " · flow tests running" : ""}`);
+      if (story && polls++ % 4 === 0) refreshCard(story).catch(() => {});
+    },
+  });
+  const result = tests.verdict(state, { plan, changedCode: tests.changedCode(changed, files, read), min: Number(flag("min", "75")) });
+  check.update(tests.checkOutput(state, { plan, result, classPath }), result.ok ? "success" : "failure");
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, tests.summaryMarkdown(state, { plan, result }) + "\n");
+  for (const f of [...state.apex.failures, ...state.flows.failures]) log(`  FAIL ${f.test}: ${f.message}`);
+  if (!result.ok) throw new Error(`tests failed: ${result.reasons.join("; ")}`);
+  return say(`tests passed: apex ${state.apex.passed}/${state.apex.ran}, flow ${state.flows.passed}/${state.flows.ran}`);
+}
+
+/** Check-only deploy of the current checkout to production, watched live; stdout is only the validation id. */
+async function prodValidate() {
+  const dirs = (process.env.SOURCE_DIRS || "force-app").split(/\s+/).filter(Boolean);
+  const files = (io.git(["ls-files", ...dirs]) || "").split("\n").filter(Boolean);
+  const allTests = files.filter((p) => p.endsWith(".cls")).filter((p) => /@istest/i.test(readFileSync(p, "utf8"))).map((p) => p.split("/").pop().replace(/\.cls$/, ""));
+  // components removed since the last release go as post-destructive changes, so the quick deploy removes them too
+  let source = dirs.flatMap((d) => ["-d", d]);
+  const from = flag("deletions-from") || io.git(["describe", "--tags", "--abbrev=0", "HEAD"], { allowFail: true });
+  if (from) {
+    const out = mkdtempSync(join(tmpdir(), "delta-"));
+    io.run("sf", ["sgd", "source", "delta", "--from", from, "--to", "HEAD", "--output-dir", out, ...dirs.flatMap((d) => ["--source-dir", d])], { quiet: true, allowFail: true });
+    const destructive = join(out, "destructiveChanges", "destructiveChanges.xml");
+    if (existsSync(destructive) && readFileSync(destructive, "utf8").includes("<members>")) {
+      log(`deleting since ${from}: ${[...readFileSync(destructive, "utf8").matchAll(/<members>([^<]+)/g)].map((m) => m[1]).join(", ")}`);
+      io.run("sf", ["project", "generate", "manifest", ...dirs.flatMap((d) => ["--source-dir", d]), "--output-dir", out, "--name", "full"], { quiet: true });
+      source = ["--manifest", join(out, "full.xml"), "--post-destructive-changes", destructive];
+    }
+  }
+  const level = flag("level", process.env.PROD_TEST_LEVEL || "RunRelevantTests");
+  const instance = io.sf(["org", "display", "-o", "devhub"], { allowFail: true })?.instanceUrl;
+  const deployStatusUrl = instance ? `${instance.replace(".my.salesforce.com", ".lightning.force.com")}/lightning/setup/DeployStatus/home` : undefined;
+  const check = checkRun(flag("sha"), "Production validation");
+  log(`production validation with ${level} (fallback: every test class)`);
+  const p = production.validate(io, {
+    source, level, allTests, sleep: sleepSync,
+    onProgress: (st) => { check.update(production.progressOutput(st, { deployStatusUrl })); log(`  ${st.status}: components ${st.components.done}/${st.components.total}, tests ${st.tests.done}/${st.tests.total}`); },
+  });
+  const out = production.progressOutput(p, { deployStatusUrl, done: true });
+  check.update(out, p.ok ? "success" : "failure");
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Production validation: ${out.title}\n\n${out.summary}\n\n${out.text}\n`);
+  if (!p.ok) {
+    process.stderr.write(`Production validation failed (${p.status}):\n${out.text || "see Deployment Status"}\n`);
+    process.exit(1);
+  }
+  return say(p.id);
 }
 
 /** Move the story on the delivery board, when BOARD_PROJECT is set and the App credentials are in this step. */
@@ -146,7 +240,7 @@ async function main() {
 
     case "gate evaluate": {
       const pr = arg(0);
-      const facts = gate.gather(pr, io, { openReleaseBranch: openRelease(), ai: names.aiFeatures() });
+      const facts = gate.gather(pr, io, { openReleaseBranch: openRelease(), ai: names.aiFeatures(), uat: process.env.UAT_ENABLED === "true" });
       const d = gate.evaluate(facts);
       const reasons = d.reasons.map((r) => `- ${r}`).join("\n");
       output({
@@ -203,6 +297,8 @@ async function main() {
     }
 
     case "verdict model": return say(verdict.modelFor(arg(0)));
+    case "tests run": return testsRun(arg(0));
+    case "prod validate": return prodValidate();
     case "story card": { await refreshCard(arg(0), { base: flag("base"), tag: flag("tag") }); return say(`card updated for ${arg(0)}`); }
     case "triage ui": {
       const read = (f) => (f ? readFileSync(f, "utf8") : "");

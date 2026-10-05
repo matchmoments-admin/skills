@@ -83,6 +83,10 @@ Done when: a GitHub Release tag exists for both, the change is visible in produc
   create a Project with a Status field (Ready, Building, In review, Approved, In staging, Live), give the App
   organisation **Projects: Read and write**, and set `BOARD_PROJECT` to the project number
   ([`scripts/create-board.sh`](scripts/create-board.sh) `<org> <repo>` does the project, the stages and the variable).
+- Tests per stage: a story runs only what its change needs (live **Salesforce tests** check on the PR); staging runs
+  everything; production validates with `RunRelevantTests` (beta) and falls back to every test class (live
+  **Production validation** check, plus Setup › Deployment Status). Optional UAT: `UAT_ENABLED`, sandbox through
+  `SF_UAT_USERNAME`, sign-off with `/uat-pass`.
 - Telemetry: the weekly `metrics` workflow keeps a "Delivery metrics" issue (DORA, AI first-pass rate, workflow health); transcripts of every AI run are artifacts (`claude-transcript-*`).
 - A fix to `.github/` or `pipeline/` reaches an open release branch only after `gh workflow run back-merge.yml` (PR workflows run the merge result's copy).
 - When something fails, look it up in [`references/gotchas.md`](references/gotchas.md) by its error text first.

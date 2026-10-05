@@ -21,7 +21,7 @@ export function plan({ releases = [], mergedIntoRelease = {}, sprintStories = {}
       if (shipped.has(s.key)) { out.ship.push(s.key); out.deleteOrgs.push(`story:${s.key}`); }
       else if (s.state !== "CLOSED") out.carry.push(s.key);
     }
-    out.deleteOrgs.push(`sprint:${sprint}`);
+    out.deleteOrgs.push(`sprint:${sprint}`, `uat:${sprint}`);   // the UAT stand-in, if one was made (no-op otherwise)
     out.deleteBranch = releaseBranch(sprint);
   }
   for (const pr of mergedIntoMain) {

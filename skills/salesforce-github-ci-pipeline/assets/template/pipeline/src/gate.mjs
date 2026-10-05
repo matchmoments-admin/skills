@@ -11,7 +11,7 @@
 // verdict on the code always blocks, whatever the flags. With every flag off, CI plus a person's approval is the gate.
 import { CHECKS, storyOf, sprintOf, uiFacing, storySpec } from "./conventions.mjs";
 
-export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test" };
+export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", uat: "pipeline/uat" };
 export const TRUSTED_STATUS_CREATORS = ["github-actions[bot]"];
 const PIPELINE_AUTHORS = /^(github-actions|app\/.+|.+\[bot\]|.+-pipeline)$/;
 
@@ -114,6 +114,14 @@ export function evaluate(facts) {
       } else if (["failure", "error"].includes(got.state)) reasons.push(`${v.what} did not pass (${got.state})`);
     }
   }
+  // UAT (UAT_ENABLED): a release ships only after a person signed off the release in UAT (/uat-pass), on this code.
+  if (r === "release" && facts.uat) {
+    const u = verdictFor(STATUS.uat, ctx);
+    if (u.state === "missing") reasons.push("not in UAT yet (it deploys there after the release PR opens)");
+    else if (u.state === "stale") reasons.push("UAT signed off an older version; it redeploys, then sign off again (/uat-pass)");
+    else if (u.state === "pending") reasons.push("waiting for UAT sign-off: test in UAT, then comment /uat-pass (or /uat-fail)");
+    else if (u.state !== "success") reasons.push(`UAT failed (${u.description || u.state}); fix it, or comment /uat-pass after a retest`);
+  }
   if (rules.trusted) {
     if (!PIPELINE_AUTHORS.test(pr.author?.login || "") && !pr.author?.is_bot) reasons.push("a back-merge must be opened by the pipeline");
     if (compare.headInMain === false) reasons.push("a back-merge must contain only commits already in main");
@@ -133,7 +141,7 @@ export function evaluate(facts) {
 }
 
 /** Facts for evaluate(), fetched through the io seam (all pages). */
-export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai = {} } = {}) {
+export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai = {}, uat = false } = {}) {
   const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
   const pr = gh(["pr", "view", String(prNumber), "--json", "number,state,isDraft,mergeable,baseRefName,headRefName,headRefOid,labels,author,commits,url"]);
   const head = pr.headRefOid;
@@ -166,7 +174,7 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
       compare.unreleasedSprintCommits = (vsMain.commits || []).filter((c) => unreleased.has(c.sha)).length;
     }
   }
-  return { pr, reviews, checkRuns, labelEvents, comments, statuses, diffsToHead, compare, ai };
+  return { pr, reviews, checkRuns, labelEvents, comments, statuses, diffsToHead, compare, ai, uat };
 }
 
 /** Re-run the gate when a person has signed off (or the PR needs no sign-off), so it merges when its last input lands.

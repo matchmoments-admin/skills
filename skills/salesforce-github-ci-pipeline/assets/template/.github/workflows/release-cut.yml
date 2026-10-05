@@ -37,3 +37,7 @@ jobs:
           node pipeline/bin/pipe.mjs release notes "$SPRINT" > notes.md
           gh pr create --base main --head "$REL" --title "Release $SPRINT" --body-file notes.md --label release
           [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$REL" -f ref="$REL"
+          # UAT_ENABLED: the release candidate goes to UAT for business sign-off
+          if [ "${{ vars.UAT_ENABLED }}" = "true" ]; then
+            GH_TOKEN="${{ github.token }}" gh workflow run uat-deploy.yml --ref main -f pr="$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number')"
+          fi

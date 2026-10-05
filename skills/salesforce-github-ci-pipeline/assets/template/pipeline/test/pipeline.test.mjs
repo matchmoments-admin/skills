@@ -12,6 +12,8 @@ import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
 import { storyCard, CARD_MARK, withoutMap } from "../src/card.mjs";
 import * as board from "../src/board.mjs";
+import * as tests from "../src/tests.mjs";
+import * as production from "../src/production.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -237,7 +239,7 @@ test("close-out of sprint 2026-w41: ship #1 and #3, carry #2, close hotfix #8, i
   assert.deepEqual(p.ship, ["1", "3"]);
   assert.deepEqual(p.carry, ["2"]);
   assert.deepEqual(p.hotfix, [{ key: "8", pr: 12 }]);
-  assert.deepEqual(p.deleteOrgs, ["story:1", "story:3", "sprint:2026-w41", "story:8"]);
+  assert.deepEqual(p.deleteOrgs, ["story:1", "story:3", "sprint:2026-w41", "uat:2026-w41", "story:8"]);
   assert.equal(p.deleteBranch, "release/2026-w41");
 });
 
@@ -502,4 +504,107 @@ test("managed packages: installed before the source, with an install key from th
   writeFileSync(f, JSON.stringify([{ name: "X", id: "not-an-id" }]));
   assert.throws(() => packageList(f), /needs a package version id/);
   assert.deepEqual(packageList(`${f}.missing`), []);
+});
+
+// ---------------------------------------------------------------- test runs
+const src = {
+  "force-app/c/AccountSelector.cls": "public class AccountSelector {}",
+  "force-app/c/AccountSelectorTest.cls": "@isTest class AccountSelectorTest { AccountSelector s; }",
+  "force-app/c/CaseHandler.cls": "public class CaseHandler {}",
+  "force-app/c/CaseHandlerTest.cls": "@IsTest class CaseHandlerTest { CaseHandler h; Case c; }",
+  "force-app/c/Orphan.cls": "public class Orphan {}",
+  "force-app/t/CaseTrigger.trigger": "trigger CaseTrigger on Case (before insert) {}",
+  "force-app/f/flows/Web_Priority.flow-meta.xml": "<Flow><start><object>Case</object></start></Flow>",
+  "force-app/f/flowtests/Web_Medium.flowtest-meta.xml": "<FlowTest><flowApiName>Web_Priority</flowApiName></FlowTest>",
+  "force-app/o/Account/fields/Tier__c.field-meta.xml": "<CustomField/>",
+};
+const files = Object.keys(src), read = (p) => src[p] || "";
+const pick = (changed, extra = {}) => tests.selectTests({ changed, files, read, ...extra });
+
+test("test selection: only what a change needs, everything when in doubt", () => {
+  assert.equal(pick([]).mode, "none");
+  assert.deepEqual(pick(["force-app/c/AccountSelector.cls"]).apex, ["AccountSelectorTest"]);
+  assert.deepEqual(pick(["force-app/c/CaseHandlerTest.cls"]).apex, ["CaseHandlerTest"]);
+  assert.deepEqual(pick(["force-app/t/CaseTrigger.trigger"]).apex, ["CaseHandlerTest"]);           // names its object
+  const flow = pick(["force-app/f/flows/Web_Priority.flow-meta.xml"]);
+  assert.deepEqual([flow.apex, flow.flows], [["CaseHandlerTest"], ["Web_Priority.Web_Medium"]]);
+  const five = pick(["force-app/c/AccountSelector.cls", "force-app/c/CaseHandler.cls", "force-app/f/flows/Web_Priority.flow-meta.xml"]);
+  assert.equal(five.mode, "relevant");
+  assert.deepEqual(five.apex, ["AccountSelectorTest", "CaseHandlerTest"]);
+  assert.equal(pick(["force-app/c/Orphan.cls"]).mode, "all");                                        // no test names it
+  assert.equal(pick(["force-app/o/Account/fields/Tier__c.field-meta.xml"]).mode, "all");            // other metadata
+  assert.equal(pick(["force-app/c/AccountSelector.cls"], { deleted: ["force-app/c/Old.cls"] }).mode, "all");
+  assert.deepEqual(pick(["force-app/c/AccountSelector.cls"], { mode: "all" }).flows, ["Web_Priority.Web_Medium"]);   // all includes every Flow test
+  assert.deepEqual(tests.changedCode(["force-app/c/AccountSelector.cls", "force-app/c/AccountSelectorTest.cls"], files, read), ["AccountSelector"]);
+});
+
+test("test run: polls with live progress, collects failures and coverage; verdict and check output", () => {
+  let polls = 0;
+  const sf = (args) => {
+    const k = args.slice(0, 3).join(" ");
+    if (k === "apex run test") return { testRunId: "707X" };
+    if (k.startsWith("data query") && args.at(-1).includes("ApexTestQueueItem")) return { records: polls++ < 1 ? [{ Status: "Processing", ApexClass: { Name: "CaseHandlerTest" } }] : [{ Status: "Completed", ApexClass: { Name: "CaseHandlerTest" } }] };
+    if (k.startsWith("data query")) return { records: [{ Outcome: "Pass", MethodName: "a", ApexClass: { Name: "CaseHandlerTest" } }, { Outcome: "Fail", MethodName: "b", Message: "Expected Medium", StackTrace: "Class.CaseHandlerTest.b: line 12, column 1", ApexClass: { Name: "CaseHandlerTest" } }] };
+    if (k === "apex get test") return { summary: { orgWideCoverage: "80%" }, coverage: { coverage: [{ name: "CaseHandler", coveredPercent: 60 }] } };
+    if (k === "flow run test") return { testRunId: "707F" };
+    if (k === "flow get test") return { summary: { outcome: "Passed" }, tests: [{ FullName: "Web_Priority.Web_Medium", Outcome: "Pass" }] };
+    throw new Error(`unexpected ${k}`);
+  };
+  const plan = { mode: "relevant", apex: ["CaseHandlerTest"], flows: ["Web_Priority.Web_Medium"], why: "2 changed file(s)" };
+  const seen = [];
+  const st = tests.runTests({ sf }, { alias: "o", plan, sleep: () => {}, onProgress: (s) => seen.push(`${s.phase}:${s.apex.classesDone}/${s.apex.classes}`) });
+  assert.deepEqual(seen, ["apex:0/1", "apex:1/1", "flows:1/1", "done:1/1"]);
+  assert.equal(st.apex.failed, 1);
+  assert.equal(st.flows.passed, 1);
+  const r = tests.verdict(st, { plan, changedCode: ["CaseHandler"] });
+  assert.deepEqual(r.reasons, ["1 Apex test(s) failed", "CaseHandler coverage 60% is below 75%"]);
+  const out = tests.checkOutput(st, { plan, result: r, classPath: (c) => `force-app/c/${c}.cls` });
+  assert.equal(out.title, "Failed: Apex 1/2 (1/1 classes) · Flow 1/1");
+  assert.deepEqual(out.annotations[0], { path: "force-app/c/CaseHandlerTest.cls", start_line: 12, end_line: 12, annotation_level: "failure", title: "CaseHandlerTest.b", message: "Expected Medium" });
+  assert.match(tests.summaryMarkdown(st, { plan, result: r }), /\| CaseHandler \| 60% \|/);
+});
+
+// ---------------------------------------------------------------- production validation
+test("production validation: RunRelevantTests, live progress, fallback to every test class when the org refuses it", () => {
+  const calls = [];
+  const fakeIo = (rejectStart, reports) => ({
+    sf: (args) => {
+      calls.push(args.join(" "));
+      if (args[2] === "validate") return rejectStart && args.includes("RunRelevantTests") ? null : { id: "0AfX" };
+      return reports.shift();
+    },
+  });
+  const progress = [];
+  const ok = production.validate(fakeIo(false, [
+    { status: "InProgress", numberComponentsDeployed: 3, numberComponentsTotal: 26, numberTestsCompleted: 0, numberTestsTotal: 5 },
+    { status: "Succeeded", done: true, numberComponentsDeployed: 26, numberComponentsTotal: 26, numberTestsCompleted: 5, numberTestsTotal: 5 },
+  ]), { source: ["-d", "force-app"], allTests: ["A", "B"], sleep: () => {}, onProgress: (p) => progress.push(`${p.components.done}/${p.tests.done}`) });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.level, "RunRelevantTests");
+  assert.deepEqual(progress, ["3/0", "26/5"]);
+  calls.length = 0;
+  const fb = production.validate(fakeIo(true, [{ status: "Succeeded", done: true }]), { source: ["-d", "force-app"], allTests: ["A", "B"], sleep: () => {} });
+  assert.equal(fb.level, "all");
+  assert.match(calls[1], /--test-level RunSpecifiedTests --tests A --tests B/);
+  const failed = production.validate(fakeIo(false, [{ status: "Failed", done: true, details: { componentFailures: { fullName: "X", componentType: "ApexClass", problem: "bad" }, runTestResult: { failures: [{ name: "T", methodName: "m", message: "boom" }] } } }]), { source: [], sleep: () => {} });
+  assert.equal(failed.ok, false);
+  const out = production.progressOutput(failed, { done: true, deployStatusUrl: "https://x/ds" });
+  assert.match(out.title, /^Failed:/);
+  assert.match(out.text, /\| component \| ApexClass X \| bad \|/);
+  assert.match(out.text, /\| test \| T\.m \| boom \|/);
+});
+
+// ---------------------------------------------------------------- UAT
+test("UAT: with UAT_ENABLED a release needs a sign-off on its current code; off, nothing changes", () => {
+  const f = open(fixture(26)), head = f.pr.headRefOid;
+  const st = (state, sha = head, description = "") => ({ sha, context: gate.STATUS.uat, state, description, created_at: "2026-10-05T00:00:00Z", creator: { login: "github-actions[bot]" } });
+  assert.deepEqual(gate.evaluate({ ...f, uat: false }).reasons, []);
+  assert.match(gate.evaluate({ ...f, uat: true }).reasons.join(), /not in UAT yet/);
+  assert.match(gate.evaluate({ ...f, uat: true, statuses: [st("pending")] }).reasons.join(), /waiting for UAT sign-off/);
+  assert.match(gate.evaluate({ ...f, uat: true, statuses: [st("failure", head, "totals wrong")] }).reasons.join(), /UAT failed \(totals wrong\)/);
+  const older = "0000000000000000000000000000000000000009";
+  assert.match(gate.evaluate({ ...f, uat: true, statuses: [st("success", older)], diffsToHead: { [older]: ["force-app/x.cls"] } }).reasons.join(), /older version/);
+  assert.deepEqual(gate.evaluate({ ...f, uat: true, statuses: [st("success")] }).reasons, []);
+  const o = names.orgFor("uat:2026-w45");
+  assert.deepEqual([o.alias, o.description, o.lock, o.days], ["uat", "uat-2026-w45", "org-uat", 30]);
 });

@@ -32,7 +32,10 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   rows.push(["done", "Pull request", `[#${pr.number}](${prUrl})${pr.title ? ` ${pr.title}` : ""}`]);
   const ci = [CHECKS.static, CHECKS.apex].map((n) => stateOf(latestCheck(facts?.checkRuns || [], n)));
   const ciState = ci.includes("failed") ? "failed" : ci.every((s) => s === "done") ? "done" : "running";
-  rows.push([ciState, "CI (tests in a scratch org)", ciState === "failed" ? `[see what failed](${prUrl}/checks)` : ciState === "done" ? "static checks, deploy and Apex tests passed" : `[running](${prUrl}/checks)`]);
+  // the live "Salesforce tests" check (pipeline/src/tests.mjs) says how far the tests are, while they run
+  const live = (facts?.checkRuns || []).filter((c) => c.name === "Salesforce tests").sort((x, y) => String(x.started_at).localeCompare(String(y.started_at))).pop();
+  const liveTitle = live?.output?.title ? ` (${live.output.title})` : "";
+  rows.push([ciState, "CI (tests in a scratch org)", ciState === "failed" ? `[see what failed](${prUrl}/checks)${liveTitle}` : ciState === "done" ? `static checks, deploy and tests passed${liveTitle}` : `[running](${prUrl}/checks)${liveTitle}`]);
 
   const ctx = { ...(facts || {}), head: pr.headRefOid };
   for (const v of requiredVerdicts(facts || {}, key)) {

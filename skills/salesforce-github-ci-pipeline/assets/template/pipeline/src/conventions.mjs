@@ -101,6 +101,7 @@ export function orgFor(target, { hotfix = false } = {}) {
   let kind, id;
   const t = String(target);
   if (t.startsWith("story:")) [kind, id] = ["story", t.slice(6)];
+  else if (t.startsWith("uat:")) [kind, id] = ["uat", t.slice(4)];
   else if (t.startsWith("sprint:")) [kind, id] = ["sprint", t.slice(7)];
   else if (sprintOf(t)) [kind, id] = ["sprint", sprintOf(t)];
   else if (storyOf(t)) [kind, id] = ["story", storyOf(t)];
@@ -111,6 +112,9 @@ export function orgFor(target, { hotfix = false } = {}) {
       kind, key: id, alias: branch, description: branch, lock: `org-${branch}`,
       definition: hotfix ? DEFINITION.hotfix : DEFINITION.story, days: ORG_LIFETIME_DAYS.story,
     };
+  }
+  if (kind === "uat") {   // the business sign-off org: a scratch org standing in when no UAT sandbox is configured
+    return { kind, sprint: id, alias: "uat", description: `uat-${id}`, lock: "org-uat", definition: DEFINITION.sprint, days: ORG_LIFETIME_DAYS.sprint };
   }
   return {
     kind, sprint: id, alias: "staging", description: `staging-${id}`, lock: "org-staging",

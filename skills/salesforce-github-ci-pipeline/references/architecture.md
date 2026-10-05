@@ -71,3 +71,18 @@ Every AI step is optional; the gate's `requiredVerdicts()` decides what a PR nee
 
 A failed verdict always blocks. Models per role live in `verdict.mjs` `MODELS` (Haiku for review and UI test,
 Sonnet for build and fix); `AI_MODEL` overrides. The label `test` runs a committed spec with no AI.
+
+## Tests and production validation
+
+- `pipeline/src/tests.mjs` is the one test-run module: `selectTests` (pure: a story runs what its change needs; any
+  non-code metadata, deletion or untested code runs everything), `runTests` (async Apex run polled through
+  ApexTestQueueItem / ApexTestResult, then Flow tests by name; `onProgress` each poll), `verdict` (story runs gate the
+  changed classes' own coverage, full runs gate org-wide), `checkOutput` / `summaryMarkdown` (pure). `pipe tests run`
+  posts the live **Salesforce tests** check on the commit and refreshes the story card. CI uses it per story (release
+  PRs and back-merges run all); staging runs all.
+- `pipeline/src/production.mjs`: check-only deploy, async, polled with `sf project deploy report` (components and
+  tests); `RunRelevantTests` with a fallback to every test class (at start, or when the result says the level was
+  refused); `pipe prod validate` posts the live **Production validation** check and prints only the job id.
+  `scripts/ci/validate-prod.sh` is a wrapper; `PROD_TEST_LEVEL` overrides.
+- UAT (`UAT_ENABLED`): `uat-deploy` puts the release head in UAT (sandbox via `SF_UAT_USERNAME`, else scratch
+  `uat:<sprint>`); `pipeline/uat` is a verdict the gate requires on the release route; `/uat-pass`, `/uat-fail <why>`.

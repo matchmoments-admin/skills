@@ -16,7 +16,7 @@ on:
         required: true
 permissions:
   contents: write
-  checks: read
+  checks: write         # reads the checks; posts the live "Production validation" check
   issues: write         # the story card
   pull-requests: write
   actions: write
@@ -28,6 +28,7 @@ env:                    # the AI switches (repository variables); the gate and t
   AI_UI_TEST: ${{ vars.AI_UI_TEST }}
   AI_AUTO_CHAIN: ${{ vars.AI_AUTO_CHAIN }}
   AI_TRIAGE: ${{ vars.AI_TRIAGE }}
+  UAT_ENABLED: ${{ vars.UAT_ENABLED }}   # a release needs a UAT sign-off (pipeline/uat)
 jobs:
   decide:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready' || github.event.review.state == 'approved'
@@ -111,6 +112,8 @@ jobs:
         working-directory: candidate
         env:
           GH_TOKEN: ${{ github.token }}
+          VALIDATE_SHA: ${{ needs.decide.outputs.head }}   # the live "Production validation" check lands on the PR
+          PROD_TEST_LEVEL: ${{ vars.PROD_TEST_LEVEL }}     # empty = RunRelevantTests, falling back to every test class
         run: |
           if JOB=$("$GITHUB_WORKSPACE/scripts/ci/validate-prod.sh" 2> "$RUNNER_TEMP/prod-errors.txt"); then echo "job=$JOB" >> "$GITHUB_OUTPUT"; echo "validated as $JOB"; exit 0; fi
           cat "$RUNNER_TEMP/prod-errors.txt"

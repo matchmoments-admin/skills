@@ -92,3 +92,13 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **A labelled PR runs an old workflow file** → `pull_request` events use GitHub's test merge commit, refreshed lazily; even a back-merge may not reach it. → Run AI steps on `workflow_dispatch --ref main`; route PR events through `pull_request_target` (base branch's own file), with route jobs that never check out PR code.
 - **An agent "scheduled a check" and ended without committing** → it backgrounded a long command. → `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` on the agent step, plus a workflow step that commits what it wrote.
 - **ai-fix ignored a failed check** → the newest CI run was still running. → Use the newest *failed* run, preferring the current head.
+
+## Tests, validation and CI on main
+
+- **`RunRelevantTests` ran 0 tests** → the payload was identical to production; the platform only tests what changes.
+  Expected. Orgs without the beta reject the level: the module falls back to every test class.
+- **A second merge to main cancels the first commit's CI** (one CI per branch); a script waiting for the first
+  commit's CI then waits forever, and sprint-start (which needs main's latest commit green) fails. → Wait on the
+  latest main commit; do not merge to main while a sprint is starting.
+- **Logging in to the same Salesforce user under a new alias drops the old alias** (seen with `devhub` after a
+  `ci-devhub` login). → Pipeline jobs use one alias; locally, `sf alias set devhub=<username>` restores it.

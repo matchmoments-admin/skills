@@ -14,7 +14,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write    # close-out closes leftover PRs on the shipped release branch
-  checks: read   # the story card reads checks and verdicts
+  checks: write  # the story card reads checks; the live "Production validation" check
   statuses: read
 concurrency:
   group: release
@@ -67,6 +67,9 @@ jobs:
         id: validate
         env:
           GATE_JOB: ${{ inputs.validated_job }}
+          VALIDATE_SHA: ${{ needs.plan.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PROD_TEST_LEVEL: ${{ vars.PROD_TEST_LEVEL }}
         run: |
           if [ -n "$GATE_JOB" ]; then
             [[ "$GATE_JOB" =~ ^0Af[A-Za-z0-9]{12,15}$ ]] || { echo "::error::not a deploy ID: $GATE_JOB"; exit 1; }

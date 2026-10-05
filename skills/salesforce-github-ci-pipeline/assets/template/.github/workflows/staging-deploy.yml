@@ -17,6 +17,9 @@ jobs:
   staging:
     name: staging regression
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write         # the live "Salesforce tests" check on the release head
     concurrency:
       group: org-staging   # the one staging org
       cancel-in-progress: false
@@ -48,12 +51,9 @@ jobs:
           node ../.pipeline/pipeline/bin/pipe.mjs org attach "sprint:${{ steps.ctx.outputs.SPRINT }}"
           node ../.pipeline/pipeline/bin/pipe.mjs org deploy staging
           node ../.pipeline/pipeline/bin/pipe.mjs org prepare staging
-      - name: Full Apex regression with coverage gate
+      - name: Full regression (every Apex and Flow test), live on the release head as "Salesforce tests"
         working-directory: candidate
-        run: mkdir -p test-results && ../.pipeline/scripts/ci/coverage-gate.sh staging
-      - name: Flow tests
-        working-directory: candidate
-        run: ../.pipeline/scripts/ci/flow-tests.sh staging
+        run: node ../.pipeline/pipeline/bin/pipe.mjs tests run staging --all --base HEAD --sha "$(git rev-parse HEAD)" --out test-results
       - name: Drop production access before running the branch's specs
         run: |
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
@@ -103,3 +103,5 @@ jobs:
         run: |
           RPR=$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')
           [ -z "$RPR" ] || node pipeline/bin/pipe.mjs gate nudge "$RPR"
+          # UAT_ENABLED: keep UAT on the release PR's latest code (a newer head needs a new sign-off anyway)
+          [ -z "$RPR" ] || [ "${{ vars.UAT_ENABLED }}" != "true" ] || gh workflow run uat-deploy.yml --ref main -f pr="$RPR"
