@@ -47,17 +47,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: main }
-      - name: Decide
+      - name: Decide (and the card)
         id: gate
+        env:
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}   # the board, when BOARD_PROJECT is set
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: |
           [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::not a PR number: $PR"; exit 1; }
-          node pipeline/bin/pipe.mjs gate evaluate "$PR"
+          node pipeline/bin/pipe.mjs gate evaluate "$PR" --card   # also the story or release card, from the same facts
       - name: The gate's verdict on this commit (pipeline/gate, required by the branch rules)
         if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != ''
         env:
           STATE: ${{ steps.gate.outputs.gate_state }}
           DESC: ${{ steps.gate.outputs.gate_description }}
-        run: node pipeline/bin/pipe.mjs status set pipeline/gate "$STATE" "${{ steps.gate.outputs.head }}" "$DESC"
+          VALIDATE: ${{ steps.gate.outputs.validate }}
+        run: |
+          # a route that validates against production keeps the merge button locked until production accepts it
+          if [ "$STATE" = success ] && [ "$VALIDATE" = true ]; then STATE=pending; DESC="Ready: validating against production before merging"; fi
+          node pipeline/bin/pipe.mjs status set pipeline/gate "$STATE" "${{ steps.gate.outputs.head }}" "$DESC"
       - name: Explain what is missing (PRs without a card only, e.g. pipeline maintenance; once per distinct reason list)
         if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != '' && steps.gate.outputs.mergeable != 'true' && steps.gate.outputs.story == '' && steps.gate.outputs.route != 'release'
         env:
@@ -68,12 +75,6 @@ jobs:
           case "$REASONS" in *"not approved"*|*"no sign-off"*|*"approve again"*) BODY=$(printf '%s\n\n**Approve here:** %s (Review changes > Approve > Submit review)' "$BODY" "$URL");; esac
           LAST=$(gh pr view "$PR" --json comments --jq '[.comments[] | select(.body | startswith("Not merged yet"))] | last | .body // ""')
           if [ "$LAST" = "$BODY" ]; then echo "already said so"; else gh pr comment "$PR" --body "$BODY"; fi
-      - name: The card (the story's, or the release card), with what is next
-        if: steps.gate.outputs.story != '' || steps.gate.outputs.route == 'release'
-        env:
-          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
-          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
-        run: node pipeline/bin/pipe.mjs pr card "$PR"
   ship:
     needs: decide
     if: needs.decide.outputs.mergeable == 'true'
@@ -81,7 +82,7 @@ jobs:
     concurrency:
       group: ship-${{ needs.decide.outputs.lock }}   # everything that lands on main ships one at a time
       cancel-in-progress: false
-    timeout-minutes: 50
+    timeout-minutes: 100   # production validation can take 60 minutes in a large org
     env:
       GH_REPO: ${{ github.repository }}
       PR: ${{ github.event.pull_request.number || inputs.pr }}
@@ -130,8 +131,15 @@ jobs:
         run: |
           if JOB=$("$GITHUB_WORKSPACE/scripts/ci/validate-prod.sh" 2> "$RUNNER_TEMP/prod-errors.txt"); then echo "job=$JOB" >> "$GITHUB_OUTPUT"; echo "validated as $JOB"; exit 0; fi
           cat "$RUNNER_TEMP/prod-errors.txt"
+          node pipeline/bin/pipe.mjs status set pipeline/gate failure "$HEAD_SHA" "Production rejected it: see the Production validation check"
           node pipeline/bin/pipe.mjs pr card "$PR" --now "production validation" --failed --retry "production rejected it: the Production validation check lists each error"
           exit 1
+      - name: Production accepted it, the merge button may unlock
+        if: needs.decide.outputs.validate == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node pipeline/bin/pipe.mjs status set pipeline/gate success "$HEAD_SHA" "Validated against production: merging"
       - name: Merge (only the head the gate decided on)
         id: merge
         env:
@@ -169,7 +177,7 @@ jobs:
             esac
           done
       - name: Nothing waiting behind this one is lost (GitHub cancels all but the newest queued run in a group)
-        if: always() && steps.merge.outcome != 'skipped'
+        if: always() && steps.merge.outcome != 'skipped' && needs.decide.outputs.lock == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
           BASE: ${{ steps.merge.outputs.base }}

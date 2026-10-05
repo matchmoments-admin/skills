@@ -88,7 +88,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
   if (id === "gate") { host.dispatch("gate.yml", { pr: where.number }); return { done: "re-running the gate" }; }
   if (id === "ci") { host.dispatch("ci.yml", { ref: where.pr.headRefName }, where.pr.headRefName); return { done: "re-running CI" }; }
   if (id === "staging") { host.dispatch("staging-deploy.yml", {}, where.pr.headRefName); return { done: "re-running the staging regression" }; }
-  if (id === "uat") { host.dispatch("uat-deploy.yml", { pr: where.number }); return { done: "deploying to UAT again" }; }
+  if (id === "uat") { host.dispatch("uat-deploy.yml", { pr: where.number, again: "true" }); return { done: "deploying to UAT again" }; }
   // labels start the action's own workflow; remove first, since adding a label that is already there fires nothing
   for (const l of a.adds || []) {
     appGh(["issue", "edit", String(where.number), "--remove-label", l], { allowFail: true });

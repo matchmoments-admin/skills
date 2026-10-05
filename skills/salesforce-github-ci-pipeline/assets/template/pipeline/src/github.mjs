@@ -7,7 +7,7 @@ import { openRelease as pickOpenRelease } from "./conventions.mjs";
 import { recorder } from "./events.mjs";
 import { appToken } from "./board.mjs";
 
-export function codeHost({ io, env = process.env, sleep = () => {}, log = () => {}, fetcher = globalThis.fetch }) {
+export function codeHost({ io, env = process.env, sleep = () => {}, log = () => {}, fetcher = globalThis.fetch, now = () => Date.now() }) {
   const repo = env.GH_REPO || env.GITHUB_REPOSITORY;
   const repoUrl = `${env.GITHUB_SERVER_URL || "https://github.com"}/${repo}`;
   const memo = new Map();
@@ -35,19 +35,28 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
     storyPr: (branch) => once(`pr:${branch}`, () => (io.gh(["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "number,state,title,baseRefName,headRefOid"]) || [])[0] || null),
 
     /** The facts the gate decides on, gathered once per process (a card refreshed every minute reuses them). */
-    prFacts: (number, opts) => once(`facts:${number}`, () => gather(number, io, opts)),
+    prFacts: (number, opts) => once(`facts:${number}`, () => gather(String(number), io, opts)),
 
     /** A verdict as a commit status on an exact commit, linked to this run. Agent-free steps only (see gate.mjs). */
     status(sha, context, state, description) {
       io.gh(["api", `repos/${repo}/statuses/${sha}`, "-f", `state=${state}`, "-f", `context=${context}`, "-f", `description=${String(description).slice(0, 139)}`, ...(host.runUrl ? ["-f", `target_url=${host.runUrl}`] : [])]);
     },
 
-    /** A check run on a commit, created once and updated as work progresses (the live view on the PR). */
+    /** A check run on a commit, created once and updated as work progresses (the live view on the PR). Progress is
+     *  sent only when its title changed and at most once a minute (a long run polls every 15 s); the result always. */
     checkRun(sha, name) {
       if (!sha || !repo) return { update: () => {} };
       const made = api("POST", `repos/${repo}/check-runs`, { name, head_sha: sha, status: "in_progress", details_url: host.runUrl, output: { title: "Starting", summary: "Starting" } });
       const id = made?.id || null;
-      return { update: (output, conclusion) => { if (id) api("PATCH", `repos/${repo}/check-runs/${id}`, conclusion ? { status: "completed", conclusion, output } : { output }); } };
+      let last = { title: "Starting", at: now() };
+      return {
+        update: (output, conclusion) => {
+          if (!id) return;
+          if (!conclusion && (output?.title === last.title || now() - last.at < 60e3)) return;
+          last = { title: output?.title, at: now() };
+          api("PATCH", `repos/${repo}/check-runs/${id}`, conclusion ? { status: "completed", conclusion, output } : { output });
+        },
+      };
     },
 
     /** Start a workflow on main (or a ref) with inputs. The ref is always named: without one gh looks up the default
@@ -56,8 +65,8 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
       io.gh(["workflow", "run", workflow, "--ref", ref, ...Object.entries(inputs).flatMap(([k, v]) => ["-f", `${k}=${v}`])]);
     },
 
-    /** A workflow's runs (newest first). */
-    workflowRuns: (file, query = "") => io.ghPages(`repos/${repo}/actions/workflows/${file}/runs?per_page=100${query ? `&${query}` : ""}`, "workflow_runs"),
+    /** A workflow's newest runs (one page, newest first: callers need the recent ones, never the whole history). */
+    workflowRuns: (file, query = "", perPage = 100) => io.gh(["api", `repos/${repo}/actions/workflows/${file}/runs?per_page=${perPage}${query ? `&${query}` : ""}`])?.workflow_runs || [],
 
     /** GraphQL as the pipeline App (organisation projects need it; the Actions token cannot reach them). */
     async appGraphql(query, variables) {

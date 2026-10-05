@@ -9,7 +9,7 @@ on:
   repository_dispatch:
     types: [jira-implement]
 permissions:
-  actions: write        # starts ci and ai-review when not acting as the App
+  actions: write        # the follow-up job starts ci and ai-review when not acting as the App
   contents: write
   pull-requests: write
   issues: write
@@ -33,6 +33,18 @@ jobs:
   implement:
     if: vars.AI_IMPLEMENT == 'true' && (github.event_name == 'repository_dispatch' || github.event.label.name == 'ai:implement')
     runs-on: ubuntu-latest
+    # The agent can run code in this job, and later steps run in the same runner: so this job's token cannot post
+    # verdicts (statuses) or start workflows (actions). Those happen in a separate job after it (the trust model).
+    permissions:
+      contents: write       # the org's lane (refs/locks) and the event log; pushes go as the pipeline App
+      pull-requests: write
+      issues: write
+      id-token: write
+      checks: read
+      statuses: read
+    outputs:
+      is-app: ${{ steps.id.outputs.is-app }}
+      branch: ${{ steps.ctx.outputs.STORY_BRANCH }}
     timeout-minutes: 85   # 45 of them may be waiting for the org's lane (CI, a fix or a UI test in the same org)
     env:
       GH_TOKEN: ${{ github.token }}
@@ -96,7 +108,7 @@ jobs:
         env:
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
         run: |
-          node .pipeline/pipeline/bin/pipe.mjs org attach "story:$KEY"
+          node .pipeline/pipeline/bin/pipe.mjs org ensure "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}   # attaches, or rebuilds an expired org
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --base "origin/$BASE" --out "$RUNNER_TEMP/story.md"
       - run: npm install --no-audit --no-fund --ignore-scripts   # the production key is still on disk here: no install scripts
       - uses: ./.pipeline/.github/actions/claude-agent
@@ -135,15 +147,25 @@ jobs:
             printf '%s\n\nBuilt by ai-implement in scratch org `%s`.\n' "$CLOSES" "$BRANCH" > pr-body.md
             gh pr create --base "$BASE" --head "$BRANCH" --title "$(git log -1 --format=%s "origin/$BRANCH")" --body-file pr-body.md ${MILESTONE:+--milestone "$MILESTONE"}
           fi
-      - name: Start CI and the review (only needed without the App)
-        if: steps.id.outputs.is-app != 'true'
-        env:
-          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
-        run: |
-          gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
-          gh workflow run ai-review.yml --ref main -f pr="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"
       - name: The story card says the build failed, and where to look
         if: failure() && steps.ctx.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude's build" --failed --retry "comment /build to retry, or build it on the branch yourself"
+  follow-up:
+    # Fresh runner, no agent: starts CI and the review when the build did not act as the App (its pushes start nothing).
+    needs: implement
+    if: always() && needs.implement.result == 'success' && needs.implement.outputs.is-app != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ needs.implement.outputs.branch }}
+    steps:
+      - run: |
+          gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
+          gh workflow run ai-review.yml --ref main -f pr="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"

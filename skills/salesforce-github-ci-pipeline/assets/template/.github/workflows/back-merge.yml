@@ -39,6 +39,6 @@ jobs:
           [ -z "$(gh pr list --head "$REL" --base main --state merged --json number --jq '.[0].number // empty')" ] || { echo "$REL has shipped"; exit 0; }
           BR="backmerge-$GITHUB_RUN_ID"
           git push origin "origin/main:refs/heads/$BR"
-          if git merge-tree --write-tree "origin/$REL" origin/main >/dev/null 2>&1; then NOTE="Merges cleanly; it merges by itself once CI is green."; else NOTE="Has conflicts: resolve them on $BR first."; fi
+          if git merge-tree --write-tree "origin/$REL" origin/main >/dev/null 2>&1; then NOTE="Merges cleanly; it merges by itself once CI is green."; else NOTE="Has conflicts. Do not resolve them here (a resolved back-merge carries a commit that is not in main, which the gate refuses): close this PR, branch from $REL, merge origin/main into it, resolve, and open that branch as a PR into $REL; it goes through the normal sign-off."; fi
           gh pr create --base "$REL" --head "$BR" --title "Back-merge main into $REL" --body "Brings production fixes into the open release so the next release does not undo them. $NOTE"
           [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$BR" -f ref="$BR"

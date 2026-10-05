@@ -63,7 +63,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.skip == 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 100   # a validation can take 60 minutes in a large org, the quick deploy 30
     environment: production    # deploys only from main (environment rule)
     steps:
       - uses: actions/checkout@v4

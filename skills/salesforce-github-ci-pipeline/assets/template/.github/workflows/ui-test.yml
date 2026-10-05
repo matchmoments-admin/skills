@@ -52,6 +52,15 @@ jobs:
   write:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'ai' && vars.AI_UI_TEST == 'true'
     runs-on: ubuntu-latest
+    # The agent can run code in this job, and later steps run in the same runner: so this job's token cannot post
+    # verdicts (statuses) or start workflows (actions). Those happen in a separate job after it (the trust model).
+    permissions:
+      contents: write       # the org's lane (refs/locks) and the event log; pushes go as the pipeline App
+      pull-requests: write
+      issues: write
+      id-token: write
+      checks: read
+      statuses: read
     timeout-minutes: 75   # 45 of them may be waiting for the story org's lane
     env:
       GH_TOKEN: ${{ github.token }}
@@ -94,7 +103,7 @@ jobs:
       - name: Attach, deploy this head and prepare the story's org; fetch the story
         id: org
         run: |
-          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH")
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ensure "$BRANCH")   # attaches, or rebuilds an expired org
           node .pipeline/pipeline/bin/pipe.mjs org deploy "$ALIAS"
           node .pipeline/pipeline/bin/pipe.mjs org prepare "$ALIAS"
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
@@ -195,7 +204,7 @@ jobs:
       - name: Deploy this exact head to the story's org and prepare it
         if: steps.spec.outputs.exists == 'true'
         run: |
-          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH")
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ensure "$BRANCH")   # attaches, or rebuilds an expired org
           node .pipeline/pipeline/bin/pipe.mjs org deploy "$ALIAS"
           node .pipeline/pipeline/bin/pipe.mjs org prepare "$ALIAS"
           echo "SCRATCH_ALIAS=$ALIAS" >> "$GITHUB_ENV"

@@ -9,7 +9,7 @@
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
 //   status    set <context> <state> <sha> <description> [--pr N]
-//   verdict   instructions <role> [--key K] · model <role> · review <pr> --since T · rounds --pr N (or --base REF)
+//   verdict   instructions <role> [--key K] · model <role> · review <pr> --since T · rounds --pr N
 //   tracker   story <key> [--out file] [--pack [--base B]] · comment <key> <text> · open-sprint <sprint> · assign <key> --sprint S
 //   story     card <key> | --branch B [--base B] [--tag T] [--now "what" [--failed] [--retry "how"]] [--starting]
 //             plan-pending <key> [--failed] · plan-post <key> --file F [--started] · readiness <key>
@@ -82,7 +82,7 @@ const summary = (md) => { if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(pr
 const host = codeHost({ io, sleep, log });
 const tracker = makeTracker(io);
 const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, ghPages: io.ghPages }), log });
-const orgs = () => orgRegistry({ sf: io.sf, log });
+const orgs = () => orgRegistry({ sf: io.sf, log, env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE") } });
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 
@@ -90,7 +90,8 @@ function orgLane(target) {
   const org = names.orgFor(target);
   if (!org) throw new Error(`Not an org target: ${target}`);
   const { GITHUB_RUN_ID: run, GITHUB_JOB: job, GITHUB_RUN_ATTEMPT: attempt, GITHUB_SHA: sha } = process.env;
-  return { org, l: lane({ api: host.api, repo: host.repo, holder: { run, job: `${job}#${attempt || 1}`, sha }, sleep, log }) };
+  const onWait = (h) => org.key && cards.refresh(org.key, { light: true, activity: { state: "running", what: `waiting for the story's scratch org: ${String(h.job).replace(/#\d+$/, "")} is using it`, url: `${host.repoUrl}/actions/runs/${h.run}` } }).catch(() => {});   // the card says why, not "deploying"
+  return { org, l: lane({ api: host.api, repo: host.repo, holder: { run, job: `${job}#${attempt || 1}`, sha }, sleep, log, onWait }) };
 }
 
 const commands = {
@@ -141,7 +142,7 @@ const commands = {
   "lane release": () => { const { org, l } = orgLane(arg(0)); l.release(org.lock); },
 
   // ---- the gate
-  "gate evaluate": () => {
+  "gate evaluate": async () => {
     const pr = arg(0);
     const facts = host.prFacts(pr, { openReleaseBranch: host.openRelease(), ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true" });
     const d = gate.evaluate(facts);
@@ -152,6 +153,7 @@ const commands = {
       reasons: d.reasons.map((r) => `- ${r}`).join("\n"), head: facts.pr.headRefOid, open: facts.pr.state === "OPEN", merge: d.rules?.merge || "",
       validate: d.validate || false, after: (d.after || []).join(" "), lock: ["release", "hotfix", "maintenance"].includes(d.route) ? "main" : `pr-${pr}`,
     });
+    if (has("card")) await cards.refreshPr(pr);   // the same facts: one gather for the decision and the card
     return say(JSON.stringify({ route: d.route, mergeable: d.mergeable, reasons: d.reasons, story: d.story, validate: d.validate, after: d.after }, null, 2));
   },
   "gate guard": () => {
@@ -211,10 +213,8 @@ const commands = {
     return say(v);
   },
   "verdict rounds": () => {
-    // --pr: earlier completed ai-fix runs for the PR (run-name "ai-fix PR #N"); --base: fix(review) commits since the base
-    const n = flag("pr")
-      ? verdict.fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), flag("pr"), process.env.GITHUB_RUN_ID)
-      : verdict.fixRounds((io.git(["log", "--format=%s", `${flag("base")}..HEAD`]) || "").split("\n").filter(Boolean));
+    // earlier completed ai-fix runs for the PR (run-name "ai-fix PR #N"), from the newest page of ai-fix runs
+    const n = verdict.fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), flag("pr"), process.env.GITHUB_RUN_ID);
     output({ rounds: n, limit: verdict.MAX_FIX_ROUNDS, over: n >= verdict.MAX_FIX_ROUNDS });
     return say(String(n));
   },
@@ -254,13 +254,13 @@ const commands = {
     await cards.refresh(key, { base: flag("base"), tag: flag("tag"), activity });
     return say(`card updated for ${key}`);
   },
+  "story base": async () => say(names.baseFor({ labels: (await tracker.story(arg(0))).labels, openReleaseBranch: host.openRelease() })),   // as /start: hotfix -> main, else the sprint
   "story new": async () => { await cards.newStory(arg(0)); return say(`card for new story ${arg(0)}`); },
   "pr card": async () => {
-    // the card of a pull request (release card or its story's); --sha finds the PR a commit was merged by
-    const n = arg(0) || (io.gh(["api", `repos/${host.repo}/commits/${flag("sha")}/pulls`], { allowFail: true }) || [])[0]?.number;
-    if (!n) return say("no pull request: no card");
+    // the card of a pull request (release card or its story's); --sha: of the PR a commit was merged by
     const activity = flag("now") ? { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl, retry: flag("retry") } : null;
-    return say(`card on #${n}: ${(await cards.refreshPr(n, { activity, tag: flag("tag") })) || "not a story or release PR"}`);
+    const r = arg(0) ? await cards.refreshPr(arg(0), { activity, tag: flag("tag") }) : await cards.refreshCommit(flag("sha"), { activity, tag: flag("tag") });
+    return say(`card: ${r || "no story or release PR"}`);
   },
   "act ": async () => {
     // a person's action from a comment command (--command) or a ticked card box (--before/--after the edit)
@@ -371,8 +371,10 @@ const commands = {
     // the event log first; workflow health from GitHub's run history (transcripts only for windows before the log)
     const days = Number(flag("days", "28"));
     const log_ = events.readLog(io, { days });
-    const gh = metrics.summarize(metrics.gather(io, { days, transcripts: !log_.some((e) => e.kind === "agent") }));
-    const md = [events.toMarkdown(events.summarize(log_, { days })), "", metrics.toMarkdown(gh).replace(/^## Delivery metrics, last \d+ days/, "## From GitHub's history (PRs, releases, workflow runs)")].join("\n");
+    const covered = log_.some((e) => e.kind === "release");   // the log has seen a release: its DORA is the one to trust
+    const gh = metrics.summarize(metrics.gather(io, { days, transcripts: !log_.some((e) => e.kind === "agent"), prDetails: !covered }));
+    const older = metrics.toMarkdown(gh, { dora: !covered }).replace(/^## Delivery metrics, last \d+ days/, covered ? "## Workflow health (GitHub's run history)" : "## From GitHub's history (PRs, releases, workflow runs)");
+    const md = [events.toMarkdown(events.summarize(log_, { days })), "", older].join("\n");
     if (flag("out")) writeFileSync(flag("out"), md + "\n");
     return say(md);
   },
@@ -385,9 +387,7 @@ async function closeoutCmd(run) {
   await closeout.apply(p, { tag: flag("tag"), tracker, orgs: orgs(), git: io.git, gh: io.gh, log });
   record("release", { tag: flag("tag"), sha: flag("sha"), previous: flag("previous"), sprint: p.sprint, shipped: p.ship, hotfixes: p.hotfix.map((h) => h.key), carried: p.carry });
   for (const key of [...p.ship, ...p.hotfix.map((h) => h.key)]) await cards.refresh(key, { tag: flag("tag") });
-  // the release card on the PR that shipped (found from the shipped commit): Done, with the tag
-  const shippedBy = flag("sha") ? (io.gh(["api", `repos/${host.repo}/commits/${flag("sha")}/pulls`], { allowFail: true }) || [])[0]?.number : null;
-  if (shippedBy) await cards.refreshPr(shippedBy, { tag: flag("tag") });
+  if (flag("sha")) await cards.refreshCommit(flag("sha"), { tag: flag("tag") });   // the release card: Done, with the tag
 }
 
 const run = commands[`${cmd} ${["metrics", "act"].includes(cmd) ? "" : sub ?? ""}`];

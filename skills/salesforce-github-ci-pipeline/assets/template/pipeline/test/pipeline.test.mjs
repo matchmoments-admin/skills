@@ -12,7 +12,7 @@ import { orgRegistry, packageList, findOrphans } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
 import * as plans from "../src/plan.mjs";
-import { storyCard, CARD_MARK, withoutMap, startingCard, activityLine } from "../src/card.mjs";
+import { storyCard, CARD_MARK, startingCard, activityLine } from "../src/card.mjs";
 import * as board from "../src/board.mjs";
 import * as tests from "../src/tests.mjs";
 import * as production from "../src/production.mjs";
@@ -50,7 +50,7 @@ test("one lock per org: the issue lock and the PR lock are the same string", () 
 });
 
 test("org identity: alias, registry key, definition and lifetime", () => {
-  assert.deepEqual(names.orgFor("story:12"), { kind: "story", key: "12", alias: "issue-12", description: "issue-12", lock: "org-issue-12", definition: "config/scratch-dev.json", days: 3 });
+  assert.deepEqual(names.orgFor("story:12"), { kind: "story", key: "12", alias: "issue-12", description: "issue-12", lock: "org-issue-12", definition: "config/scratch-dev.json", days: 7 });
   assert.equal(names.orgFor("story:12", { hotfix: true }).definition, "config/scratch-hotfix.json");
   assert.deepEqual(names.orgFor("sprint:2026-w42"), { kind: "sprint", sprint: "2026-w42", alias: "staging", description: "staging-2026-w42", lock: "org-staging", definition: "config/scratch-qa.json", days: 30 });
   assert.equal(names.orgFor("issue-7").alias, "issue-7");
@@ -489,8 +489,7 @@ test("story card: before the PR it says how to build; with a PR it tracks each s
 test("story card draws the stages as a coloured flow; trackers without Mermaid get the table only", () => {
   const card = storyCard({ key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/w", ai: {} });
   assert.match(card, /```mermaid\nflowchart LR\n  s0\["✅ Branch \+ org"\]:::done\n  s1\["⬜ Build"\]:::waiting\n  s0 --> s1/);
-  assert.doesNotMatch(withoutMap(card), /mermaid/);
-  assert.match(withoutMap(card), /\| ✅ \| Branch and scratch org/);
+  assert.match(card, /\| ✅ \| Branch and scratch org/);
 });
 
 test("board: stage follows the story; moving a card adds it and sets Status", async () => {
@@ -1316,4 +1315,99 @@ test("tick boxes: the card-actions workflow acts only on a person's edit of a ca
   assert.match(y, /contains\(github.event.comment.body, '<!-- pipeline:story-card -->'\)/);
   assert.match(y, /pipe.mjs act --number .* --before .* --after/);
   assert.match(readFileSync(new URL("../../.github/workflows/commands.yml", import.meta.url), "utf8"), /pipe.mjs act --number .* --command "\$BODY"/);
+});
+
+test("agent jobs cannot post verdicts or start workflows; follow-ups run on a fresh runner; no endless fix loop", () => {
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  const job = (y, name) => y.split(/\n  (?=[a-z-]+:\n)/).find((b) => b.startsWith(`${name}:`)) || "";
+  for (const [n, j] of [["ai-implement", "implement"], ["ai-fix", "fix"], ["ui-test", "write"]]) {
+    const b = job(wf(n), j);
+    assert.match(b, /permissions:\n/, `${n}/${j} sets its own permissions`);
+    assert.doesNotMatch(b, /statuses: write|actions: write/, `${n}/${j}`);
+    assert.doesNotMatch(b, /gh workflow run/, `${n}/${j} dispatches nothing`);
+  }
+  assert.match(job(wf("ai-fix"), "follow-up"), /the fix pushed nothing: no new review/);
+  assert.match(wf("ai-review"), /round limit reached: no AI fix/);
+});
+
+test("correctness wiring: story PR base from the story, UAT never reset by a redeploy, merge button locked until production accepts", () => {
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  assert.match(wf("story-pr"), /pipe.mjs story base "\$KEY"/);
+  assert.doesNotMatch(wf("story-pr"), /merge-base --is-ancestor/);
+  assert.match(wf("uat-deploy"), /UAT already has/);
+  assert.match(wf("staging-deploy"), /superseded by/);
+  assert.match(wf("staging-deploy"), /needs.staging.outputs.tested/);
+  assert.match(wf("gate"), /STATE=pending; DESC="Ready: validating against production before merging"/);
+  assert.match(wf("gate"), /status set pipeline\/gate failure "\$HEAD_SHA" "Production rejected it/);
+  const did = [];
+  actions.perform("uat", "", { number: 110, isPr: true, pr: { headRefName: "release/w45" } }, "dev", { host: { dispatch: (w, i) => did.push([w, i]) } });
+  assert.deepEqual(did, [["uat-deploy.yml", { pr: 110, again: "true" }]], "the card's box deploys again on purpose");
+  assert.equal(names.baseFor({ labels: ["feature"], openReleaseBranch: "release/w45" }), "release/w45");
+  assert.equal(names.baseFor({ labels: ["hotfix"], openReleaseBranch: "release/w45" }), "main");
+});
+
+// ---------------------------------------------------------------- scale and cost
+test("lane: a waiting poll is one read of the lock (holder read once, its run checked every few minutes)", () => {
+  const f = fakeRefs();
+  let t = 0, calls = [];
+  const api = (m, p, b) => { calls.push(`${m} ${p.split("/").slice(3).join("/")}`); return f.api(m, p, b); };
+  const mk = (run) => lane({ api, repo: "o/r", holder: { run, job: "j", sha: "base" }, now: () => t, sleep: (ms) => { t += ms; }, log: () => {} });
+  mk("1").acquire("org-issue-1");
+  calls = [];
+  assert.throws(() => mk("2").acquire("org-issue-1", { timeoutMinutes: 10, pollSeconds: 30 }));
+  const polls = calls.filter((c) => c === "GET git/refs/locks/org-issue-1").length;
+  assert.ok(polls >= 18, `polled ${polls} times`);
+  assert.ok(calls.length <= polls + 8, `${calls.length} calls for ${polls} polls`);
+  assert.equal(calls.filter((c) => c.startsWith("POST")).length, 0, "no claim commit while the lane is busy");
+});
+
+test("test selection: a field, validation rule or permission set runs the tests that use it, not everything", () => {
+  const files = ["force-app/main/default/objects/Account/fields/Region__c.field-meta.xml", "force-app/main/default/classes/AccountTest.cls",
+    "force-app/main/default/classes/CaseTest.cls", "force-app/main/default/permissionsets/Region_Access.permissionset-meta.xml"];
+  const src = { "force-app/main/default/classes/AccountTest.cls": "@IsTest class AccountTest { Account a; }", "force-app/main/default/classes/CaseTest.cls": "@IsTest class CaseTest { Case c; Region_Access x; }" };
+  const read = (p) => src[p] || "";
+  assert.deepEqual(tests.selectTests({ changed: [files[0]], files, read }).apex, ["AccountTest"]);
+  assert.deepEqual(tests.selectTests({ changed: [files[3]], files, read }).apex, ["CaseTest"]);
+  assert.equal(tests.selectTests({ changed: ["force-app/main/default/objects/Lead/fields/X__c.field-meta.xml"], files, read }).mode, "all", "nothing names Lead: all");
+  assert.equal(tests.selectTests({ changed: ["force-app/main/default/layouts/Account-Account Layout.layout-meta.xml"], files, read }).mode, "all");
+});
+
+test("check runs are updated when their title changes, at most once a minute; the result always", () => {
+  const sent = [];
+  let t = 0;
+  const io = { run: (c, a, o) => { if (a[2] === "POST") return JSON.stringify({ id: 9 }); sent.push(JSON.parse(o.input)); return ""; } };
+  const check = codeHost({ io, env: { GH_REPO: "o/r" }, now: () => t }).checkRun("sha", "Salesforce tests");
+  for (let i = 0; i < 8; i++) { t += 15e3; check.update({ title: `Running: ${Math.floor(i / 4)}` }); }
+  check.update({ title: "Passed" }, "success");
+  assert.equal(sent.length, 3, "two progress updates in two minutes, then the result");
+  assert.equal(sent.at(-1).conclusion, "success");
+});
+
+test("story orgs leave ORG_RESERVE slots for staging, UAT and CI; an expired org says how to rebuild it", () => {
+  const { sf } = fakeSf([]);
+  const limited = (remaining) => (args, o) => (args[0] === "limits" ? [{ name: "ActiveScratchOrgs", remaining, max: 40 }, { name: "DailyScratchOrgs", remaining: 50, max: 80 }] : sf(args, o));
+  assert.throws(() => orgRegistry({ sf: limited(2), log: () => {}, packages: [], env: { ORG_RESERVE: "2" } }).ensure("story:9"), /2 kept for staging, UAT and CI/);
+  assert.doesNotThrow(() => orgRegistry({ sf: limited(3), log: () => {}, packages: [], env: { ORG_RESERVE: "2" } }).ensure("story:9"));
+  assert.throws(() => orgRegistry({ sf, log: () => {}, packages: [] }).attach("story:9"), /expired \(story orgs live 7 days\)\. Comment \/start/);
+});
+
+test("cost wiring: no duplicate full run on release PRs, the fixer only for code failures, renudge only on the main lock", () => {
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  assert.match(wf("ci"), /release\/\*\|backmerge-\*\) echo "none=true"/);
+  assert.match(wf("ci"), /needs.apex.outputs.code-failed == 'true'/);
+  assert.match(wf("gate"), /needs.decide.outputs.lock == 'main'/);
+});
+
+test("clarity: a carried-over story says how to pick it up again; a waiting job puts 'waiting for the org' on the card", () => {
+  const f = { ...open(fixture(23)), ai: {}, statuses: [], reviews: [] };
+  const closed = storyCard({ key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/w45", pr: { ...f.pr, state: "CLOSED" }, facts: f });
+  assert.match(closed, /To work on it again, tick \*\*Start\*\*/);
+  assert.match(closed, /act:start/);
+  const fr = fakeRefs();
+  const waits = [];
+  let t = 0;
+  const mk = (run, onWait) => lane({ api: fr.api, repo: "o/r", holder: { run, job: "ci#1", sha: "base" }, now: () => t, sleep: (ms) => { t += ms; }, onWait });
+  mk("1").acquire("org-issue-2");
+  assert.throws(() => mk("2", (h) => waits.push(h.job)).acquire("org-issue-2", { timeoutMinutes: 5 }));
+  assert.deepEqual(waits, ["ci#1"], "said once per holder");
 });

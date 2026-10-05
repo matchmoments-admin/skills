@@ -193,7 +193,13 @@ jobs:
         run: |
           [ "$(gh pr view "$PR" --json state --jq .state)" = "OPEN" ] || { echo "PR is closed: nothing to chain"; exit 0; }
           case "$V" in
-            changes) [ "$FIX_ON" != "true" ] || echo "label=ai:fix" >> "$GITHUB_OUTPUT" ;;
+            changes)
+              [ "$FIX_ON" = "true" ] || exit 0
+              # never past the round limit, never on a PR a person has to look at (no endless review/fix loop)
+              if gh pr view "$PR" --json labels --jq '[.labels[].name] | index("blocked")' | grep -q '[0-9]'; then echo "blocked: no AI fix"; exit 0; fi
+              node pipeline/bin/pipe.mjs verdict rounds --pr "$PR" > /dev/null
+              grep -q '^over=true' "$GITHUB_OUTPUT" && { echo "round limit reached: no AI fix"; exit 0; }
+              echo "label=ai:fix" >> "$GITHUB_OUTPUT" ;;
             pass|not-needed)
               [ "$TEST_ON" = "true" ] || exit 0
               BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)

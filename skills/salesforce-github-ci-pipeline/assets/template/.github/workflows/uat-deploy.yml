@@ -11,6 +11,10 @@ on:
       pr:
         description: Release pull request number
         required: true
+      again:
+        description: "true = deploy again even if UAT already has this commit (the card's 'Deploy to UAT again')"
+        required: false
+        default: "false"
 permissions:
   contents: write       # the event log (the metrics branch); the candidate is data here
   pull-requests: write
@@ -39,16 +43,27 @@ jobs:
           HEAD_REF=$(jq -r .headRefName <<<"$J")
           [[ "$HEAD_REF" == release/* && "$(jq -r .baseRefName <<<"$J")" == main && "$(jq -r .state <<<"$J")" == OPEN ]] || { echo "::error::#$PR is not an open release PR"; exit 1; }
           { echo "ref=$HEAD_REF"; echo "sha=$(jq -r .headRefOid <<<"$J")"; echo "sprint=${HEAD_REF#release/}"; } >> "$GITHUB_OUTPUT"
+      - name: Already in UAT? (a redeploy would reset a sign-off on the same commit to pending)
+        id: seen
+        env:
+          SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          N=$(gh api "repos/$GH_REPO/commits/$SHA/statuses?per_page=100" --jq '[.[] | select(.context=="pipeline/uat" and .creator.login=="github-actions[bot]")] | length')
+          if [ "$N" != "0" ] && [ "${{ inputs.again }}" != "true" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "UAT already has ${SHA:0:7}: nothing to do"; fi
       - uses: actions/checkout@v4
+        if: steps.seen.outputs.skip != 'true'
         with: { ref: main }
       - uses: actions/checkout@v4
+        if: steps.seen.outputs.skip != 'true'
         with: { ref: "${{ steps.pr.outputs.sha }}", path: candidate, persist-credentials: false }
       - uses: ./.github/actions/sf-auth
+        if: steps.seen.outputs.skip != 'true'
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: The UAT org (the sandbox if configured, else a scratch org standing in)
+        if: steps.seen.outputs.skip != 'true'
         id: org
         env:
           UAT_USER: ${{ secrets.SF_UAT_USERNAME }}
@@ -66,11 +81,13 @@ jobs:
             echo "kind=scratch org standing in for a UAT sandbox" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy the release candidate to UAT
+        if: steps.seen.outputs.skip != 'true'
         working-directory: candidate
         run: |
           sf project deploy start -o uat -d force-app --ignore-conflicts --wait 40
           [ "${{ steps.org.outputs.kind }}" = sandbox ] || node "$GITHUB_WORKSPACE/pipeline/bin/pipe.mjs" org prepare uat
       - name: Ask for the sign-off
+        if: steps.seen.outputs.skip != 'true'
         env:
           SHA: ${{ steps.pr.outputs.sha }}
           KIND: ${{ steps.org.outputs.kind }}

@@ -76,8 +76,12 @@ export function aiCost(transcripts) {
   return { byRole, total };
 }
 
-export function toMarkdown(s) {
+export function toMarkdown(s, { dora = true } = {}) {
   const v = (x, unit = "") => (x === null || x === undefined ? "n/a" : `${x}${unit}`);
+  const health = ["| Workflow | runs | success | median minutes |", "|---|---|---|---|",
+    ...Object.entries(s.pipeline).map(([n, w]) => `| ${n} | ${w.runs} | ${w.successRate}% | ${v(w.medianMinutes)} |`)];
+  // once the event log covers the window, its DORA and AI cost are the ones to read: only workflow health here
+  if (!dora) return [`## Delivery metrics, last ${s.days} days`, "", ...health].join("\n");
   return [
     `## Delivery metrics, last ${s.days} days`, "",
     "| DORA | value |", "|---|---|",
@@ -89,8 +93,7 @@ export function toMarkdown(s) {
     `| Stories reviewed | ${s.ai.storiesReviewed} |`,
     `| Passed the first review | ${v(s.ai.passedFirstReview, "%")} |`,
     `| Median fix rounds | ${v(s.ai.medianFixRounds)} |`, "",
-    "| Workflow | runs | success | median minutes |", "|---|---|---|---|",
-    ...Object.entries(s.pipeline).map(([n, w]) => `| ${n} | ${w.runs} | ${w.successRate}% | ${v(w.medianMinutes)} |`), "",
+    ...health, "",
     `| AI role | runs | cost (API-equivalent) | per run | median turns | median minutes |`, "|---|---|---|---|---|---|",
     ...Object.entries(s.aiCost?.byRole || {}).map(([n, r]) => `| ${n} | ${r.runs} | $${r.usd.toFixed(2)} | $${r.perRunUsd.toFixed(2)} | ${v(r.medianTurns)} | ${v(r.medianMinutes)} |`),
     `| **total** | ${s.aiCost?.total.runs ?? 0} | **$${(s.aiCost?.total.usd ?? 0).toFixed(2)}** | | | |`, "",
@@ -98,7 +101,7 @@ export function toMarkdown(s) {
   ].join("\n");
 }
 
-export function gather(io, { days = 28, transcripts: withTranscripts = true } = {}) {
+export function gather(io, { days = 28, transcripts: withTranscripts = true, prDetails = true } = {}) {
   const since = new Date(Date.now() - days * 24 * HOUR).toISOString();
   const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
   const prs = (io.gh(["pr", "list", "--state", "merged", "--limit", "300", "--search", `merged:>=${since.slice(0, 10)}`,
@@ -106,7 +109,7 @@ export function gather(io, { days = 28, transcripts: withTranscripts = true } = 
   const releases = (io.gh(["release", "list", "--limit", "100", "--json", "tagName,createdAt"]) || []).filter((r) => r.createdAt >= since);
   const runs = io.ghPages(`repos/${repo}/actions/runs?per_page=100&created=>=${since.slice(0, 10)}`, "workflow_runs");
   const fixCommits = {};
-  for (const p of prs) {
+  for (const p of prDetails ? prs : []) {   // a call per PR: only when the event log does not cover the window
     const commits = io.gh(["pr", "view", String(p.number), "--json", "commits", "--jq", "[.commits[].messageHeadline]"]) || [];
     fixCommits[p.number] = fixRounds(commits);
   }

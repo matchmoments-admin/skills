@@ -21,6 +21,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
     outputs:
       release: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
+      tested: ${{ steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.current.outputs.superseded != 'true' }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
@@ -30,46 +31,54 @@ jobs:
         run: |
           node pipeline/bin/pipe.mjs context
           node pipeline/bin/pipe.mjs context | grep -q '^RELEASE_BRANCH=.' || { echo "::error::No open sprint"; exit 1; }
-      - name: Wait for the staging org's lane (nobody is dropped; a run whose commit was already tested stops early)
+      - name: Still the release branch's tip? (each merge queues a run; only the newest needs to test)
+        id: current
+        run: |
+          TIP=$(gh api "repos/$GH_REPO/commits/${{ steps.ctx.outputs.RELEASE_BRANCH }}" --jq .sha)
+          if [ "$TIP" != "$GITHUB_SHA" ]; then echo "superseded=true" >> "$GITHUB_OUTPUT"; echo "superseded by ${TIP:0:7}: its own run tests it"; fi
+      - name: Wait for the staging org's lane (nobody is dropped)
+        if: steps.current.outputs.superseded != 'true'
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "sprint:${{ steps.ctx.outputs.SPRINT }}"
       - uses: actions/checkout@v4
-        with: { ref: "${{ steps.ctx.outputs.RELEASE_BRANCH }}", path: candidate, persist-credentials: false }
-      - name: Already tested? (several merges queue several runs; the first tests the newest head)
+        if: steps.current.outputs.superseded != 'true'
+        with: { ref: "${{ github.sha }}", path: candidate, persist-credentials: false }   # exactly the commit this run is for
+      - name: Already tested? (a re-run of a commit that already passed)
         id: fresh
+        if: steps.current.outputs.superseded != 'true'
         working-directory: candidate
         run: |
           SHA=$(git rev-parse HEAD)
           N=$(gh api "repos/$GH_REPO/commits/$SHA/check-runs?check_name=staging%20regression" --jq '[.check_runs[] | select(.conclusion=="success")] | length')
           if [ "$N" != "0" ]; then echo "done=true" >> "$GITHUB_OUTPUT"; echo "${SHA:0:7} already passed the staging regression"; fi
       - uses: ./.pipeline/.github/actions/sf-auth
-        if: steps.fresh.outputs.done != 'true'
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Deploy the release branch to staging and prepare it
-        if: steps.fresh.outputs.done != 'true'
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
         run: |
           node ../.pipeline/pipeline/bin/pipe.mjs org attach "sprint:${{ steps.ctx.outputs.SPRINT }}"
           node ../.pipeline/pipeline/bin/pipe.mjs org deploy staging
           node ../.pipeline/pipeline/bin/pipe.mjs org prepare staging
       - name: Full regression (every Apex and Flow test), live on the release head as "Salesforce tests"
-        if: steps.fresh.outputs.done != 'true'
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
         run: node ../.pipeline/pipeline/bin/pipe.mjs tests run staging --all --base HEAD --sha "$(git rev-parse HEAD)" --out test-results
       - name: Drop production access before running the branch's specs
-        if: steps.fresh.outputs.done != 'true'
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         run: |
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}"
       - uses: ./.pipeline/.github/actions/playwright
-        if: steps.fresh.outputs.done != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
         env:
           GH_TOKEN: ""          # installs the branch's packages: no token
         with: { working-directory: candidate }
       - name: UI regression (every spec in e2e/)
-        if: steps.fresh.outputs.done != 'true'
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
         env:
           GH_TOKEN: ""
@@ -80,11 +89,11 @@ jobs:
             echo "No UI specs yet"
           fi
       - name: Let the next job into the staging org's lane
-        if: always()
+        if: always() && steps.current.outputs.superseded != 'true'
         working-directory: .pipeline
         run: node pipeline/bin/pipe.mjs lane release "sprint:${{ steps.ctx.outputs.SPRINT }}" || true
       - uses: actions/upload-artifact@v4
-        if: always() && steps.fresh.outputs.done != 'true'
+        if: always() && steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         with:
           name: staging-results
           path: |
@@ -116,4 +125,5 @@ jobs:
           RPR=$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')
           [ -z "$RPR" ] || node pipeline/bin/pipe.mjs gate nudge "$RPR"   # also refreshes the release card
           # UAT_ENABLED: keep UAT on the release PR's latest code (a newer head needs a new sign-off anyway)
-          [ -z "$RPR" ] || [ "${{ vars.UAT_ENABLED }}" != "true" ] || gh workflow run uat-deploy.yml --ref main -f pr="$RPR"
+          # UAT follows only a run that really tested a new head (a skipped or superseded run must not reset a sign-off)
+          [ -z "$RPR" ] || [ "${{ vars.UAT_ENABLED }}" != "true" ] || [ "${{ needs.staging.outputs.tested }}" != "true" ] || gh workflow run uat-deploy.yml --ref main -f pr="$RPR"

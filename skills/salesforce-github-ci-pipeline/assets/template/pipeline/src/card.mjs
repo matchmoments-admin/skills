@@ -61,7 +61,7 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
 
   if (shipped) next = `Done: live in production since [${shipped.tag}](${shipped.url}).`;
   else if (merged) next = base === "main" ? "Nothing to do: it is shipping to production now." : "Nothing to do: it ships with the sprint release.";
-  else if (pr.state === "CLOSED") next = "The pull request was closed without merging.";
+  else if (pr.state === "CLOSED") next = "The pull request was closed without merging (a carried-over story is closed when its sprint ships). To work on it again, tick **Start** below: a new branch and org from the current sprint.";
   else {
     const failed = rows.find((r) => r[0] === "failed");
     const waiting = rows.find((r) => r[0] === "waiting" || r[0] === "running");
@@ -73,7 +73,7 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
     else if (waiting && waiting[1] === "Approval") next = `**[Approve here](${prUrl}/files)**: everything else is green.`;
     else next = waiting ? `${waiting[1]}: ${waiting[2]}` : "Waiting.";
   }
-  return render(key, next, rows, now, merged || pr.state === "CLOSED" ? [] : storyActions(rows, { ai, base, ci: ciState, decision }));
+  return render(key, next, rows, now, merged ? [] : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }));
 }
 
 /** The boxes a story PR's card offers, from where it stands (pure). */
@@ -185,8 +185,6 @@ export function storyMap(rows) {
   ].join("\n");
 }
 
-/** Remove the diagram (for trackers that cannot draw Mermaid). */
-export const withoutMap = (body) => body.replace(/```mermaid[\s\S]*?```\n*/g, "");
 
 function render(key, next, rows, now = null, actions = [], { release = false } = {}) {
   return [
@@ -239,6 +237,11 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
     /** A new story's card (before /start): what to do first, with the boxes to do it. */
     async newStory(key) {
       await tracker.card(key, newStoryCard({ key, ai: aiFeatures() }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
+    },
+    /** The card of the pull request a commit was merged by (the release workflow knows only the SHA). */
+    async refreshCommit(sha, opts) {
+      const n = (host.api("GET", `repos/${host.repo}/commits/${sha}/pulls`) || [])[0]?.number;
+      return n ? this.refreshPr(n, opts) : null;
     },
     /** The card for a pull request, whatever it is: a release PR gets the release card; a story PR its story's. */
     async refreshPr(number, { activity = null, tag = null } = {}) {

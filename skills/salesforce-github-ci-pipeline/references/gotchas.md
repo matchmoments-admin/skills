@@ -139,7 +139,56 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **The agent's plan must never touch the repo or comment** → plan tools are `Read,Glob,Grep,Write` (one file); an
   agent-free step posts it. No Salesforce login and no scratch org: planning costs no allowance.
 
+## Scale and cost (final review)
+
+- **Lane polling could exhaust the token's 1,000 requests/hour**: each 20 s poll created a claim commit, tried the ref,
+  read the holder and its run. → Read the ref first; the claim commit once per acquire; holders cached; the run checked
+  every few minutes; 30 s polls with jitter (about 120 requests an hour per waiter).
+- **Live checks were PATCHed every 15 s for up to an hour.** → Only when the title changes, at most once a minute.
+- **The gate gathered the PR's facts twice** (decision, then card). → `gate evaluate --card`, one process.
+- **Release PRs ran the full suite twice** (CI in the staging org and the staging regression). → CI passes release/*
+  and backmerge-* heads; the required staging regression is their full test.
+- **20-minute test cap** fails a large org's full run. → 60 minutes for "all"; an unfinished run is aborted
+  (ApexTestQueueItem Status=Aborted) so the next lane holder does not deploy under running tests. Release deploy and
+  gate ship jobs allow 100 minutes.
+- **Every field change ran every test.** → Fields, validation rules, record types and objects run the tests that name
+  their object; a permission set the tests that name it.
+- **Story orgs expired after 3 days**, and later jobs dead-ended in `attach`. → 7 days; agent jobs call `org ensure`
+  (rebuilds an expired org); `ORG_RESERVE` keeps slots for staging, UAT and CI.
+- **The auto-fixer started on infrastructure failures** (lane timeout, full Dev Hub). → Only on static, deploy or test
+  failures.
+- **Events dropped under concurrent writes**, and metrics fetched every event commit. → Six retries with jitter; a
+  shallow fetch of the branch tip. METRICS.md shows one DORA table (the event log's) once it covers the window.
+
+## Final-review fixes (correctness)
+
+- **A person's story PR could open into `main`**: story-pr chose the base by git ancestry, false as soon as anything
+  merged into the sprint after `/start`. → `pipe story base <key>` (the story's labels, the same rule as `/start`).
+- **A UAT sign-off was silently reset**: every staging nudge redeployed UAT, which set `pipeline/uat` back to pending on
+  the same commit. → uat-deploy skips a commit UAT already has (the card's "Deploy to UAT again" forces it); the nudge
+  redeploys only after a staging run that really tested a new head; superseded staging runs stop before the lane.
+- **The merge button unlocked before production validation** (`pipeline/gate` = success at decide). → Routes that
+  validate post pending until production accepts; a rejection sets it to failure.
+- **`gh pr list` returns 30 by default**: close-out and renudge pass `--limit 1000`.
+- **A back-merge with conflicts can never merge** (resolving adds a commit not in main). → The PR says to resolve on a
+  branch from the release branch and open that as a normal PR.
+
+## Agent isolation
+
+- **An agent can change the trusted pipeline copy (`.pipeline/`) in its own workspace, or the runner (`$GITHUB_ENV`,
+  `NODE_OPTIONS`)**, and later steps in the same job run it. If that job's token can post statuses, a prompt-injected
+  story could forge `pipeline/*` verdicts as `github-actions[bot]`. → Agent jobs set their own `permissions:` with no
+  `statuses: write` and no `actions: write`; verdicts and dispatches run in a separate job on a fresh runner.
+- **The review/fix chain looped for ever at the round limit** (the limit run re-requested a review on an unchanged head,
+  which said "changes" again and re-labelled `ai:fix`). → The follow-up re-reviews only a new head; the chain never adds
+  `ai:fix` to a blocked PR or past the limit.
+
 ## Cards and tick boxes
+
+- **The card said "CI is deploying" while CI waited up to 45 minutes for the org.** → While a job waits for a story
+  org's lane, the card's Now line says who is using the org (with a link to that run).
+- **A carried-over story's card ended at "closed without merging".** → It says how to pick it up again, with a
+  **Start** box.
 
 - **On a release PR it was hard to tell what was next**: story PRs had a card, release PRs only scattered comments. →
   A release card (contents, CI, staging, UAT, approval, validation, merge, production), refreshed by release-cut, the

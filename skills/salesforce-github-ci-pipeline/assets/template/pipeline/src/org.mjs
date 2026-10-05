@@ -79,7 +79,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     /** Log in to the target's live org under its alias. Throws if there is none. */
     attach(target, opts) {
       const org = self.find(target, opts);
-      if (!org) throw new Error(`No live scratch org for ${typeof target === "string" ? target : target.description}. Was it started (label start / sprint-start)?`);
+      if (!org) throw new Error(`No live scratch org for ${typeof target === "string" ? target : target.description}: it was never started, or it expired (story orgs live 7 days). Comment /start on the story to rebuild it.`);
       const clientId = sf(["org", "display", "-o", DEVHUB]).clientId;
       for (let i = 1; i <= 3; i++) {
         const ok = sf(["org", "login", "jwt", "--client-id", clientId, "--jwt-key-file", keyFile, "--username", org.username, "--instance-url", org.loginUrl, "--alias", org.alias], { allowFail: true });
@@ -97,7 +97,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       if (existing && self.isReady(org.alias)) return { ...org, created: false };
       if (existing) log(`${org.alias} exists but was never finished: completing it`);
       else {
-        self.assertCapacity();
+        self.assertCapacity(org.kind === "story" ? Number(env.ORG_RESERVE || 0) : 0);
         log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
         sf(["org", "create", "scratch", "--definition-file", definitionPath(org.definition), "--alias", org.alias, "--description", org.description,
           "--duration-days", String(org.days), "--target-dev-hub", DEVHUB, "--wait", "25"]);
@@ -133,8 +133,10 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     },
 
     /** Fail with a clear message instead of a half-made org when the Dev Hub has no room. */
-    assertCapacity() {
+    /** reserve: slots a story org must leave free for staging, UAT and CI (repository variable ORG_RESERVE). */
+    assertCapacity(reserve = 0) {
       const { active, daily } = self.limits();
+      if (reserve && active.remaining <= reserve) throw new Error(`Only ${active.remaining} scratch org slot(s) free and ${reserve} kept for staging, UAT and CI (ORG_RESERVE): merge or close a story first.`);
       if (active.remaining === 0) throw new Error(`No free scratch org slot (${active.max} active is the Dev Hub's limit). Merge or delete a story first, or run scratch-janitor.`);
       if (daily.remaining === 0) throw new Error(`The Dev Hub has created its ${daily.max} scratch orgs for today; the count resets at 00:00 UTC.`);
     },
@@ -190,11 +192,6 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         else log(`could not delete ${o.description} (${o.why})`);
       }
       return gone;
-    },
-
-    /** Story orgs whose story the tracker says is closed. */
-    closedStoryOrgs(isClosed) {
-      return active().filter((r) => /^issue-\d+$|^[A-Z][A-Z0-9]+-\d+$/.test(r.Description || "")).filter((r) => isClosed(r.Description));
     },
 
     limits() {

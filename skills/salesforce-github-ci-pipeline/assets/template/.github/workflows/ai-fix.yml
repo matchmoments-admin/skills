@@ -44,6 +44,20 @@ jobs:
   fix:
     if: github.event_name == 'workflow_dispatch' && vars.AI_FIX == 'true'
     runs-on: ubuntu-latest
+    # The agent can run code in this job, and later steps run in the same runner: so this job's token cannot post
+    # verdicts (statuses) or start workflows (actions). Those happen in a separate job after it (the trust model).
+    permissions:
+      contents: write       # the org's lane (refs/locks) and the event log; pushes go as the pipeline App
+      pull-requests: write
+      issues: write
+      id-token: write
+      checks: read
+      statuses: read
+    outputs:
+      is-app: ${{ steps.id.outputs.is-app }}
+      branch: ${{ steps.pr.outputs.branch }}
+      before: ${{ steps.head.outputs.before }}
+      over: ${{ steps.rounds.outputs.over }}
     timeout-minutes: 75   # 45 of them may be waiting for the story org's lane
     env:
       GH_TOKEN: ${{ github.token }}
@@ -78,6 +92,9 @@ jobs:
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
           echo "STORY_KEY=$KEY" >> "$GITHUB_ENV"
           [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is fixing the review comments and failed checks (5 to 10 minutes)"
+      - name: The head before the fix (the review runs again only on a new one)
+        id: head
+        run: echo "before=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Enforce the round limit (earlier fix runs for this PR, whatever their commits were called)
         id: rounds
         env:
@@ -103,7 +120,7 @@ jobs:
         env:
           READ_TOKEN: ${{ github.token }}   # reading run logs needs actions: read, which the Actions token has
         run: |
-          node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH"
+          node .pipeline/pipeline/bin/pipe.mjs org ensure "$BRANCH"   # attaches, or rebuilds an expired org
           {
             echo "# Feedback on PR #$PR"
             gh pr view "$PR" --json comments --jq '.comments[] | select(.body | startswith("/") | not) | "\n## Comment by \(.author.login)\n\(.body)"'
@@ -141,14 +158,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
-      - name: Review again (and CI, without the App)
+      - name: Remove the button label
         if: always()
-        run: |
-          gh pr edit "$PR" --remove-label ai:fix || true
-          [ "${{ vars.AI_REVIEW }}" != "true" ] || gh workflow run ai-review.yml --ref main -f pr="$PR"
-          [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
+        run: gh pr edit "$PR" --remove-label ai:fix || true
       - name: The story card says the fix failed, and where to look
         if: failure() && env.STORY_KEY != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$STORY_KEY" --now "Claude's fix" --failed --retry "comment /fix to retry, or push a fix yourself"
+  follow-up:
+    # Fresh runner, no agent: the review again (and CI without the App), only if the fix pushed a new head. A run that
+    # stopped at the round limit, or pushed nothing, starts nothing (that was an endless review/fix loop).
+    needs: fix
+    if: always() && needs.fix.result != 'skipped' && needs.fix.outputs.over != 'true' && needs.fix.outputs.before != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ inputs.pr }}
+      BRANCH: ${{ needs.fix.outputs.branch }}
+      BEFORE: ${{ needs.fix.outputs.before }}
+    steps:
+      - run: |
+          NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          [ "$NOW" != "$BEFORE" ] || { echo "the fix pushed nothing: no new review"; exit 0; }
+          [ "${{ vars.AI_REVIEW }}" != "true" ] || gh workflow run ai-review.yml --ref main -f pr="$PR"
+          [ "${{ needs.fix.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"

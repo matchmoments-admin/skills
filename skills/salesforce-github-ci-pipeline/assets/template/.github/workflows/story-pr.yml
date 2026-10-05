@@ -38,9 +38,10 @@ jobs:
           [[ "$BRANCH" =~ ^(issue-[0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story branch: $BRANCH"; exit 1; }
           KEY=$(node pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
           git fetch -q origin "$BRANCH"
-          # A hotfix branch was cut from main; a story branch from the open release branch.
-          REL=$(node pipeline/bin/pipe.mjs context | sed -n 's/^RELEASE_BRANCH=//p')
-          if [ -n "$REL" ] && git fetch -q origin "$REL" && git merge-base --is-ancestor "origin/$REL" "origin/$BRANCH"; then BASE="$REL"; else BASE=main; fi
+          # The base comes from the story itself (hotfix label: main; otherwise the open release branch), like /start and
+          # /build. (Git ancestry was wrong as soon as anything merged into the sprint after /start: the PR went to main.)
+          BASE=$(node pipeline/bin/pipe.mjs story base "$KEY")
+          git fetch -q origin "$BASE"
           OPEN=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
           AHEAD=$(git rev-list --count "origin/$BASE..origin/$BRANCH")
           { echo "key=$KEY"; echo "base=$BASE"; echo "open=$OPEN"; echo "ahead=$AHEAD"; } >> "$GITHUB_OUTPUT"

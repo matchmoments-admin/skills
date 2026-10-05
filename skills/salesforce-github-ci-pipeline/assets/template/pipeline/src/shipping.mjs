@@ -61,7 +61,7 @@ export function gatherRelease(git, { sha, validated = {} }) {
 /** After landing: re-run the gate for every other approved PR into the same base. GitHub keeps one waiting run per
  *  concurrency group and cancels the one before, so a ship that was queued is never lost. Returns the PRs re-run. */
 export function renudge({ gh }, host, { base, except }, nudge) {
-  const prs = gh(["pr", "list", "--base", base, "--state", "open", "--json", "number"]) || [];
+  const prs = gh(["pr", "list", "--base", base, "--state", "open", "--limit", "1000", "--json", "number"]) || [];
   const again = prs.map((p) => p.number).filter((n) => String(n) !== String(except) && nudge(n).action === "dispatch");
   for (const n of again) host.dispatch("gate.yml", { pr: n });
   return again;
@@ -72,7 +72,7 @@ export function watchdogFacts({ git, gh }, host) {
   git(["fetch", "-q", "--tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
   const mainSha = git(["rev-parse", "origin/main"]);
   const previous = lastRelease(git, mainSha);
-  const runs = host.workflowRuns("release.yml").slice(0, 20);
+  const runs = host.workflowRuns("release.yml", "", 20);
   const last = runs.find((r) => r.status === "completed");
   return {
     mainSha, previous,

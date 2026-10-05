@@ -26,11 +26,11 @@ export function recorder({ api, repo, env = process.env, log = () => {}, sleep =
     if (broken || !repo || env.PIPELINE_EVENTS === "off") return false;
     try {
       const e = event(kind, data, env);
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 6; i++) {
         const r = api("PUT", `repos/${repo}/contents/${pathOf(e)}`, { message: `event: ${kind}${e.story ? ` ${e.story}` : ""}`, content: Buffer.from(JSON.stringify(e) + "\n").toString("base64"), branch: BRANCH });
         if (!r?.status) return true;
         if (r.status === 403 || r.status === 404) { broken = true; log(`::notice::events not recorded (${r.status}): this job's token cannot write the ${BRANCH} branch`); return false; }
-        sleep(500 * (i + 1));   // 409: the branch moved under a concurrent write
+        sleep((500 + Math.random() * 1500) * (i + 1));   // 409: the branch moved under a concurrent write; jitter so writers spread
       }
     } catch (err) { log(`::notice::event ${kind} not recorded: ${err.message}`); }
     return false;
@@ -40,7 +40,7 @@ export function recorder({ api, repo, env = process.env, log = () => {}, sleep =
 // ---------------------------------------------------------------- reading the log
 /** Every event of the last `days` days: one fetch of the branch, one `git cat-file --batch` for the files. */
 export function readLog(io, { days = 28, now = new Date() } = {}) {
-  if (io.git(["fetch", "-q", "origin", `+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}`], { allowFail: true }) === null) return [];
+  if (io.git(["fetch", "-q", "--depth=1", "origin", `+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}`], { allowFail: true }) === null) return [];   // the tip only: not every event commit
   const since = new Date(now - days * 24 * 3600e3).toISOString().slice(0, 10);
   const files = (io.git(["ls-tree", "-r", `origin/${BRANCH}`, "--", "events"], { allowFail: true }) || "").split("\n")
     .map((l) => l.match(/^\d+ blob ([0-9a-f]+)\t(events\/(\d{4})\/(\d{2})\/(\d{2})\/.+\.json)$/)).filter(Boolean)

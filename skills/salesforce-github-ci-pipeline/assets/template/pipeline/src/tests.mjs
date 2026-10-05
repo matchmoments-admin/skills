@@ -5,7 +5,9 @@
 // Selection rules (safe by default: when in doubt, everything):
 //   a changed test class runs itself; a changed class runs every test class that names it;
 //   a changed trigger or record-triggered Flow runs the test classes that name its object, plus the Flow's tests;
-//   other metadata (fields, objects, layouts, permission sets...), a deletion, or code no test names: all local tests.
+//   a changed field, validation rule, record type or object runs the test classes that name its object; a changed
+//   permission set the test classes that name it (they assign it);
+//   other metadata (layouts, pages, settings...), a deletion, or anything no test names: all local tests.
 // The skill salesforce-scratch-org-tests runs this same file (its scripts/engine/tests.mjs is a verbatim copy, kept
 // identical by scripts/skills-sync.sh and checked in CI), so both skills select tests alike.
 
@@ -15,6 +17,8 @@ const isTrigger = (p) => /\.trigger(-meta\.xml)?$/.test(p);
 const isFlow = (p) => /\/flows\/[^/]+\.flow-meta\.xml$/.test(p);
 const isFlowTest = (p) => /\.flowtest-meta\.xml$/.test(p);
 const flowOfTest = (src) => (src.match(/<flowApiName>([^<]+)<\/flowApiName>/) || [])[1];
+const objectOf = (p) => (p.match(/\/objects\/([^/]+)\//) || [])[1] || null;
+const isPermissionSet = (p) => p.endsWith(".permissionset-meta.xml");
 
 /**
  * changed/deleted: source paths that differ from the base; files: every source path; read(path) -> text.
@@ -53,6 +57,15 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
       if (obj) naming(obj).forEach((t) => apex.add(t));
     } else if (isFlowTest(p)) {
       flows.add(`${flowOfTest(read(p))}.${base(p).replace(".flowtest-meta.xml", "")}`);
+    } else if (objectOf(p)) {
+      // a field, validation rule, record type... (or the object itself) affects the tests that use its object
+      const hit = naming(objectOf(p));
+      if (!hit.length) return all(`no test names ${objectOf(p)} (changed ${base(p)})`);
+      hit.forEach((t) => apex.add(t));
+    } else if (isPermissionSet(p)) {
+      const hit = naming(base(p).replace(".permissionset-meta.xml", ""));
+      if (!hit.length) return all(`no test names permission set ${base(p)}`);
+      hit.forEach((t) => apex.add(t));
     } else {
       return all(`${base(p)} is metadata that can affect anything`);
     }
@@ -99,8 +112,9 @@ export function runForCheckout(io, { host, alias, base, sha, all = false, min = 
   return { plan, state, result, seconds: Math.round((Date.now() - started) / 1000) };
 }
 
-export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs = 15000, maxPolls = 80, outDir }) {
-  // maxPolls x pollMs (20 min) stays inside the 30-minute job limits, so the run always ends here and is reported
+export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs = 15000, maxPolls = plan.mode === "all" ? 240 : 80, outDir }) {
+  // maxPolls x pollMs: 20 minutes for a story's tests, 60 for everything (a large org); the jobs allow for it. A run
+  // that does not finish is aborted, so the next job in the org's lane does not deploy under running tests.
   const state = { phase: "apex", apex: { classes: 0, classesDone: 0, ran: 0, passed: 0, failed: 0, failures: [], finished: false },
     flows: { ran: 0, passed: 0, failed: 0, failures: [], finished: false }, coverage: {}, orgWide: null };
   const runApex = plan.mode === "all" || plan.apex.length > 0;
@@ -108,7 +122,7 @@ export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs
     const level = plan.mode === "all" ? ["--test-level", "RunLocalTests"] : ["--test-level", "RunSpecifiedTests", ...plan.apex.flatMap((t) => ["--tests", t])];
     const id = io.sf(["apex", "run", "test", "-o", alias, ...level, "--code-coverage"]).testRunId;
     for (let i = 0; i < maxPolls; i++) {
-      const items = io.sf(["data", "query", "-o", alias, "-q", `SELECT Status, ApexClass.Name FROM ApexTestQueueItem WHERE ParentJobId = '${id}'`]).records || [];
+      const items = io.sf(["data", "query", "-o", alias, "-q", `SELECT Id, Status, ApexClass.Name FROM ApexTestQueueItem WHERE ParentJobId = '${id}'`]).records || [];
       const results = io.sf(["data", "query", "-o", alias, "-q", `SELECT Outcome, MethodName, Message, StackTrace, ApexClass.Name FROM ApexTestResult WHERE AsyncApexJobId = '${id}'`]).records || [];
       const done = items.filter((q) => ["Completed", "Failed", "Aborted"].includes(q.Status)).length;
       Object.assign(state.apex, {
@@ -119,6 +133,12 @@ export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs
       });
       onProgress(state);
       if (items.length && done === items.length) { state.apex.finished = true; break; }
+      if (i === maxPolls - 1) {
+        for (const q of items.filter((x) => ["Queued", "Holding", "Preparing", "Processing"].includes(x.Status))) {
+          io.sf(["data", "update", "record", "-o", alias, "-s", "ApexTestQueueItem", "-i", q.Id, "-v", "Status=Aborted"], { allowFail: true });
+        }
+        break;
+      }
       sleep(pollMs);
     }
     const final = io.sf(["apex", "get", "test", "-o", alias, "-i", id, "--code-coverage", ...(outDir ? ["--output-dir", `${outDir}/apex`] : [])], { allowFail: true });

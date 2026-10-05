@@ -66,7 +66,7 @@ export function aiFeatures(env = process.env) {
 /** The story's own Playwright spec, which a person (or the AI tester) commits with the change. */
 export const storySpec = (key) => `e2e/story-${key}.spec.ts`;
 
-const ORG_LIFETIME_DAYS = { story: 3, sprint: 30 };
+const ORG_LIFETIME_DAYS = { story: 7, sprint: 30 };   // a story often takes longer than 3 days; ensure() rebuilds an expired one
 const DEFINITION = { story: "config/scratch-dev.json", hotfix: "config/scratch-hotfix.json", sprint: "config/scratch-qa.json" };
 
 // ---- story keys and branches ---------------------------------------------------------------------------
@@ -95,10 +95,6 @@ export const releaseBranch = (sprint) => `release/${sprint}`;
 export const milestoneTitle = (sprint) => `Sprint ${sprint}`;
 export function sprintOf(branch) {
   const m = String(branch || "").replace(/^origin\//, "").match(/^release\/(.+)$/);
-  return m ? m[1] : null;
-}
-export function sprintOfMilestone(title) {
-  const m = String(title || "").match(/^Sprint (.+)$/);
   return m ? m[1] : null;
 }
 

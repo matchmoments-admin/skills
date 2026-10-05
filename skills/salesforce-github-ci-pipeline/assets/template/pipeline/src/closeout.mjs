@@ -65,7 +65,7 @@ export async function apply(p, { tag, tracker, orgs, git, gh, log = console.erro
   for (const key of p.carry) await tracker.carry(key, p.sprint, `Not finished in sprint ${p.sprint}; carried over to the next sprint.`);
   // PRs still aimed at the release branch would be closed or retargeted at main by GitHub when it is deleted.
   if (p.deleteBranch && gh) {
-    for (const pr of gh(["pr", "list", "--base", p.deleteBranch, "--state", "open", "--json", "number,headRefName"]) || []) {
+    for (const pr of gh(["pr", "list", "--base", p.deleteBranch, "--state", "open", "--limit", "1000", "--json", "number,headRefName"]) || []) {
       gh(["pr", "close", String(pr.number), "--comment", `Sprint ${p.sprint} shipped without this change, so it is carried over. Its branch \`${pr.headRefName}\` is kept: start the story again in the next sprint.`]);
       log(`closed carried-over PR #${pr.number}`);
     }
