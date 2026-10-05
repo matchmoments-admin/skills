@@ -14,6 +14,8 @@ permissions:
   pull-requests: write
   issues: write
   id-token: write
+  checks: read          # the story card reads checks and verdicts
+  statuses: read
 jobs:
   off:
     if: github.event.label.name == 'ai:implement' && vars.AI_IMPLEMENT != 'true'
@@ -50,6 +52,10 @@ jobs:
         run: |
           [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
           node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
+      - name: The story card says Claude is building it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is building the story in its scratch org (5 to 15 minutes)"
       - name: The story branch exists (start ran) and matches its route
         env:
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
@@ -112,3 +118,8 @@ jobs:
         run: |
           gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
           gh workflow run ai-review.yml -f pr="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"
+      - name: The story card says the build failed, and where to look
+        if: failure() && steps.ctx.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude's build" --failed --retry "comment /build to retry, or build it on the branch yourself"

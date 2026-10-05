@@ -90,6 +90,12 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The story card says Claude is writing the UI test
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
+          [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is writing and running the UI test in the scratch org (5 to 15 minutes)"
       - name: Attach, deploy this head and prepare the story's org; fetch the story
         id: org
         run: |

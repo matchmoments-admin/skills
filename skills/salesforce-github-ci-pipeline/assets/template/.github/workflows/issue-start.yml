@@ -42,6 +42,8 @@ jobs:
         run: |
           [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
           node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
+      - name: The story card says what is happening (seconds after /start)
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "creating the branch and a production-shaped scratch org (3 to 5 minutes)"
       - name: The story branch (from its base; an existing one is kept)
         env:
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
@@ -67,3 +69,6 @@ jobs:
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --base "$BASE"
+      - name: The story card says it failed, and where to look
+        if: failure() && steps.ctx.outcome == 'success'
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "starting the story" --failed --retry "fix it, then comment /start to retry"

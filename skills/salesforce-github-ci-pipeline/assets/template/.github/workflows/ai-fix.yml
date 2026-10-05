@@ -19,6 +19,8 @@ permissions:
   pull-requests: write
   issues: write
   id-token: write
+  checks: read          # the story card reads checks and verdicts
+  statuses: read
 jobs:
   route:
     if: github.event_name == 'pull_request_target' && github.event.label.name == 'ai:fix'
@@ -69,6 +71,13 @@ jobs:
           app-id: ${{ secrets.PIPELINE_APP_ID }}
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           ref: ${{ steps.pr.outputs.branch }}
+      - name: The story card says Claude is fixing it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
+          echo "STORY_KEY=$KEY" >> "$GITHUB_ENV"
+          [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is fixing the review comments and failed checks (5 to 10 minutes)"
       - name: Enforce the round limit (rounds counted since the PR's own base)
         id: rounds
         run: |
@@ -126,3 +135,8 @@ jobs:
           gh pr edit "$PR" --remove-label ai:fix || true
           [ "${{ vars.AI_REVIEW }}" != "true" ] || gh workflow run ai-review.yml -f pr="$PR"
           [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
+      - name: The story card says the fix failed, and where to look
+        if: failure() && env.STORY_KEY != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$STORY_KEY" --now "Claude's fix" --failed --retry "comment /fix to retry, or push a fix yourself"

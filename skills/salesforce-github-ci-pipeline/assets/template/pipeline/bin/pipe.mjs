@@ -15,7 +15,8 @@
 //   verdict   model <role>                              the model for an AI role (AI_MODEL overrides)
 //   prod      validate [--sha S] [--level L] [--deletions-from REF]   check-only deploy, live; prints the job id
 //   tests     run <alias> --base B [--sha S] [--all] [--min 75] [--out dir]   relevant (or all) tests, live check run
-//   story     card <key> [--base B] [--tag T]                refresh the story card on the issue / ticket
+//   story     card <key> [--base B] [--tag T] [--now "what" [--failed] [--retry "how"]]   refresh the story card;
+//             --now shows what is running (or failed) with a link to this run; --starting before a branch exists
 //   metrics   [--days N] [--out file]                   DORA and pipeline telemetry as markdown
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { io } from "../src/io.mjs";
@@ -25,7 +26,7 @@ import * as verdict from "../src/verdict.mjs";
 import * as closeout from "../src/closeout.mjs";
 import * as metrics from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
-import { storyCard, CARD_MARK, CARD_TITLE } from "../src/card.mjs";
+import { storyCard, startingCard, CARD_MARK, CARD_TITLE } from "../src/card.mjs";
 import * as board from "../src/board.mjs";
 import * as tests from "../src/tests.mjs";
 import * as production from "../src/production.mjs";
@@ -35,7 +36,7 @@ import { join } from "node:path";
 import { orgRegistry } from "../src/org.mjs";
 import { tracker as makeTracker } from "../src/tracker.mjs";
 
-const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "tag", "sha", "min", "level", "deletions-from"]);
+const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "tag", "sha", "min", "level", "deletions-from", "now", "retry"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -69,7 +70,10 @@ function openRelease() {
 const orgs = () => orgRegistry({ sf: io.sf, log });
 
 /** Rebuild the story card from the same facts the gate uses, and put it on the story. Never fails the caller. */
-async function refreshCard(key, { base = null, tag = null } = {}) {
+/** This workflow run's page, the "watch it live" link. */
+const runUrl = () => (process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_SERVER_URL}/${process.env.GH_REPO || process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` : undefined);
+
+async function refreshCard(key, { base = null, tag = null, activity = null } = {}) {
   try {
     const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
     const repoUrl = `${process.env.GITHUB_SERVER_URL || "https://github.com"}/${repo}`;
@@ -81,7 +85,7 @@ async function refreshCard(key, { base = null, tag = null } = {}) {
     const body = storyCard({
       key, repoUrl, branch, ai, pr, facts, decision: facts ? gate.evaluate(facts) : null,
       base: pr?.baseRefName || base || names.context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main",
-      shipped: tag ? { tag, url: `${repoUrl}/releases/tag/${tag}` } : null,
+      shipped: tag ? { tag, url: `${repoUrl}/releases/tag/${tag}` } : null, activity,
     });
     await makeTracker(io).card(key, body, CARD_MARK, CARD_TITLE);
     await syncBoard(key, { repo, pr, facts, shipped: Boolean(tag) });
@@ -127,7 +131,7 @@ async function testsRun(alias) {
     onProgress: (st) => {
       check.update(tests.checkOutput(st, { plan, classPath }));
       log(`  apex ${st.apex.passed}/${st.apex.ran} passed (${st.apex.classesDone}/${st.apex.classes} classes)${st.phase === "flows" ? " · flow tests running" : ""}`);
-      if (story && polls++ % 4 === 0) refreshCard(story).catch(() => {});
+      if (story && polls++ % 4 === 0) refreshCard(story, { activity: { state: "running", what: `CI is testing the change in its scratch org (${tests.checkOutput(st, { plan, classPath }).title.replace(/^Running: /, "")})`, url: runUrl() } }).catch(() => {});
     },
   });
   const result = tests.verdict(state, { plan, changedCode: tests.changedCode(changed, files, read), min: Number(flag("min", "75")) });
@@ -309,7 +313,15 @@ async function main() {
     case "verdict model": return say(verdict.modelFor(arg(0)));
     case "tests run": return testsRun(arg(0));
     case "prod validate": return prodValidate();
-    case "story card": { await refreshCard(arg(0), { base: flag("base"), tag: flag("tag") }); return say(`card updated for ${arg(0)}`); }
+    case "story card": {
+      const activity = flag("now") ? { state: has("failed") ? "failed" : "running", what: flag("now"), url: runUrl(), retry: flag("retry") } : null;
+      if (has("starting")) {
+        await makeTracker(io).card(arg(0), startingCard({ key: arg(0), activity }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
+        return say(`starting card for ${arg(0)}`);
+      }
+      await refreshCard(arg(0), { base: flag("base"), tag: flag("tag"), activity });
+      return say(`card updated for ${arg(0)}`);
+    }
     case "triage ui": {
       const read = (f) => (f ? readFileSync(f, "utf8") : "");
       const t = await triageUiFailure(typesafeJev(process.env.TYPESAFE_API_KEY), { log: read(flag("log")), story: read(flag("story")) });

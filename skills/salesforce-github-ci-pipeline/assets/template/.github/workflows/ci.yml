@@ -110,6 +110,12 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The story card says CI is running
+        if: steps.delta.outputs.none != 'true'
+        run: |
+          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$REF" | sed -n 's/^STORY=//p')
+          echo "STORY_KEY=$KEY" >> "$GITHUB_ENV"
+          [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "CI is deploying the change to its scratch org and testing it"
       - name: The branch's org (a temporary one, with the full source, if it has none)
         if: steps.delta.outputs.none != 'true'
         id: org
@@ -151,6 +157,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always() && steps.delta.outputs.none != 'true'
         with: { name: apex-results, path: test-results }
+      - name: The story card says CI failed, and where to look
+        if: failure() && env.STORY_KEY != ''
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$STORY_KEY" --now "CI (deploy or tests)" --failed --retry "fix and push; with AI on, the fixer starts by itself"
       - name: Delete the temporary org
         if: always() && steps.org.outputs.temp == 'true'
         run: node .pipeline/pipeline/bin/pipe.mjs org remove-tagged "${{ steps.org.outputs.alias }}"   # by its tag, via the Dev Hub: works even if creation half-failed

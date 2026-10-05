@@ -10,7 +10,7 @@ import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
 import { orgRegistry, packageList, findOrphans } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview } from "../src/jev.mjs";
-import { storyCard, CARD_MARK, withoutMap } from "../src/card.mjs";
+import { storyCard, CARD_MARK, withoutMap, startingCard, activityLine } from "../src/card.mjs";
 import * as board from "../src/board.mjs";
 import * as tests from "../src/tests.mjs";
 import * as production from "../src/production.mjs";
@@ -456,7 +456,7 @@ test("story card: before the PR it says how to build; with a PR it tracks each s
   const base = { key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/2026-w41" };
   const before = storyCard({ ...base, ai: { implement: true } });
   assert.ok(before.startsWith(CARD_MARK));
-  assert.match(before, /\*\*Next:\*\* Build it, or add the label \*\*ai:implement\*\*/);
+  assert.match(before, /\*\*Next:\*\* Build it, or comment \*\*\/build\*\*/);
 
   const f = { ...open(fixture(23)), ai: {}, statuses: [], reviews: [] };
   const pr = { ...f.pr, title: "Escalate cases" };
@@ -671,4 +671,16 @@ test("follow-ups after an emergency merge are the ones the gate would have start
   assert.deepEqual(gate.followUps({ headRefName: "release/w", baseRefName: "main" }), ["release"]);
   assert.deepEqual(gate.followUps({ headRefName: "fix/x", baseRefName: "main" }, ["pipeline/a.mjs"]), []);
   assert.deepEqual(gate.followUps({ headRefName: "fix/x", baseRefName: "main" }, ["force-app/a.cls"]), ["release"]);
+});
+
+test("story card says what is running right now, with a link; failures say where to look and how to retry", () => {
+  const url = "https://github.com/o/r/actions/runs/1";
+  assert.equal(activityLine(null), null);
+  assert.equal(activityLine({ state: "running", what: "creating the scratch org", url }), `⏳ **Now:** creating the scratch org · **[watch it live](${url})**`);
+  assert.equal(activityLine({ state: "failed", what: "creating the scratch org", url, retry: "comment /start to retry" }), `❌ **Failed:** creating the scratch org · **[see what went wrong](${url})** · comment /start to retry`);
+  const first = startingCard({ key: "84", activity: { state: "running", what: "creating the branch", url } });
+  assert.match(first, /⏳ \*\*Now:\*\* creating the branch/);
+  assert.match(first, /CARD|pipeline:story-card/);
+  const card = storyCard({ key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/w", activity: { state: "running", what: "Claude is building the story", url } });
+  assert.ok(card.indexOf("Now:") < card.indexOf("Next:"));
 });

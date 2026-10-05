@@ -15,7 +15,8 @@ const stateOf = (c) => (c === "success" ? "done" : ["failure", "error", "cancell
  *   pr/facts/decision are absent before the PR exists. facts = gate.gather(), decision = gate.evaluate(facts).
  * returns markdown.
  */
-export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null }) {
+export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null }) {
+  const now = activityLine(activity);
   const rows = [];
   const prUrl = pr ? `${repoUrl}/pull/${pr.number}` : null;
   const branchLink = pr?.state === "MERGED" ? `\`${branch}\`` : `[\`${branch}\`](${repoUrl}/tree/${encodeURIComponent(branch)})`;   // merged branches are deleted
@@ -23,9 +24,9 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
 
   let next;
   if (!pr) {
-    rows.push(["waiting", "Build", ai.implement ? `build on ${branchLink} and open a PR into \`${base}\`, or label this story **ai:implement**` : `build on ${branchLink} and open a PR into \`${base}\``]);
-    next = ai.implement ? "Build it, or add the label **ai:implement** to have the AI build it." : `Build it on ${branchLink} and open a pull request.`;
-    return render(key, next, rows);
+    rows.push(["waiting", "Build", ai.implement ? `build on ${branchLink} and open a PR into \`${base}\`, or comment **/build** on this story` : `build on ${branchLink} and open a PR into \`${base}\``]);
+    next = ai.implement ? "Build it, or comment **/build** to have the AI build it." : `Build it on ${branchLink} and open a pull request.`;
+    return render(key, next, rows, now);
   }
 
   const merged = pr.state === "MERGED";
@@ -67,7 +68,22 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
     else if (waiting && waiting[1] === "Approval") next = `**[Approve here](${prUrl}/files)**: everything else is green.`;
     else next = waiting ? `${waiting[1]}: ${waiting[2]}` : "Waiting.";
   }
-  return render(key, next, rows);
+  return render(key, next, rows, now);
+}
+
+/**
+ * What is happening right now, with a link to watch it: { state: "running" | "failed", what, url, retry }.
+ * Workflows set it while they work and clear it when they finish, so the issue always says what is going on.
+ */
+export function activityLine(a) {
+  if (!a?.what) return null;
+  const link = a.url ? (a.state === "failed" ? ` · **[see what went wrong](${a.url})**` : ` · **[watch it live](${a.url})**`) : "";
+  return a.state === "failed" ? `❌ **Failed:** ${a.what}${link}${a.retry ? ` · ${a.retry}` : ""}` : `⏳ **Now:** ${a.what}${link}`;
+}
+
+/** The card before a branch or org exists: the first thing anyone sees after /start. */
+export function startingCard({ key, activity }) {
+  return render(key, "Wait: the pipeline is setting this story up.", [["running", "Branch and scratch org", "being created"]], activityLine(activity));
 }
 
 const SHORT = { "Branch and scratch org": "Branch + org", "Build": "Build", "Pull request": "Pull request", "CI (tests in a scratch org)": "CI",
@@ -93,11 +109,12 @@ export function storyMap(rows) {
 /** Remove the diagram (for trackers that cannot draw Mermaid). */
 export const withoutMap = (body) => body.replace(/```mermaid[\s\S]*?```\n*/g, "");
 
-function render(key, next, rows) {
+function render(key, next, rows, now = null) {
   return [
     CARD_MARK,
     `### ${CARD_TITLE} (kept up to date by the pipeline)`,
     "",
+    ...(now ? [now, ""] : []),
     `**Next:** ${next}`,
     "",
     storyMap(rows),
