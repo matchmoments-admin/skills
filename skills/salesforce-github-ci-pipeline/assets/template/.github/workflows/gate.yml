@@ -125,6 +125,11 @@ jobs:
           cat "$RUNNER_TEMP/prod-errors.txt"
           gh pr comment "$PR" --body "$(printf 'Not merged: production rejected this change.\n\n```\n%s\n```' "$(cat "$RUNNER_TEMP/prod-errors.txt")")"
           exit 1
+      - name: The story card says the gate is merging
+        if: needs.decide.outputs.story != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node pipeline/bin/pipe.mjs story card "${{ needs.decide.outputs.story }}" --now "the gate is ${{ needs.decide.outputs.validate == 'true' && 'validating against production, then merging' || 'merging' }}"
       - name: Merge (only the head the gate decided on)
         id: merge
         env:

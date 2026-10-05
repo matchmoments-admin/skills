@@ -144,3 +144,9 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **A UI test failed on a correct feature** → it typed a future Close Date and expected to see it; Salesforce sets a
   closed Opportunity's future Close Date to today, and the Flow copied that. → UI tests use past dates and assert what
   the platform stores (read the record back). Jev's failure triage is a guess: it said "feature" here.
+
+## Following the agent
+
+- **A PR command showed only 👀** and the progress was on the issue. → The story card is mirrored onto the PR (same
+  marker, edited in place) and every agent step sets its **Now** line with the run link. Before `/start`, `/plan`
+  shows the same line in its Build plan comment; a placeholder is never read as the agreed plan.

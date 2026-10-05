@@ -64,9 +64,10 @@ jobs:
           echo "base=${BASE:-main}" >> "$GITHUB_OUTPUT"
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story.md"
           if gh issue view "$KEY" --json labels --jq '[.labels[].name] | index("start")' | grep -q '[0-9]'; then echo "started=true" >> "$GITHUB_OUTPUT"; fi
-      - name: The story card says Claude is planning (if the story has started)
-        if: steps.ctx.outputs.started == 'true'
-        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is planning the build (2 to 5 minutes)"
+      - name: Show that Claude is planning, with a link (the plan comment at once; the card too once started)
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY"
+          [ "${{ steps.ctx.outputs.started }}" != "true" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is planning the build (2 to 5 minutes)"
       - uses: ./.pipeline/.github/actions/claude-agent
         with:
           role: plan
@@ -86,8 +87,11 @@ jobs:
         env:
           TYPESAFE_API_KEY: ${{ vars.AI_TRIAGE == 'true' && secrets.TYPESAFE_API_KEY || '' }}
         run: |
-          [ -s "$RUNNER_TEMP/plan.md" ] || { gh issue comment "$KEY" --body "Claude did not produce a plan this time. Comment **/plan** to try again, or **/start** to go ahead without one."; exit 1; }
+          [ -s "$RUNNER_TEMP/plan.md" ] || { node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY" --failed; exit 1; }
           node .pipeline/pipeline/bin/pipe.mjs story plan-post "$KEY" --file "$RUNNER_TEMP/plan.md" ${{ steps.ctx.outputs.started == 'true' && '--started' || '' }}
+      - name: A failed run says so on the plan comment (never left saying "planning")
+        if: failure()
+        run: node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY" --failed
       - name: The story card shows the plan (if the story has started)
         if: always() && steps.ctx.outputs.started == 'true'
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY"

@@ -16,7 +16,7 @@ const isCommand = (c) => /^\s*\//.test(c.body || "");
  */
 export function planContext(comments) {
   const sorted = [...comments].sort((a, b) => String(a.created).localeCompare(String(b.created)));
-  const at = sorted.map((c) => (c.body || "").includes(PLAN_MARK) || (c.body || "").includes(`### ${PLAN_TITLE}`)).lastIndexOf(true);
+  const at = sorted.map((c) => ((c.body || "").includes(PLAN_MARK) || (c.body || "").includes(`### ${PLAN_TITLE}`)) && !(c.body || "").includes(PENDING)).lastIndexOf(true);
   if (at < 0) return { plan: null, answers: [] };
   const plan = sorted[at].body.replace(PLAN_MARK, "").trim();
   const answers = sorted.slice(at + 1).filter((c) => !isPipeline(c) && !isCommand(c) && (c.body || "").trim()).map((c) => ({ author: c.author, body: c.body.trim() }));
@@ -56,6 +56,17 @@ export function planComment(text, { readiness = null, started = false } = {}) {
   const ready = readiness ? readinessLines(readiness) : [];
   return [PLAN_MARK, `### ${PLAN_TITLE} (size ${size})`, "", body, "", ...(ready.length ? [...ready, ""] : []), next, "",
     "_The agreed plan and your answers become part of the spec: the build, the review and the UI test follow them._"].join("\n");
+}
+
+const PENDING = "<!-- pipeline:plan-pending -->";
+
+/** The Build plan comment while Claude is still writing it, or after it failed (replaced when a plan lands).
+ *  It is never read as a plan (planContext skips it). */
+export function planPending(activity) {
+  const failed = activity.state === "failed";
+  const link = activity.url ? ` · **[${failed ? "see what went wrong" : "watch it live"}](${activity.url})**` : "";
+  return [PLAN_MARK, PENDING, `### ${PLAN_TITLE}`, "", `${failed ? "❌ **Failed:**" : "⏳ **Now:**"} ${activity.what}${link}`, "",
+    failed ? "Comment **/plan** to try again, or **/start** to go ahead without a plan." : "The plan, its questions and the next step will appear here."].join("\n");
 }
 
 /** Readiness as lines (empty when there is nothing to say). */

@@ -36,7 +36,7 @@ import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { orgRegistry } from "../src/org.mjs";
-import { tracker as makeTracker } from "../src/tracker.mjs";
+import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "tag", "sha", "min", "level", "deletions-from", "now", "retry", "file"]);
 const [cmd, ...argv] = process.argv.slice(2);
@@ -91,6 +91,8 @@ async function refreshCard(key, { base = null, tag = null, activity = null } = {
       shipped: tag ? { tag, url: `${repoUrl}/releases/tag/${tag}` } : null, activity,
     });
     await makeTracker(io).card(key, body, CARD_MARK, CARD_TITLE);
+    // the same card on the story's pull request, so whichever page you are on shows what is running now
+    if (pr) await githubTracker({ gh: io.gh, ghPages: io.ghPages }).card(pr.number, body, CARD_MARK, CARD_TITLE);
     await syncBoard(key, { repo, pr, facts, shipped: Boolean(tag) });
   } catch (e) { log(`::warning::story card for ${key} not updated: ${e.message}`); }
 }
@@ -316,6 +318,12 @@ async function main() {
     case "verdict model": return say(verdict.modelFor(arg(0)));
     case "tests run": return testsRun(arg(0));
     case "prod validate": return prodValidate();
+    case "story plan-pending": {
+      // the Build plan comment appears at once, saying Claude is planning (or that it failed), with a link
+      const what = has("failed") ? { state: "failed", what: "Claude could not produce a plan", url: runUrl() } : { state: "running", what: "Claude is planning the build (2 to 5 minutes)", url: runUrl() };
+      await makeTracker(io).card(arg(0), plans.planPending(what), plans.PLAN_MARK, plans.PLAN_TITLE);
+      return say(`plan pending on ${arg(0)}`);
+    }
     case "story plan-post": {
       const t = makeTracker(io);
       const s = await t.story(arg(0));

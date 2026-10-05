@@ -728,3 +728,13 @@ test("readiness: vague criteria and large stories are flagged; Jev down or all f
   assert.equal(await storyReadiness(typesafeJev(""), { criteria: ["x"] }), null);
   assert.equal(plans.readinessComment({ weak: [], size: "small" }), null);
 });
+
+test("the Build plan comment appears at once while Claude plans, with a link to watch", () => {
+  const body = plans.planPending({ state: "running", what: "Claude is planning the build", url: "https://x/runs/1" });
+  assert.ok(body.startsWith(plans.PLAN_MARK));
+  assert.match(body, /⏳ \*\*Now:\*\* Claude is planning the build · \*\*\[watch it live\]\(https:\/\/x\/runs\/1\)\*\*/);
+  assert.equal(plans.planContext([{ author: "app/x", body, created: "1" }]).plan, null);   // a placeholder is never the plan
+  const real = `${plans.PLAN_MARK}\n### Build plan (size S)\nthe plan`;
+  assert.match(plans.planContext([{ author: "app/x", body: real, created: "1" }, { author: "app/x", body, created: "2" }]).plan, /the plan/);   // a re-plan in progress keeps the last agreed one
+  assert.match(plans.planPending({ state: "failed", what: "Claude could not produce a plan", url: "u" }), /❌ \*\*Failed:\*\*[\s\S]*\/plan\*\* to try again/);
+});

@@ -113,6 +113,13 @@ jobs:
           app-id: ${{ secrets.PIPELINE_APP_ID }}
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           ref: ${{ steps.pr.outputs.head }}
+      - name: The story card says Claude is reviewing (issue and PR)
+        if: steps.id.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "${{ steps.pr.outputs.branch }}" | sed -n 's/^STORY=//p')
+          [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is reviewing the change (2 to 5 minutes)"
       - name: The story and the diff, as files (fewer agent turns)
         id: story
         if: steps.id.outcome == 'success'
