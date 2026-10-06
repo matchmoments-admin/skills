@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Dev Hub settings for __PROD_ALIAS__ (production and Dev Hub). Deployed once by hand, like the CI connected app:
+     sf project deploy start -o __PROD_ALIAS__ -d devhub-setup/main/default/settings
+     enableShapeExportPref lets scratch orgs copy production's shape (edition, features, settings). -->
+<DevHubSettings xmlns="http://soap.sforce.com/2006/04/metadata">
+    <enableShapeExportPref>true</enableShapeExportPref>
+</DevHubSettings>

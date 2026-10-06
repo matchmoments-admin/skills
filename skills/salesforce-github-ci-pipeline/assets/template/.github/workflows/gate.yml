@@ -1,0 +1,185 @@
+name: gate
+# BUTTON: approve the PR (or label it `ready` if you wrote it yourself; GitHub will not let you approve your own).
+# One gate for every route (pipeline/src/gate.mjs): feature -> release branch (squash), hotfix -> main (squash, then
+# release), release -> main (merge commit, then release), back-merge -> release branch (merge commit).
+# If inputs are still missing, it says which, and runs again when the last one lands (gate nudge).
+# Runs only main's code: the PR is checked out to a side directory purely as data to validate.
+on:
+  pull_request:
+    types: [labeled]
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+permissions:
+  contents: write
+  checks: write         # reads the checks; posts the live "Production validation" check
+  issues: write         # the story card
+  pull-requests: write
+  actions: write
+  statuses: write       # pipeline/gate: the status the branch rules require before GitHub allows a merge
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  decide:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready' || github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gate-${{ github.event.pull_request.number || inputs.pr }}   # one decision per PR at a time
+      cancel-in-progress: false
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number || inputs.pr }}
+    outputs:
+      route: ${{ steps.gate.outputs.route }}
+      mergeable: ${{ steps.gate.outputs.mergeable }}
+      story: ${{ steps.gate.outputs.story }}
+      head: ${{ steps.gate.outputs.head }}
+      merge: ${{ steps.gate.outputs.merge }}
+      validate: ${{ steps.gate.outputs.validate }}
+      after: ${{ steps.gate.outputs.after }}
+      lock: ${{ steps.gate.outputs.lock }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: Decide (and the card)
+        id: gate
+        env:
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}   # the board, when BOARD_PROJECT is set
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::not a PR number: $PR"; exit 1; }
+          node pipeline/bin/pipe.mjs gate evaluate "$PR" --card   # also the story or release card, from the same facts
+      - name: The gate's verdict on this commit (pipeline/gate, required by the branch rules)
+        if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != ''
+        env:
+          STATE: ${{ steps.gate.outputs.gate_state }}
+          DESC: ${{ steps.gate.outputs.gate_description }}
+          VALIDATE: ${{ steps.gate.outputs.validate }}
+        run: |
+          # a route that validates against production keeps the merge button locked until production accepts it
+          if [ "$STATE" = success ] && [ "$VALIDATE" = true ]; then STATE=pending; DESC="Ready: validating against production before merging"; fi
+          node pipeline/bin/pipe.mjs status set pipeline/gate "$STATE" "${{ steps.gate.outputs.head }}" "$DESC"
+      - name: Explain what is missing (PRs without a card only, e.g. pipeline maintenance; once per distinct reason list)
+        if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != '' && steps.gate.outputs.mergeable != 'true' && steps.gate.outputs.story == '' && steps.gate.outputs.route != 'release'
+        env:
+          REASONS: ${{ steps.gate.outputs.reasons }}
+        run: |
+          URL="${{ github.server_url }}/${{ github.repository }}/pull/$PR/files"
+          BODY=$(printf 'Not merged yet. Waiting on:\n%s\n\nIt merges by itself when these pass.' "$REASONS")
+          case "$REASONS" in *"not approved"*|*"no sign-off"*|*"approve again"*) BODY=$(printf '%s\n\n**Approve here:** %s (Review changes > Approve > Submit review)' "$BODY" "$URL");; esac
+          LAST=$(gh pr view "$PR" --json comments --jq '[.comments[] | select(.body | startswith("Not merged yet"))] | last | .body // ""')
+          if [ "$LAST" = "$BODY" ]; then echo "already said so"; else gh pr comment "$PR" --body "$BODY"; fi
+  ship:
+    needs: decide
+    if: needs.decide.outputs.mergeable == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ship-${{ needs.decide.outputs.lock }}   # everything that lands on main ships one at a time
+      cancel-in-progress: false
+    timeout-minutes: 100   # production validation can take 60 minutes in a large org
+    env:
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number || inputs.pr }}
+      HEAD_SHA: ${{ needs.decide.outputs.head }}
+      ROUTE: ${{ needs.decide.outputs.route }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - id: id
+        uses: ./.github/actions/pipeline-identity   # merges as the App, so the push to main starts CI (main stays green)
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: main
+      - name: A clone for the candidate, as data
+        if: needs.decide.outputs.validate == 'true'
+        uses: actions/checkout@v4
+        with: { ref: main, path: candidate, fetch-depth: 0 }   # history and tags: deletions since the last release
+      - name: The candidate is the base's tip now with this head merged (not GitHub's merge preview, which can be stale)
+        id: cand
+        if: needs.decide.outputs.validate == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+          node pipeline/bin/pipe.mjs ship candidate --pr "$PR" --base "$BASE" --sha "$HEAD_SHA" --dir candidate
+          git -C candidate config --unset-all http.https://github.com/.extraheader || true   # data from here on
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The card says what the gate is doing now
+        if: needs.decide.outputs.story != '' || needs.decide.outputs.route == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node pipeline/bin/pipe.mjs pr card "$PR" --now "the gate is ${{ needs.decide.outputs.validate == 'true' && 'validating against production (check-only, the relevant tests), then merging' || 'merging' }}"
+      - name: Validate against production (check-only, all tests)
+        id: prod
+        if: needs.decide.outputs.validate == 'true'
+        working-directory: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATE_SHA: ${{ needs.decide.outputs.head }}   # the live "Production validation" check lands on the PR
+          DELETIONS_FROM: ${{ steps.cand.outputs.since }}  # components removed since the previous release
+        run: |
+          if JOB=$("$GITHUB_WORKSPACE/scripts/ci/validate-prod.sh" 2> "$RUNNER_TEMP/prod-errors.txt"); then echo "job=$JOB" >> "$GITHUB_OUTPUT"; echo "validated as $JOB"; exit 0; fi
+          cat "$RUNNER_TEMP/prod-errors.txt"
+          node pipeline/bin/pipe.mjs status set pipeline/gate failure "$HEAD_SHA" "Production rejected it: see the Production validation check"
+          node pipeline/bin/pipe.mjs pr card "$PR" --now "production validation" --failed --retry "production rejected it: the Production validation check lists each error"
+          exit 1
+      - name: Production accepted it, the merge button may unlock
+        if: needs.decide.outputs.validate == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node pipeline/bin/pipe.mjs status set pipeline/gate success "$HEAD_SHA" "Validated against production: merging"
+      - name: Merge (only the head the gate decided on)
+        id: merge
+        env:
+          METHOD: ${{ needs.decide.outputs.merge }}
+        run: |
+          BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          if [ "$ROUTE" = "release" ]; then gh pr merge "$PR" --merge --match-head-commit "$HEAD_SHA"
+          else gh pr merge "$PR" "--$METHOD" --delete-branch --match-head-commit "$HEAD_SHA"; fi
+          # the commit that ships: the release checks it has the tree validated above, or validates again
+          for _ in 1 2 3 4 5; do SHA=$(gh pr view "$PR" --json mergeCommit --jq '.mergeCommit.oid // empty'); [ -n "$SHA" ] && break; sleep 3; done
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      - name: Follow-ups (start the next workflows first; org cleanup cannot fail the merge)
+        env:
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          AFTER: ${{ needs.decide.outputs.after }}
+          STORY: ${{ needs.decide.outputs.story }}
+          BASE: ${{ steps.merge.outputs.base }}
+          JOB: ${{ steps.prod.outputs.job }}
+          TREE: ${{ steps.cand.outputs.tree }}
+          SHA: ${{ steps.merge.outputs.sha }}
+        run: |
+          for step in $AFTER; do
+            case "$step" in
+              staging) gh workflow run staging-deploy.yml --ref "$BASE" ;;      # on the release branch, so the check lands on the release PR's head
+              release) gh workflow run release.yml --ref main -f sha="$SHA" -f validated_job="$JOB" -f validated_tree="$TREE" ;;   # quick-deploys only that exact tree
+            esac
+          done
+          node pipeline/bin/pipe.mjs pr card "$PR"
+          for step in $AFTER; do
+            case "$step" in
+              delete-story-org) [ -z "$STORY" ] || node pipeline/bin/pipe.mjs org remove "story:$STORY" || echo "::warning::could not delete the story org; the janitor will";;
+              staging) [[ ! "$STORY" =~ ^[0-9]+$ ]] || gh issue edit "$STORY" --add-label in-sprint >/dev/null 2>&1 || true ;;   # the list shows it: merged, ships with the release
+            esac
+          done
+      - name: Nothing waiting behind this one is lost (GitHub cancels all but the newest queued run in a group)
+        if: always() && steps.merge.outcome != 'skipped' && needs.decide.outputs.lock == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.merge.outputs.base }}
+        run: node pipeline/bin/pipe.mjs ship renudge --base "${BASE:-main}" --except "$PR"

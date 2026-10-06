@@ -1,0 +1,65 @@
+name: card-actions
+# BUTTONS: the tick boxes on a story or release card. Ticking one edits the card comment; this works out which box was
+# ticked (the card before and after the edit), checks the person has write access, and does the same as the matching
+# comment command (pipe act; pipeline/src/actions.mjs). The pipeline's own card edits are not actions (bots are skipped).
+# Also puts a card on a new story at once, with its first boxes (plan, start).
+on:
+  issue_comment:
+    types: [edited]
+  issues:
+    types: [opened]
+permissions:
+  actions: write         # dispatches the gate, CI, staging, UAT
+  contents: read
+  statuses: write        # sign-off and UAT verdicts
+  issues: write
+  pull-requests: write
+  checks: read          # the card reads the PR's checks (the gate's facts)
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  tick:
+    if: >-
+      github.event_name == 'issue_comment' && github.event.sender.type != 'Bot' &&
+      contains(github.event.comment.body, '<!-- pipeline:') && contains(github.event.comment.body, '<!-- act:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: card-${{ github.event.issue.number }}   # two ticks in a row act one after the other
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      N: ${{ github.event.issue.number }}
+      WHO: ${{ github.event.sender.login }}
+      WHO_TYPE: ${{ github.event.sender.type }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - name: The card before and after the tick
+        env:
+          BEFORE: ${{ github.event.changes.body.from }}
+          AFTER: ${{ github.event.comment.body }}
+        run: |
+          printf '%s' "$BEFORE" > "$RUNNER_TEMP/before.md"
+          printf '%s' "$AFTER" > "$RUNNER_TEMP/after.md"
+      - id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: Do what was ticked
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--is-pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --before "$RUNNER_TEMP/before.md" --after "$RUNNER_TEMP/after.md" --comment "${{ github.event.comment.id }}"
+  new-story:
+    if: github.event_name == 'issues' && (contains(github.event.issue.labels.*.name, 'feature') || contains(github.event.issue.labels.*.name, 'spec'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - run: node pipeline/bin/pipe.mjs story new "${{ github.event.issue.number }}" ${{ contains(github.event.issue.labels.*.name, 'spec') && '--spec' || '' }}

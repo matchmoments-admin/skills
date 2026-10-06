@@ -1,0 +1,24 @@
+name: labels
+# The pipeline's labels on GitHub follow pipeline/src/conventions.mjs LABELS: synced whenever that file changes on main
+# (a new label used to exist only after someone ran `pipe labels sync` by hand). Run by hand any time.
+on:
+  push:
+    branches: [main]
+    paths: ["pipeline/src/conventions.mjs"]
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write         # create or update labels
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - run: node pipeline/bin/pipe.mjs labels sync

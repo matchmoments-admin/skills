@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Optional agent/repo hook (.buildkite/hooks/pre-exit): belt and braces for the EXIT trap in scratch-ci.sh.
+# If a step was killed before its trap ran, delete this build's scratch org by its description.
+set -uo pipefail
+[ "${BUILDKITE_STEP_KEY:-}" = "scratch-org-tests" ] || exit 0
+command -v sf >/dev/null || exit 0
+desc="ci:${BUILDKITE_PIPELINE_SLUG}:${BUILDKITE_BUILD_NUMBER}:"
+sf data query -o ci-devhub -q "SELECT SignupUsername, Description FROM ScratchOrgInfo WHERE Status = 'Active'" --json 2>/dev/null \
+  | jq -r --arg d "$desc" '.result.records[]? | select((.Description // "") | startswith($d)) | .SignupUsername' \
+  | while read -r u; do sf data delete record -o ci-devhub -s ActiveScratchOrg -w "SignupUsername='$u'" >/dev/null 2>&1 && echo "pre-exit: deleted $u"; done
+exit 0

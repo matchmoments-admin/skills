@@ -1,0 +1,68 @@
+name: claude-agent
+description: >-
+  Run Claude for one pipeline role (implement, fix, review, ui-test). Appends the role's output-format rules and the
+  shell rule from pipeline/src/verdict.mjs (the same module that parses the results), and keeps the transcript.
+  The job needs permissions id-token: write. Production access is dropped first.
+inputs:
+  role: { required: true, description: "implement | fix | review | ui-test" }
+  prompt: { required: true, description: "What to do, in plain words" }
+  key: { required: false, default: "N", description: "Story key, used in commit formats" }
+  pr: { required: false, default: "", description: "Pull request number, for the event log (fix rounds, cost per PR)" }
+  max-turns: { required: true, description: "Turn cap" }
+  allowed-tools: { required: true, description: "Comma-separated tool allow-list" }
+  oauth-token: { required: true, description: "secrets.CLAUDE_CODE_OAUTH_TOKEN" }
+  github-token: { required: true, description: "Token Claude acts with on GitHub" }
+  allowed-bots: { required: false, default: "", description: "Bot actors allowed to trigger this run (vars.PIPELINE_BOTS)" }
+  model: { required: false, default: "", description: "Model override (vars.AI_MODEL); empty = the role's cheapest model from pipeline/src/verdict.mjs" }
+runs:
+  using: composite
+  steps:
+    - name: Drop production access before the agent starts
+      # The agent works only in scratch orgs and on GitHub as the pipeline App. It never holds the production
+      # (Dev Hub) login or the CI certificate, and never the Actions token that posts verdicts.
+      shell: bash
+      run: |
+        sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
+        rm -f "${SF_CI_KEY_FILE:-}" "$RUNNER_TEMP/ci.key"
+        echo "SF_CI_KEY_FILE=" >> "$GITHUB_ENV"
+        sf org list --json 2>/dev/null | jq -r '[.result.nonScratchOrgs[]?.alias] | "non-scratch logins left: \(length)"' || true
+    - id: rules
+      shell: bash
+      run: |
+        {
+          echo 'text<<__RULES__'
+          node .pipeline/pipeline/bin/pipe.mjs verdict instructions "${{ inputs.role }}" --key "${{ inputs.key }}"
+          echo '__RULES__'
+          echo "model=$(AI_MODEL="${{ inputs.model }}" node .pipeline/pipeline/bin/pipe.mjs verdict model "${{ inputs.role }}")"
+        } >> "$GITHUB_OUTPUT"
+    - uses: anthropics/claude-code-action@v1
+      env:
+        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"   # agents ran tests in the background and ended before committing (F22, story #54)
+      with:
+        claude_code_oauth_token: ${{ inputs.oauth-token }}
+        github_token: ${{ inputs.github-token }}
+        allowed_bots: ${{ inputs.allowed-bots }}
+        prompt: |
+          ${{ inputs.prompt }}
+          ${{ steps.rules.outputs.text }}
+        claude_args: >-
+          --model ${{ steps.rules.outputs.model }}
+          --max-turns ${{ inputs.max-turns }}
+          --allowedTools "${{ inputs.allowed-tools }}"
+    - name: Record the agent's cost and turns in the event log (needs contents write on the job's token)
+      if: always()
+      shell: bash
+      env:
+        ROLE: ${{ inputs.role }}
+        KEY: ${{ inputs.key }}
+        PR: ${{ inputs.pr }}
+        MODEL: ${{ steps.rules.outputs.model }}
+      run: node .pipeline/pipeline/bin/pipe.mjs event agent --role "$ROLE" --key "$KEY" ${PR:+--pr "$PR"} --model "$MODEL" --file "$RUNNER_TEMP/claude-execution-output.json" || true
+    - name: Keep the AI transcript (audit trail)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: claude-transcript-${{ inputs.role }}-${{ github.run_id }}
+        path: ${{ runner.temp }}/claude-execution-output.json
+        retention-days: 30   # the weekly metrics read cost and turns from these
+        if-no-files-found: ignore

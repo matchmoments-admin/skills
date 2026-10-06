@@ -1,0 +1,174 @@
+name: ai-implement
+# FLAG: repository variable AI_IMPLEMENT=true (off by default: a person builds on the story branch and opens the PR).
+# BUTTON: label a story `ai:implement` (or, with Jira, move it to AI Build: repository_dispatch jira-implement).
+# Claude builds it in the story's scratch org and opens the PR. Pipeline code comes from main (.pipeline/);
+# the agent never holds production access.
+on:
+  issues:
+    types: [labeled]
+  repository_dispatch:
+    types: [jira-implement]
+permissions:
+  actions: write        # the follow-up job starts ci and ai-review when not acting as the App
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  checks: read          # the story card reads checks and verdicts
+  statuses: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  off:
+    if: github.event.label.name == 'ai:implement' && vars.AI_IMPLEMENT != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          gh issue comment "${{ github.event.issue.number }}" --body "AI implement is off (repository variable \`AI_IMPLEMENT\`). Build it on the story branch and open a PR, or turn it on in Settings > Secrets and variables > Actions > Variables."
+          gh issue edit "${{ github.event.issue.number }}" --remove-label ai:implement || true
+  implement:
+    if: vars.AI_IMPLEMENT == 'true' && (github.event_name == 'repository_dispatch' || github.event.label.name == 'ai:implement')
+    runs-on: ubuntu-latest
+    # The agent can run code in this job, and later steps run in the same runner: so this job's token cannot post
+    # verdicts (statuses) or start workflows (actions). Those happen in a separate job after it (the trust model).
+    permissions:
+      contents: write       # the org's lane (refs/locks) and the event log; pushes go as the pipeline App
+      pull-requests: write
+      issues: write
+      id-token: write
+      checks: read
+      statuses: read
+    outputs:
+      is-app: ${{ steps.id.outputs.is-app }}
+      branch: ${{ steps.ctx.outputs.STORY_BRANCH }}
+    timeout-minutes: 85   # 45 of them may be waiting for the org's lane (CI, a fix or a UI test in the same org)
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KEY: ${{ github.event.client_payload.key || github.event.issue.number }}
+      LABELS: ${{ github.event.client_payload.labels || join(github.event.issue.labels.*.name, ',') }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - run: echo ".pipeline/" >> .git/info/exclude
+      - name: Names for this story
+        id: ctx
+        run: |
+          [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
+          node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
+      - name: The story card says Claude is building it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is building the story in its scratch org (5 to 15 minutes)"
+      - name: The story branch exists (start ran) and matches its route
+        env:
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+          BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
+          REL: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
+        run: |
+          git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null || { echo "::error::Start the story first (label start) so its branch and scratch org exist"; exit 1; }
+          git fetch -q origin "$BRANCH" "$BASE" ${REL:+"$REL"}
+          # A base that moved on since /start is fine (the next step merges it in); a hotfix carrying sprint work is not.
+          node .pipeline/pipeline/bin/pipe.mjs gate route-check --branch "$BRANCH" --base "$BASE" ${REL:+--release "$REL"}
+      - id: id
+        uses: ./.pipeline/.github/actions/pipeline-identity
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: ${{ steps.ctx.outputs.STORY_BRANCH }}
+      - name: Bring the story branch up to date with its base (the build sees the sprint as it is now, not as at /start)
+        env:
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+          BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
+        run: |
+          git fetch -q origin "$BASE"
+          if git merge-base --is-ancestor "origin/$BASE" HEAD; then echo "$BRANCH already has $BASE"
+          elif git -c user.name="__owner__-pipeline[bot]" -c user.email="pipeline@users.noreply.github.com" merge -q --no-edit "origin/$BASE"; then
+            git push -q origin "HEAD:$BRANCH"; echo "merged $BASE into $BRANCH"
+          else
+            git merge --abort; echo "::warning::$BRANCH conflicts with $BASE: building on the branch as it is; the PR will show the conflicts"
+          fi
+      - uses: ./.pipeline/.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "story:$KEY"
+      - name: Attach the story's org; the story with its context pack (what exists, production's sharing model)
+        env:
+          BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs org ensure "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}   # attaches, or rebuilds an expired org
+          node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --base "origin/$BASE" --out "$RUNNER_TEMP/story.md"
+      - run: npm install --no-audit --no-fund --ignore-scripts   # the production key is still on disk here: no install scripts
+      - uses: ./.pipeline/.github/actions/claude-agent
+        with:
+          role: implement
+          key: ${{ env.KEY }}
+          model: ${{ vars.AI_MODEL }}
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ steps.id.outputs.token }}
+          allowed-bots: ${{ vars.PIPELINE_BOTS }}   # /build and Jira dispatches arrive as the pipeline App; empty = none
+          max-turns: "60"   # a story with trigger, handler, field, permission set, layout and four test categories took 42
+          allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(sf:*),Bash(git:*),Bash(npm run:*),Bash(npm install:*),Bash(npx prettier:*),Bash(npx sfdx-lwc-jest:*),Bash(ls:*),Bash(jq:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr edit:*)"
+          prompt: |
+            You are the implementer for story ${{ env.KEY }}. The story, with its acceptance criteria, is in ${{ runner.temp }}/story.md (read it with the Read tool), and the rules are in CLAUDE.md. The acceptance criteria are the scope.
+            The story file ends with "The codebase today": what already exists for the objects it touches and production's org-wide defaults. Reuse and extend what exists (CLAUDE.md: one trigger per object), and follow CLAUDE.md's Access rules: least privilege through a permission set, and a permission test that would fail without it.
+            You are on branch ${{ steps.ctx.outputs.STORY_BRANCH }}. The scratch org alias is ${{ steps.ctx.outputs.ORG_ALIAS }} and is already authenticated.
+            Build the change in force-app, with Apex tests covering positive, negative, permission and bulk cases, a permission set entry for any new field or object, and any layout or record page users need to see it (CLAUDE.md).
+            Deploy with `sf project deploy start -o ${{ steps.ctx.outputs.ORG_ALIAS }} -d force-app --ignore-conflicts`, run `sf apex run test -o ${{ steps.ctx.outputs.ORG_ALIAS }} --test-level RunLocalTests --code-coverage --result-format human --wait 20`, and fix failures until they pass. Run `npm run format` before committing.
+            Then open a pull request into ${{ steps.ctx.outputs.BASE_BRANCH }} with `gh pr create --base ${{ steps.ctx.outputs.BASE_BRANCH }} --title "<your commit subject>" --body-file <the body file>` (the PR body format is below). Stop after opening the PR.
+      - name: Let the next job into the org's lane
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane release "story:$KEY" || true
+      - name: Remove the button label (the card shows what happened)
+        if: always() && github.event_name == 'issues'
+        run: gh issue edit "$KEY" --remove-label ai:implement >/dev/null 2>&1 || true
+      - name: Make sure the work is pushed and a PR exists
+        if: always() && steps.ctx.outcome == 'success'   # plumbing holds even when the agent step reports an error
+        env:
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+          BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
+          MILESTONE: ${{ steps.ctx.outputs.HOTFIX == 'true' && '' || steps.ctx.outputs.MILESTONE }}
+        run: |
+          git fetch -q origin "$BRANCH" "$BASE"
+          [ "$(git rev-list --count "origin/$BASE..origin/$BRANCH")" -gt 0 ] || { node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "The AI run finished without pushing to \`$BRANCH\`. See the run's transcript artifact."; exit 1; }
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')" ]; then
+            if [[ "$KEY" =~ ^[0-9]+$ ]]; then CLOSES="Story #$KEY"; else CLOSES="Story $KEY"; fi   # not "Closes": close-out closes it when it is in production
+            printf '%s\n\nBuilt by ai-implement in scratch org `%s`.\n' "$CLOSES" "$BRANCH" > pr-body.md
+            gh pr create --base "$BASE" --head "$BRANCH" --title "$(git log -1 --format=%s "origin/$BRANCH")" --body-file pr-body.md ${MILESTONE:+--milestone "$MILESTONE"}
+          fi
+      - name: The story card says the build failed, and where to look
+        if: failure() && steps.ctx.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude's build" --failed --retry "comment /build to retry, or build it on the branch yourself"
+  follow-up:
+    # Fresh runner, no agent: starts CI and the review when the build did not act as the App (its pushes start nothing).
+    needs: implement
+    if: always() && needs.implement.result == 'success' && needs.implement.outputs.is-app != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ needs.implement.outputs.branch }}
+    steps:
+      - run: |
+          gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
+          gh workflow run ai-review.yml --ref main -f pr="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"

@@ -1,0 +1,68 @@
+name: rollback
+# BUTTON: Actions > rollback > Run workflow, with a release tag. Puts production back to that release: validates the
+# tag's source (all tests, deleting what was added since) and quick-deploys it. Production then differs from main,
+# so the run opens an issue: revert the bad change on main (or hotfix forward) before the next release.
+# Data written by the bad release is not touched; metadata only.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to return to, for example v2026.10.04-8
+        required: true
+permissions:
+  pull-requests: read   # which stories the rolled-back commits belong to
+  contents: write       # the event log: a rollback counts as a change failure
+  issues: write
+concurrency:
+  group: release           # never at the same time as a release
+  cancel-in-progress: false
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment: production    # runs only from main (environment rule)
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: A release tag
+        run: '[[ "$TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$ ]] || { echo "::error::not a release tag: $TAG"; exit 1; }'
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }   # the commits (and their stories) since the tag
+      - uses: actions/checkout@v4
+        with: { ref: "refs/tags/${{ inputs.tag }}", path: target, fetch-depth: 0, persist-credentials: false }
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Validate the tag against production (check-only, all tests, deletions since)
+        id: validate
+        working-directory: target
+        run: |
+          git fetch -q origin main
+          JOB=$(DELETIONS_FROM=origin/main "$GITHUB_WORKSPACE/scripts/ci/validate-prod.sh")
+          echo "job=$JOB" >> "$GITHUB_OUTPUT"
+      - name: Quick deploy it
+        env:
+          JOB: ${{ steps.validate.outputs.job }}
+        run: sf project deploy quick -o devhub --job-id "$JOB" --wait 30
+      - name: Record the rollback (the change failure rate counts it)
+        run: node pipeline/bin/pipe.mjs event rollback --tag "$TAG" --sha "$(git -C target rev-parse HEAD)" || true
+      - name: Smoke check
+        run: sf data query -o devhub -q "SELECT COUNT() FROM Account" >/dev/null && echo "production responds"
+      - name: The stories this took out of production say so (reopened with the reason)
+        run: |
+          for N in $(git log --format=%s "${{ inputs.tag }}..origin/main" 2>/dev/null | grep -oE '\(#[0-9]+\)' | tr -d '(#)' | sort -u); do
+            KEY=$(gh pr view "$N" --json headRefName --jq '.headRefName | capture("^issue-(?<k>[0-9]+)$").k // empty' 2>/dev/null || true)
+            [ -n "$KEY" ] || continue
+            gh issue reopen "$KEY" --comment "Production was rolled back to ${{ inputs.tag }}: this story is no longer live. It ships again once the bad change is reverted or fixed on main and a release goes out." >/dev/null 2>&1 || true
+          done
+      - name: Say what still needs doing (the gate refuses releases into main until this issue is closed)
+        run: |
+          gh issue create --title "Production rolled back to $TAG" --body "$(printf 'Run: %s\n\nProduction now runs %s, but main still contains the changes after it. Before the next release: revert them on main (a maintenance PR) or fix forward with a hotfix, otherwise the next release ships them again.\n\nChanges since %s: %s' \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" "$TAG" "$TAG" \
+            "${{ github.server_url }}/${{ github.repository }}/compare/$TAG...main")"

@@ -1,0 +1,99 @@
+name: ai-plan
+# FLAG: repository variable AI_PLAN=true. BUTTON: comment /plan on a story (or label it ai:plan), ideally before /start.
+# Claude proposes the build (components, tests, risks, size) and asks its open questions; people answer in comments;
+# /plan again revises it with the answers. The agreed plan and the answers then join the story as part of the spec:
+# the build, the review and the UI test all read them (pipe tracker story). Small stories can skip this and /start.
+# No scratch org, no Salesforce login, no push: Claude reads the story and the code it will build on, and writes one
+# file; an agent-free step posts it as the "Build plan" comment (edited in place). With AI_TRIAGE, Jev's readiness check
+# is added to it.
+on:
+  issues:
+    types: [labeled]
+permissions:
+  contents: write       # the event log only (the metrics branch); the agent has no shell or git tools
+  issues: write
+  id-token: write
+  checks: read          # the story card reads checks and verdicts (after /start)
+  statuses: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  off:
+    if: github.event.label.name == 'ai:plan' && vars.AI_PLAN != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          gh issue comment "${{ github.event.issue.number }}" --body "AI planning is off (repository variable \`AI_PLAN\`). Write the plan in a comment yourself, or turn it on in Settings > Secrets and variables > Actions > Variables."
+          gh issue edit "${{ github.event.issue.number }}" --remove-label ai:plan || true
+  plan:
+    if: github.event.label.name == 'ai:plan' && vars.AI_PLAN == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: plan-${{ github.event.issue.number }}
+      cancel-in-progress: true   # a newer /plan replaces an older one
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KEY: ${{ github.event.issue.number }}
+      LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - run: echo ".pipeline/" >> .git/info/exclude
+      - uses: ./.pipeline/.github/actions/sf-auth   # read-only use: production's org-wide defaults for the context pack
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The code the story will be built on, and the story (with any earlier plan, the answers and the context pack)
+        id: ctx
+        run: |
+          [[ "$KEY" =~ ^[0-9]+$ ]] || { echo "::error::not a story"; exit 1; }
+          node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS" > "$RUNNER_TEMP/ctx"
+          BASE=$(sed -n 's/^BASE_BRANCH=//p' "$RUNNER_TEMP/ctx")
+          if [ -n "$BASE" ] && git fetch -q origin "$BASE"; then git checkout -q "origin/$BASE"; fi
+          echo "base=${BASE:-main}" >> "$GITHUB_OUTPUT"
+          node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --out "$RUNNER_TEMP/story.md"
+          if gh issue view "$KEY" --json labels --jq '[.labels[].name] | index("start")' | grep -q '[0-9]'; then echo "started=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Show that Claude is planning, with a link (the plan comment at once; the card too once started)
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY"
+          [ "${{ steps.ctx.outputs.started }}" != "true" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is planning the build (2 to 5 minutes)"
+      - uses: ./.pipeline/.github/actions/claude-agent
+        with:
+          role: plan
+          key: ${{ env.KEY }}
+          model: ${{ vars.AI_MODEL }}
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ github.token }}
+          allowed-bots: ${{ vars.PIPELINE_BOTS }}   # /plan arrives as the pipeline App; empty = none
+          max-turns: "25"
+          allowed-tools: "Read,Glob,Grep,Write"
+          prompt: |
+            You are planning story ${{ env.KEY }} before it is built. The story is in ${{ runner.temp }}/story.md (read it with the Read tool). If it contains an "Agreed plan" and "Answers", revise that plan with the answers: answered questions are no longer open.
+            The code it will be built on (branch ${{ steps.ctx.outputs.base }}) is checked out here. The story file ends with "The codebase today" (what exists for the objects it touches, and production's org-wide defaults); look further in force-app/ with Glob, Grep and Read. Follow CLAUDE.md (build and Access rules) and REVIEW.md (what the review will check).
+            Propose the smallest build that meets every acceptance criterion, and ask only the questions you cannot answer from the story and the code.
+            Write the plan to ${{ runner.temp }}/plan.md with the Write tool. Do not write any other file.
+      - name: Post the build plan on the story (agent-free)
+        env:
+          TYPESAFE_API_KEY: ${{ vars.AI_TRIAGE == 'true' && secrets.TYPESAFE_API_KEY || '' }}
+        run: |
+          [ -s "$RUNNER_TEMP/plan.md" ] || { node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY" --failed; exit 1; }
+          node .pipeline/pipeline/bin/pipe.mjs story plan-post "$KEY" --file "$RUNNER_TEMP/plan.md" ${{ steps.ctx.outputs.started == 'true' && '--started' || '' }}
+      - name: A failed run says so on the plan comment (never left saying "planning")
+        if: failure()
+        run: node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY" --failed
+      - name: The story card shows the plan (if the story has started)
+        if: always() && steps.ctx.outputs.started == 'true'
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY"
+      - name: Remove the button label
+        if: always()
+        run: gh issue edit "$KEY" --remove-label ai:plan || true

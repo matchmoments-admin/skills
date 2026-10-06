@@ -1,0 +1,104 @@
+name: uat-deploy
+# FLAG: repository variable UAT_ENABLED=true (off by default: staging is the last stop before production).
+# Puts the release PR's head into UAT for business sign-off: a UAT sandbox when secret SF_UAT_USERNAME is set (logged
+# in with the same CI app; variable SF_UAT_LOGIN_URL, default https://test.salesforce.com), otherwise a 30-day
+# scratch org standing in. Marks pipeline/uat pending on that commit; a person signs off with /uat-pass (or
+# /uat-fail <why>) on the release PR, and the gate ships only on a sign-off for the current code.
+# Started by release-cut, and again by each staging regression while the release PR is open (UAT stays current).
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Release pull request number
+        required: true
+      again:
+        description: "true = deploy again even if UAT already has this commit (the card's 'Deploy to UAT again')"
+        required: false
+        default: "false"
+permissions:
+  contents: write       # the event log (the metrics branch); the candidate is data here
+  pull-requests: write
+  issues: write
+  statuses: write
+  checks: read          # the card reads the PR's checks (the gate's facts)
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  deploy:
+    if: vars.UAT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: org-uat   # one UAT deploy at a time
+      cancel-in-progress: false
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ inputs.pr }}
+    steps:
+      - name: The release PR (validated)
+        id: pr
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::not a PR number"; exit 1; }
+          J=$(gh pr view "$PR" --json headRefName,headRefOid,baseRefName,state)
+          HEAD_REF=$(jq -r .headRefName <<<"$J")
+          [[ "$HEAD_REF" == release/* && "$(jq -r .baseRefName <<<"$J")" == main && "$(jq -r .state <<<"$J")" == OPEN ]] || { echo "::error::#$PR is not an open release PR"; exit 1; }
+          { echo "ref=$HEAD_REF"; echo "sha=$(jq -r .headRefOid <<<"$J")"; echo "sprint=${HEAD_REF#release/}"; } >> "$GITHUB_OUTPUT"
+      - name: Already in UAT? (a redeploy would reset a sign-off on the same commit to pending)
+        id: seen
+        env:
+          SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          N=$(gh api "repos/$GH_REPO/commits/$SHA/statuses?per_page=100" --jq '[.[] | select(.context=="pipeline/uat" and .creator.login=="github-actions[bot]")] | length')
+          if [ "$N" != "0" ] && [ "${{ inputs.again }}" != "true" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "UAT already has ${SHA:0:7}: nothing to do"; fi
+      - uses: actions/checkout@v4
+        if: steps.seen.outputs.skip != 'true'
+        with: { ref: main }
+      - uses: actions/checkout@v4
+        if: steps.seen.outputs.skip != 'true'
+        with: { ref: "${{ steps.pr.outputs.sha }}", path: candidate, persist-credentials: false }
+      - uses: ./.github/actions/sf-auth
+        if: steps.seen.outputs.skip != 'true'
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The UAT org (the sandbox if configured, else a scratch org standing in)
+        if: steps.seen.outputs.skip != 'true'
+        id: org
+        env:
+          UAT_USER: ${{ secrets.SF_UAT_USERNAME }}
+          UAT_LOGIN: ${{ vars.SF_UAT_LOGIN_URL }}
+          CLIENT_ID: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          SPRINT: ${{ steps.pr.outputs.sprint }}
+        run: |
+          if [ -n "$UAT_USER" ]; then
+            sf org login jwt --client-id "$CLIENT_ID" --jwt-key-file "$SF_CI_KEY_FILE" --username "$UAT_USER" \
+              --instance-url "${UAT_LOGIN:-https://test.salesforce.com}" --alias uat >/dev/null
+            echo "kind=sandbox" >> "$GITHUB_OUTPUT"
+            echo "url=$(sf org display -o uat --json | jq -r .result.instanceUrl)" >> "$GITHUB_OUTPUT"
+          else
+            node pipeline/bin/pipe.mjs org ensure "uat:$SPRINT"
+            echo "kind=scratch org standing in for a UAT sandbox" >> "$GITHUB_OUTPUT"
+            echo "url=$(sf org display -o uat --json | jq -r .result.instanceUrl)" >> "$GITHUB_OUTPUT"   # its login page (no session)
+          fi
+      - name: Deploy the release candidate to UAT
+        if: steps.seen.outputs.skip != 'true'
+        working-directory: candidate
+        run: |
+          sf project deploy start -o uat -d force-app --ignore-conflicts --wait 40
+          [ "${{ steps.org.outputs.kind }}" = sandbox ] || node "$GITHUB_WORKSPACE/pipeline/bin/pipe.mjs" org prepare uat
+      - name: Ask for the sign-off
+        if: steps.seen.outputs.skip != 'true'
+        env:
+          SHA: ${{ steps.pr.outputs.sha }}
+          KIND: ${{ steps.org.outputs.kind }}
+          URL: ${{ steps.org.outputs.url }}
+          SPRINT: ${{ steps.pr.outputs.sprint }}
+        run: |
+          case "$KIND" in sandbox) WHAT="sandbox" ;; *) WHAT="scratch org" ;; esac
+          node pipeline/bin/pipe.mjs status set pipeline/uat pending "$SHA" "In UAT ($WHAT): test it, then tick UAT passed on the release card" --url "$URL"
+          if [ "$KIND" = sandbox ]; then WHERE="Open UAT: $URL (log in with your sandbox account)."
+          else WHERE="Open UAT: $URL. No login yet? Tick **Send me a UAT login** on the release card: Salesforce emails you a link to set a password."; fi
+          gh pr comment "$PR" --body "$(printf '**Ready for UAT** (%s), commit `%s`.\n\n%s\n\nWhen it has been tested, tick **UAT passed** on the release card (or comment **/uat-fail** with what is wrong). The release ships only after a UAT pass on this exact commit; a newer commit redeploys and needs a new sign-off.' "$KIND" "${SHA:0:7}" "$WHERE")"
+          node pipeline/bin/pipe.mjs pr card "$PR"

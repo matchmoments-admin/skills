@@ -1,0 +1,9 @@
+.sf/
+.sfdx/
+secrets/
+node_modules/
+test-results/
+playwright-report/
+*.key
+*.crt
+.env

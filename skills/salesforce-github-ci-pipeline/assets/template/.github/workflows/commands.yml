@@ -1,0 +1,44 @@
+name: commands
+# Comment commands, so nobody has to find labels: on a story /plan, /start, /build, /hotfix; on a pull request /review,
+# /fix, /test, /ui-test, /ship, /gate, /ci; on a release PR /uat-pass, /uat-fail <why>, /uat, /staging; /help anywhere.
+# The same actions as the card's tick boxes (card-actions.yml): both go through pipe act (pipeline/src/actions.mjs).
+# Only people with write access; the pipeline reacts with 👀 and the card shows what happens.
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  actions: write         # dispatches the gate, CI, staging, UAT
+  contents: read
+  statuses: write        # sign-off and UAT verdicts
+  issues: write
+  pull-requests: write
+  checks: read          # the card reads the PR's checks (the gate's facts)
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  run:
+    if: startsWith(github.event.comment.body, '/') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      N: ${{ github.event.issue.number }}
+      BODY: ${{ github.event.comment.body }}
+      WHO: ${{ github.event.comment.user.login }}
+      WHO_TYPE: ${{ github.event.comment.user.type }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - name: 👀 (the command was seen)
+        run: gh api -X POST "repos/$GH_REPO/issues/comments/${{ github.event.comment.id }}/reactions" -f content=eyes >/dev/null || true
+      - id: app
+        uses: actions/create-github-app-token@v1   # labels the App applies start their workflows (the Actions token's start nothing)
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: Do it
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          IS_PR: ${{ github.event.issue.pull_request != null }}
+        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--is-pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --command "$BODY"

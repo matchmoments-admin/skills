@@ -1,0 +1,220 @@
+name: ai-review
+# FLAG: repository variable AI_REVIEW=true (off by default: the person who approves is the review).
+# Runs when a story PR opens (or is labelled ai:review), and after ai-fix. The agent comments; a separate agent-free
+# job turns the verdict into the commit status pipeline/ai-review on the exact commit reviewed (the gate trusts only
+# that). Release PRs and back-merges are not reviewed: their code was reviewed story by story.
+# Cheap by design: Haiku (pipeline/src/verdict.mjs MODELS), the diff handed over as a file, 15 turns, no review when
+# nothing reviewable changed, and with AI_TRIAGE=true a Jev risk score skips low-risk declarative changes.
+run-name: "${{ inputs.pr && format('ai-review PR #{0}', inputs.pr) || format('ai-review (PR #{0} event)', github.event.pull_request.number) }}"
+on:
+  pull_request_target:   # runs the base branch's own copy of this file (never the PR's code), so routing is never stale
+    types: [opened, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+permissions:
+  contents: write       # the event log only (the metrics branch); the agent acts as the App
+  actions: write        # re-runs the gate
+  pull-requests: write
+  issues: write
+  statuses: write
+  id-token: write
+  checks: read   # the story card reads checks and verdicts
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  off:
+    if: github.event.label.name == 'ai:review' && vars.AI_REVIEW != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body "AI review is off (repository variable \`AI_REVIEW\`). A person's approval is the review; or turn it on in Settings > Secrets and variables > Actions > Variables."
+          gh pr edit "${{ github.event.pull_request.number }}" --remove-label ai:review || true
+  route:
+    # PR events only dispatch the real review with --ref main (a PR runs the workflow file from GitHub's test merge
+    # commit, which can lag behind main).
+    if: >-
+      github.event_name == 'pull_request_target' && vars.AI_REVIEW == 'true' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ai:review') &&
+      !startsWith(github.event.pull_request.head.ref, 'backmerge-') && !startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: gh workflow run ai-review.yml --ref main -f pr="${{ github.event.pull_request.number }}"
+  review:
+    if: github.event_name == 'workflow_dispatch' && vars.AI_REVIEW == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number || inputs.pr }}   # a newer review of the same PR replaces an older one
+      cancel-in-progress: true
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number || inputs.pr }}
+    outputs:
+      head: ${{ steps.pr.outputs.head }}
+      since: ${{ steps.pr.outputs.since }}
+      skip: ${{ steps.pr.outputs.skip }}
+      not-needed: ${{ steps.triage.outputs.not-needed }}
+    steps:
+      - name: The PR (validated)
+        id: pr
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::not a PR number"; exit 1; }
+          J=$(gh pr view "$PR" --json headRefName,headRefOid,baseRefName)
+          echo "head=$(jq -r .headRefOid <<<"$J")" >> "$GITHUB_OUTPUT"
+          echo "branch=$(jq -r .headRefName <<<"$J")" >> "$GITHUB_OUTPUT"
+          echo "base=$(jq -r .baseRefName <<<"$J")" >> "$GITHUB_OUTPUT"
+          echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          case "$(jq -r .headRefName <<<"$J")" in release/*|backmerge-*) echo "skip=true" >> "$GITHUB_OUTPUT";; esac
+      - uses: actions/checkout@v4
+        if: steps.pr.outputs.skip != 'true'
+        with: { ref: "${{ steps.pr.outputs.head }}", fetch-depth: 0 }
+      - name: Trusted pipeline code (main)
+        if: steps.pr.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - if: steps.pr.outputs.skip != 'true'
+        run: echo ".pipeline/" >> .git/info/exclude
+      - name: Anything worth an AI review? (and, with AI_TRIAGE, is it risky enough?)
+        id: triage
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+          TYPESAFE_API_KEY: ${{ vars.AI_TRIAGE == 'true' && secrets.TYPESAFE_API_KEY || '' }}
+        run: |
+          git fetch -q origin "$BASE"
+          if git diff --quiet "origin/$BASE...$HEAD_SHA" -- force-app e2e; then
+            echo "not-needed=no Salesforce source or specs changed" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ -n "$TYPESAFE_API_KEY" ]; then
+            R=$(node .pipeline/pipeline/bin/pipe.mjs triage review --base "origin/$BASE" --head "$HEAD_SHA"); echo "$R"
+            case "$R" in skip*) echo "not-needed=${R#skip }" >> "$GITHUB_OUTPUT" ;; esac
+          fi
+      - id: id
+        if: steps.pr.outputs.skip != 'true' && steps.triage.outputs.not-needed == ''
+        uses: ./.pipeline/.github/actions/pipeline-identity
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: ${{ steps.pr.outputs.head }}
+      - name: The story card says Claude is reviewing (issue and PR)
+        if: steps.id.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "${{ steps.pr.outputs.branch }}" --now "Claude is reviewing the change (2 to 5 minutes)"
+      - uses: ./.pipeline/.github/actions/sf-auth   # read-only use: production's org-wide defaults for the context pack
+        if: steps.id.outcome == 'success'
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The story (with its context pack), the diff and the access findings, as files (fewer agent turns)
+        id: story
+        if: steps.id.outcome == 'success'
+        run: |
+          KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "${{ steps.pr.outputs.branch }}" | sed -n 's/^STORY=//p')
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          git fetch -q origin "${{ steps.pr.outputs.base }}"
+          if [ -n "$KEY" ]; then node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --base "origin/${{ steps.pr.outputs.base }}" --out "$RUNNER_TEMP/story.md"; else echo "(no story: a pipeline maintenance PR)" > "$RUNNER_TEMP/story.md"; fi
+          gh pr diff "$PR" > "$RUNNER_TEMP/pr.diff"
+          node .pipeline/pipeline/bin/pipe.mjs access check --base "origin/${{ steps.pr.outputs.base }}" --out "$RUNNER_TEMP/access.md" --report-only
+      - uses: ./.pipeline/.github/actions/claude-agent
+        if: steps.id.outcome == 'success'
+        with:
+          role: review
+          key: ${{ steps.story.outputs.key }}
+          pr: ${{ env.PR }}
+          model: ${{ vars.AI_MODEL }}
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github-token: ${{ steps.id.outputs.token }}
+          allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots (Actions bot, the App); empty = none
+          max-turns: "15"
+          allowed-tools: "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments:*)"
+          prompt: |
+            Review pull request #${{ env.PR }} following REVIEW.md and CLAUDE.md. The story and its acceptance criteria are in ${{ runner.temp }}/story.md (it ends with "The codebase today": what already exists and production's org-wide defaults); the full diff is in ${{ runner.temp }}/pr.diff; the access check's findings are in ${{ runner.temp }}/access.md (read all three with the Read tool; open other files only when they are not enough).
+            Leave an inline comment for each finding (the inline comment tool, or if it is not available:
+            gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments -f commit_id="${{ steps.pr.outputs.head }}" -f path=<file> -F line=<line in the new file> -f side=RIGHT -f body="[minor] ..."),
+            then post one summary comment with `gh pr comment ${{ env.PR }}`.
+  verdict:
+    # Agent-free: reads only the pipeline's comment from this run and posts the trusted status.
+    needs: review
+    if: always() && needs.review.result != 'skipped' && needs.review.outputs.skip != 'true' && needs.review.outputs.head != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number || inputs.pr }}
+      HEAD: ${{ needs.review.outputs.head }}
+      NOT_NEEDED: ${{ needs.review.outputs.not-needed }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Verdict to a commit status (and a label people can read)
+        id: verdict
+        run: |
+          gh pr edit "$PR" --remove-label review:pass --remove-label review:changes --remove-label ai:review 2>/dev/null || true
+          if [ -n "$NOT_NEEDED" ]; then
+            node pipeline/bin/pipe.mjs status set pipeline/ai-review success "$HEAD" "not needed: $NOT_NEEDED" --pr "$PR"; echo "verdict=not-needed" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          V=$(node pipeline/bin/pipe.mjs verdict review "$PR" --since "${{ needs.review.outputs.since }}")
+          echo "verdict=$V" >> "$GITHUB_OUTPUT"
+          case "$V" in
+            pass)    node pipeline/bin/pipe.mjs status set pipeline/ai-review success "$HEAD" "AI review passed" --pr "$PR"; gh pr edit "$PR" --add-label review:pass ;;
+            changes) node pipeline/bin/pipe.mjs status set pipeline/ai-review failure "$HEAD" "AI review asks for changes" --pr "$PR"; gh pr edit "$PR" --add-label review:changes ;;
+            *)       node pipeline/bin/pipe.mjs status set pipeline/ai-review error "$HEAD" "the review posted no verdict"; echo "::warning::no verdict" ;;
+          esac
+      - name: Merge now if a person already approved
+        env:
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+        run: node pipeline/bin/pipe.mjs gate nudge "$PR"
+      # Auto-chain (AI_AUTO_CHAIN=true), only into steps whose own flag is on: changes -> ai:fix (ai-fix caps the
+      # rounds), pass with UI-facing changes -> ai:test. Labels are added as the App, because the Actions token's start nothing.
+      - name: What comes next
+        id: next
+        if: vars.AI_AUTO_CHAIN == 'true'
+        env:
+          V: ${{ steps.verdict.outputs.verdict }}
+          FIX_ON: ${{ vars.AI_FIX }}
+          TEST_ON: ${{ vars.AI_UI_TEST }}
+        run: |
+          [ "$(gh pr view "$PR" --json state --jq .state)" = "OPEN" ] || { echo "PR is closed: nothing to chain"; exit 0; }
+          case "$V" in
+            changes)
+              [ "$FIX_ON" = "true" ] || exit 0
+              # never past the round limit, never on a PR a person has to look at (no endless review/fix loop)
+              if gh pr view "$PR" --json labels --jq '[.labels[].name] | index("blocked")' | grep -q '[0-9]'; then echo "blocked: no AI fix"; exit 0; fi
+              node pipeline/bin/pipe.mjs verdict rounds --pr "$PR" > /dev/null
+              grep -q '^over=true' "$GITHUB_OUTPUT" && { echo "round limit reached: no AI fix"; exit 0; }
+              echo "label=ai:fix" >> "$GITHUB_OUTPUT" ;;
+            pass|not-needed)
+              [ "$TEST_ON" = "true" ] || exit 0
+              BASE=$(gh pr view "$PR" --json baseRefName --jq .baseRefName)
+              git fetch -q origin "$BASE" "$HEAD"   # the PR is data: never checked out here
+              node pipeline/bin/pipe.mjs gate ui-needed --base "origin/$BASE" --head "$HEAD" | tee "$RUNNER_TEMP/ui.txt"
+              if grep -q "^UI-facing" "$RUNNER_TEMP/ui.txt"; then echo "label=ai:test" >> "$GITHUB_OUTPUT"; fi ;;
+          esac
+      - id: app
+        if: steps.next.outputs.label != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: Start it
+        if: steps.next.outputs.label != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh pr edit "$PR" --add-label "${{ steps.next.outputs.label }}"

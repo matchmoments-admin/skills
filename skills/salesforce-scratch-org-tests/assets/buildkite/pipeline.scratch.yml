@@ -1,0 +1,35 @@
+# Add this step to an existing Buildkite pipeline (Bitbucket-triggered). It does not change the rest of the build.
+# The scripts live in the repo at scripts/scratch/ (copied from the skill).
+steps:
+  - label: ":salesforce: scratch org tests"
+    key: scratch-org-tests
+    if: build.pull_request.id != null || build.branch =~ /^(feature|bugfix|hotfix)\//
+    command: scripts/scratch/scratch-ci.sh run
+    env:
+      SCRATCH_DEF: config/project-scratch-def.json
+      TEST_MODE: relevant          # "all" runs every local test
+      NO_ORG_EXIT: "3"             # no free scratch org: soft-fail instead of red
+      # SOURCE_DIRS: force-app     # leave out production-only folders
+    soft_fail:
+      - exit_status: 3
+    concurrency: 3                 # at most this many scratch-org builds at once (<= the Dev Hub's active allowance)
+    concurrency_group: salesforce/scratch-orgs
+    timeout_in_minutes: 60
+    retry:
+      automatic:
+        - exit_status: -1          # agent lost: the sweep below cleans up its org
+          limit: 1
+    artifact_paths:
+      - test-results/**/*-junit.xml
+      - test-results/*.json
+    plugins:
+      # Optional: upload JUnit to Buildkite Test Engine for per-test history (set a suite token secret).
+      # - test-collector#v1.10.1:
+      #     files: "test-results/**/*-junit.xml"
+      #     format: junit
+
+# A scheduled build of the same pipeline (Pipeline settings > Schedules, e.g. every 3 hours) with
+# SCRATCH_SWEEP=1 deletes CI orgs that a killed agent left behind:
+#  - label: ":broom: sweep scratch orgs"
+#    if: build.env("SCRATCH_SWEEP") == "1"
+#    command: scripts/scratch/scratch-ci.sh sweep 3

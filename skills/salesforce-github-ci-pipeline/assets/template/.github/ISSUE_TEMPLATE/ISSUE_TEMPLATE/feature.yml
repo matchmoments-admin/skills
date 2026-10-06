@@ -1,0 +1,27 @@
+name: New spec (bigger work)
+description: Something too big for one story. Claude writes the spec and splits it into stories you approve.
+title: "Spec: "
+labels: [spec]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem and what you have in mind. A card appears: tick **Write the spec with Claude**, answer its
+        questions in comments, then tick **Split it into stories**. You approve the stories before any is created.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who has the problem, and what it costs them today.
+    validations: { required: true }
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: The outcome you want; rough is fine.
+    validations: { required: true }
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Constraints, who may see it, data involved, deadlines.

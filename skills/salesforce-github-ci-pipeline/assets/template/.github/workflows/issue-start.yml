@@ -1,0 +1,88 @@
+name: issue-start
+# BUTTON: label a story `start` (or, with Jira, move it to In Progress: repository_dispatch jira-start).
+# Creates the story branch (issue-N or the Jira key) from its base and the story's scratch org. Re-running keeps
+# the branch and rebuilds a missing org from the story branch's own code.
+on:
+  issues:
+    types: [labeled]
+  repository_dispatch:
+    types: [jira-start]
+permissions:
+  contents: write
+  issues: write
+  pull-requests: read   # the story card reads checks and verdicts
+  checks: read
+  statuses: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  start:
+    if: github.event_name == 'repository_dispatch' || github.event.label.name == 'start'
+    runs-on: ubuntu-latest
+    timeout-minutes: 70   # 45 of them may be waiting for the org's lane
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KEY: ${{ github.event.client_payload.key || github.event.issue.number }}
+      LABELS: ${{ github.event.client_payload.labels || join(github.event.issue.labels.*.name, ',') }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - run: echo ".pipeline/" >> .git/info/exclude
+      - name: Names for this story
+        id: ctx
+        run: |
+          [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
+          node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
+      - name: The story card says what is happening (seconds after /start)
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "creating the branch and a production-shaped scratch org (3 to 5 minutes)"
+      - name: Readiness check (Jev, AI_TRIAGE) - are the criteria testable, is the story large (skipped when planned)
+        if: vars.AI_TRIAGE == 'true'
+        continue-on-error: true
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story.md" > /dev/null
+          grep -q "^## Agreed plan" "$RUNNER_TEMP/story.md" || node .pipeline/pipeline/bin/pipe.mjs story readiness "$KEY"
+      - name: The story branch (from its base; an existing one is kept)
+        env:
+          BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+        run: |
+          [ -n "$BASE" ] || { echo "::error::No open sprint. Run sprint-start first (or label the story hotfix)."; exit 1; }
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then echo "$BRANCH exists: the org is built from it"; git fetch -q origin "$BRANCH"; git checkout -q "origin/$BRANCH"
+          else git checkout -q "origin/$BASE" && git push origin "HEAD:refs/heads/$BRANCH"; fi
+      - name: Put the story in the sprint
+        if: steps.ctx.outputs.HOTFIX != 'true'
+        run: node .pipeline/pipeline/bin/pipe.mjs tracker assign "$KEY" --sprint "${{ steps.ctx.outputs.SPRINT }}"
+      - uses: ./.pipeline/.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "story:$KEY"
+      - name: The story's scratch org (production's shape + the branch's code; a half-made one is finished)
+        run: node .pipeline/pipeline/bin/pipe.mjs org ensure "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}
+      - name: Let the next job into the org's lane
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane release "story:$KEY" || true
+      - name: The story card (one comment, kept up to date at every stage)
+        env:
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --base "$BASE"
+      - name: The story card says it failed, and where to look
+        if: failure() && steps.ctx.outcome == 'success'
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "starting the story" --failed --retry "no sprint open? tick Start the next sprint on the last release card (or comment /sprint-start); otherwise see the run, then tick Start again"
+      - name: Remove the button label (the card shows what happened)
+        if: always()
+        run: gh issue edit "$KEY" --remove-label start >/dev/null 2>&1 || true

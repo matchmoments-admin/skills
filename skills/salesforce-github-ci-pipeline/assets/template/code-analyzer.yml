@@ -1,0 +1,17 @@
+# Static analysis rules (PMD for Apex, ESLint for LWC). Run: sf code-analyzer run --workspace force-app --severity-threshold 2
+engines:
+  pmd: { disable_engine: false }
+  eslint: { disable_engine: false }
+# Apex security rules default to Moderate (3), below CI's threshold: raised to High (2) so they fail the build.
+# The pipeline's own access check (pipeline/src/access.mjs) covers metadata PMD cannot see (permission sets, Flows, OWD).
+rules:
+  pmd:
+    ApexCRUDViolation: { severity: 2 }
+    ApexSharingViolations: { severity: 2 }
+    ApexSOQLInjection: { severity: 2 }
+    ApexXSSFromURLParam: { severity: 2 }
+    ApexXSSFromEscapeFalse: { severity: 2 }
+    ApexOpenRedirect: { severity: 2 }
+    ApexInsecureEndpoint: { severity: 2 }
+    ApexBadCrypto: { severity: 2 }
+    ApexSuggestUsingNamedCred: { severity: 2 }

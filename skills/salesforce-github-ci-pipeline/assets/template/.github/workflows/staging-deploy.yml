@@ -1,0 +1,131 @@
+name: staging-deploy
+# After a story merges into the release branch (started by the gate): deploy the whole release branch to the
+# staging org and run the full regression. The job name is the "staging regression" check the release gate needs.
+# Pipeline code comes from main (.pipeline/); the release branch's own specs run only after production access is gone.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  staging:
+    name: staging regression
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # the staging org's lane only (a ref under refs/locks/); the specs never see a token
+      checks: write         # the live "Salesforce tests" check on the release head
+    timeout-minutes: 75   # 45 of them may be waiting for the staging org's lane (release-PR CI, a back-merge)
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    outputs:
+      release: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
+      tested: ${{ steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.current.outputs.superseded != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+      - name: The open sprint
+        id: ctx
+        working-directory: .pipeline
+        run: |
+          node pipeline/bin/pipe.mjs context
+          node pipeline/bin/pipe.mjs context | grep -q '^RELEASE_BRANCH=.' || { echo "::error::No open sprint"; exit 1; }
+      - name: Still the release branch's tip? (each merge queues a run; only the newest needs to test)
+        id: current
+        run: |
+          TIP=$(gh api "repos/$GH_REPO/commits/${{ steps.ctx.outputs.RELEASE_BRANCH }}" --jq .sha)
+          if [ "$TIP" != "$GITHUB_SHA" ]; then echo "superseded=true" >> "$GITHUB_OUTPUT"; echo "superseded by ${TIP:0:7}: its own run tests it"; fi
+      - name: Wait for the staging org's lane (nobody is dropped)
+        if: steps.current.outputs.superseded != 'true'
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "sprint:${{ steps.ctx.outputs.SPRINT }}"
+      - uses: actions/checkout@v4
+        if: steps.current.outputs.superseded != 'true'
+        with: { ref: "${{ github.sha }}", path: candidate, persist-credentials: false }   # exactly the commit this run is for
+      - name: Already tested? (a re-run of a commit that already passed)
+        id: fresh
+        if: steps.current.outputs.superseded != 'true'
+        working-directory: candidate
+        run: |
+          SHA=$(git rev-parse HEAD)
+          N=$(gh api "repos/$GH_REPO/commits/$SHA/check-runs?check_name=staging%20regression" --jq '[.check_runs[] | select(.conclusion=="success")] | length')
+          if [ "$N" != "0" ]; then echo "done=true" >> "$GITHUB_OUTPUT"; echo "${SHA:0:7} already passed the staging regression"; fi
+      - uses: ./.pipeline/.github/actions/sf-auth
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Deploy the release branch to staging and prepare it
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        working-directory: candidate
+        run: |
+          node ../.pipeline/pipeline/bin/pipe.mjs org attach "sprint:${{ steps.ctx.outputs.SPRINT }}"
+          node ../.pipeline/pipeline/bin/pipe.mjs org deploy staging
+          node ../.pipeline/pipeline/bin/pipe.mjs org prepare staging
+      - name: Full regression (every Apex and Flow test), live on the release head as "Salesforce tests"
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        working-directory: candidate
+        run: node ../.pipeline/pipeline/bin/pipe.mjs tests run staging --all --base HEAD --sha "$(git rev-parse HEAD)" --out test-results
+      - name: Drop production access before running the branch's specs
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        run: |
+          sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
+          rm -f "${SF_CI_KEY_FILE:-}"
+      - uses: ./.pipeline/.github/actions/playwright
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
+        env:
+          GH_TOKEN: ""          # installs the branch's packages: no token
+        with: { working-directory: candidate }
+      - name: UI regression (every spec in e2e/)
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        working-directory: candidate
+        env:
+          GH_TOKEN: ""
+        run: |
+          if ls e2e/*.spec.ts >/dev/null 2>&1; then
+            SCRATCH_ALIAS=staging npx playwright test
+          else
+            echo "No UI specs yet"
+          fi
+      - name: Let the next job into the staging org's lane
+        if: always() && steps.current.outputs.superseded != 'true'
+        working-directory: .pipeline
+        run: node pipeline/bin/pipe.mjs lane release "sprint:${{ steps.ctx.outputs.SPRINT }}" || true
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        with:
+          name: staging-results
+          path: |
+            candidate/test-results
+            candidate/playwright-report
+            !candidate/**/trace.zip
+            !candidate/**/*.webm
+  nudge:
+    # Separate job: the write permissions never sit next to the release branch's code. Runs after a failed regression
+    # too, so the release card says it failed and offers a fix.
+    needs: staging
+    if: always() && needs.staging.result != 'skipped' && needs.staging.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write        # re-runs the gate if the release PR is already approved
+      contents: read
+      checks: read
+      issues: write
+      pull-requests: write
+      statuses: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REL: ${{ needs.staging.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: Ship now if the release PR is already approved
+        run: |
+          RPR=$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')
+          [ -z "$RPR" ] || node pipeline/bin/pipe.mjs gate nudge "$RPR"   # also refreshes the release card
+          # UAT_ENABLED: keep UAT on the release PR's latest code (a newer head needs a new sign-off anyway)
+          # UAT follows only a run that really tested a new head (a skipped or superseded run must not reset a sign-off)
+          [ -z "$RPR" ] || [ "${{ vars.UAT_ENABLED }}" != "true" ] || [ "${{ needs.staging.outputs.tested }}" != "true" ] || gh workflow run uat-deploy.yml --ref main -f pr="$RPR"

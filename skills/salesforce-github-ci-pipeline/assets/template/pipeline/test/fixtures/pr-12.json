@@ -1,0 +1,147 @@
+{
+ "pr": {
+  "number": 12,
+  "state": "MERGED",
+  "isDraft": false,
+  "mergeable": "UNKNOWN",
+  "baseRefName": "main",
+  "headRefName": "issue-8-hotfix-account-layout-references-a-quick",
+  "headRefOid": "0789397513844d95443eb6221fade24d2f3cd08a",
+  "labels": [
+   {
+    "name": "review:pass"
+   },
+   {
+    "name": "ui:pass"
+   }
+  ],
+  "author": {
+   "login": "app/__owner__-pipeline",
+   "is_bot": true
+  },
+  "commits": [
+   {
+    "oid": "bd1b63bfb71b1a52e35898bab774af2d201cc36e",
+    "messageHeadline": "fix(account): remove FeedItem.RypplePost quick action from layout (#8)",
+    "committedDate": "2026-10-04T06:47:48Z"
+   },
+   {
+    "oid": "0789397513844d95443eb6221fade24d2f3cd08a",
+    "messageHeadline": "test(e2e): issue 8",
+    "committedDate": "2026-10-04T06:56:57Z"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "user": {
+    "login": "matchmoments-admin",
+    "type": "User"
+   },
+   "state": "DISMISSED",
+   "commit_id": "bd1b63bfb71b1a52e35898bab774af2d201cc36e",
+   "submitted_at": "2026-10-04T06:52:26Z"
+  },
+  {
+   "user": {
+    "login": "matchmoments-admin",
+    "type": "User"
+   },
+   "state": "APPROVED",
+   "commit_id": "0789397513844d95443eb6221fade24d2f3cd08a",
+   "submitted_at": "2026-10-04T07:23:54Z"
+  }
+ ],
+ "checkRuns": [
+  {
+   "name": "gate",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T07:23:57Z"
+  },
+  {
+   "name": "gate",
+   "conclusion": "success",
+   "started_at": "2026-10-04T07:23:59Z"
+  },
+  {
+   "name": "deploy and Apex tests (scratch org)",
+   "conclusion": "success",
+   "started_at": "2026-10-04T06:58:09Z"
+  },
+  {
+   "name": "fix",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T06:57:38Z"
+  },
+  {
+   "name": "review",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T06:57:38Z"
+  },
+  {
+   "name": "ui",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T06:57:38Z"
+  },
+  {
+   "name": "gate",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T06:57:38Z"
+  },
+  {
+   "name": "gate",
+   "conclusion": "skipped",
+   "started_at": "2026-10-04T06:57:38Z"
+  },
+  {
+   "name": "static checks (no org)",
+   "conclusion": "success",
+   "started_at": "2026-10-04T06:57:08Z"
+  }
+ ],
+ "labelEvents": [
+  {
+   "event": "labeled",
+   "label": {
+    "name": "ai:test"
+   },
+   "created_at": "2026-10-04T06:48:35Z",
+   "actor": {
+    "login": "matchmoments-admin",
+    "type": "User"
+   }
+  },
+  {
+   "event": "labeled",
+   "label": {
+    "name": "review:pass"
+   },
+   "created_at": "2026-10-04T06:48:58Z",
+   "actor": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+   }
+  },
+  {
+   "event": "labeled",
+   "label": {
+    "name": "ui:pass"
+   },
+   "created_at": "2026-10-04T06:57:35Z",
+   "actor": {
+    "login": "__owner__-pipeline[bot]",
+    "type": "Bot"
+   }
+  }
+ ],
+ "statuses": [],
+ "diffsToHead": {
+  "bd1b63bfb71b1a52e35898bab774af2d201cc36e": [
+   "e2e/issue-8.spec.ts"
+  ]
+ },
+ "compare": {
+  "headInMain": false,
+  "forceAppChanged": true
+ }
+}

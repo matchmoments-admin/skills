@@ -1,0 +1,37 @@
+name: scratch-janitor
+# Every 6 hours: delete orphan scratch orgs (CI orgs whose run died, closed stories, staging and UAT of sprints no longer
+# open) through the Dev Hub, and report the allocation. Also the release watchdog: Salesforce changes on main that never
+# shipped (a lost or failed release dispatch) start a release, unless production was rolled back. Run by hand any time.
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # every 6 hours: an orphan must not hold one of the Dev Hub's active slots for long
+  workflow_dispatch:
+permissions:
+  contents: write       # the event log (orgs deleted); which sprint is open; main and tags for the watchdog
+  issues: read          # which stories are closed; an open "Production rolled back" issue
+  actions: write        # the watchdog starts a release
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: scratch-orgs   # deletes orgs
+      cancel-in-progress: false
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }   # pipeline code from main; history and tags for the watchdog
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - run: |
+          node pipeline/bin/pipe.mjs org sweep
+          node pipeline/bin/pipe.mjs org limits
+      - name: Release watchdog (main's Salesforce changes that never shipped)
+        run: node pipeline/bin/pipe.mjs ship watchdog

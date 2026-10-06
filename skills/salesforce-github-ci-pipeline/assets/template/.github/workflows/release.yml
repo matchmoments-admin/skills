@@ -1,0 +1,169 @@
+name: release
+# Started by the gate after a release or hotfix merges into main, for that merge commit's SHA (pipeline/src/shipping.mjs).
+# One run, drawn as a graph on the run page:
+#   plan -> deploy to production -> (tag | refresh org shape) -> close out -> back-merge
+# Quick-deploys the gate's production validation only if the SHA has exactly the tree the gate validated; otherwise it
+# validates here (deletions since the previous release). Re-runnable and replaceable: a SHA already shipped (tagged, or
+# inside a later release) skips deploy and tag, but close-out and back-merge still run. scratch-janitor's watchdog
+# starts a release for Salesforce changes on main that never shipped.
+run-name: release ${{ inputs.sha || 'main' }}
+on:
+  workflow_dispatch:      # no push trigger, so nothing runs twice
+    inputs:
+      sha:
+        description: The commit on main to ship; empty = main's tip
+        required: false
+      validated_job:
+        description: Production validation ID from the gate; empty = validate here
+        required: false
+      validated_tree:
+        description: The tree the gate validated (the job is used only if the SHA has this tree)
+        required: false
+permissions:
+  actions: write          # starts back-merge
+  contents: write
+  issues: write
+  pull-requests: write    # close-out closes leftover PRs on the shipped release branch
+  checks: write  # the story card reads checks; the live "Production validation" check
+  statuses: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+  GH_REPO: ${{ github.repository }}
+jobs:
+  plan:
+    name: what ships
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.p.outputs.sha }}
+      skip: ${{ steps.p.outputs.skip }}
+      tag: ${{ steps.p.outputs.tag }}
+      job: ${{ steps.p.outputs.job }}
+      previous: ${{ steps.p.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: The commit, whether it already shipped, and whether the gate's validation covers it
+        id: p
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA_IN: ${{ inputs.sha }}
+          JOB_IN: ${{ inputs.validated_job }}
+          TREE_IN: ${{ inputs.validated_tree }}
+        run: |
+          [ -z "$SHA_IN" ] || [[ "$SHA_IN" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::not a commit SHA: $SHA_IN"; exit 1; }
+          [ -z "$JOB_IN" ] || [[ "$JOB_IN" =~ ^0Af[A-Za-z0-9]{12,15}$ ]] || { echo "::error::not a deploy ID: $JOB_IN"; exit 1; }
+          node pipeline/bin/pipe.mjs pr card ${SHA_IN:+--sha "$SHA_IN"} --now "shipping to production: quick deploy of the validated change, then tag and close out" || true
+          node pipeline/bin/pipe.mjs ship plan ${SHA_IN:+--sha "$SHA_IN"} ${JOB_IN:+--validated-job "$JOB_IN"} ${TREE_IN:+--validated-tree "$TREE_IN"} | tee -a "$GITHUB_STEP_SUMMARY"
+  deploy:
+    name: deploy to production
+    needs: plan
+    if: needs.plan.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100   # a validation can take 60 minutes in a large org, the quick deploy 30
+    environment: production    # deploys only from main (environment rule)
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ needs.plan.outputs.sha }}", fetch-depth: 0 }   # history and tags: deletions since the previous release
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Production validation (the gate's, when it covers this exact tree; otherwise here)
+        id: validate
+        env:
+          GATE_JOB: ${{ needs.plan.outputs.job }}
+          VALIDATE_SHA: ${{ needs.plan.outputs.sha }}
+          DELETIONS_FROM: ${{ needs.plan.outputs.previous }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$GATE_JOB" ]; then echo "job=$GATE_JOB" >> "$GITHUB_OUTPUT"; echo "using the gate's validation $GATE_JOB"; exit 0; fi
+          echo "job=$(./scripts/ci/validate-prod.sh)" >> "$GITHUB_OUTPUT"
+      - name: Quick deploy the validated change
+        env:
+          JOB: ${{ steps.validate.outputs.job }}
+        run: sf project deploy quick -o devhub --job-id "$JOB" --wait 30
+      - name: Smoke check
+        run: sf data query -o devhub -q "SELECT COUNT() FROM Account" >/dev/null && echo "production responds"
+      - name: The card says the deploy failed, and where to look
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: node pipeline/bin/pipe.mjs pr card --sha "$SHA" --now "the production deploy" --failed --retry "see the run; re-run the release (it is safe to repeat)" || true
+  shape:
+    name: refresh org shape
+    needs: [plan, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true    # scratch orgs keep the previous shape if this fails
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ needs.plan.outputs.sha }}" }
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - run: sf org create shape -o devhub
+  tag:
+    name: tag and release notes
+    needs: [plan, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@v1   # a tag on a commit that changes workflows needs the workflows permission
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: Tag and publish release notes
+        id: tag
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          TAG="v$(date -u +%Y.%m.%d)-${{ github.run_number }}"
+          gh release create "$TAG" --target "$SHA" --generate-notes
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Released [$TAG](${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
+  closeout:
+    name: close out sprint and stories
+    needs: [plan, tag]
+    if: always() && needs.plan.result == 'success' && (needs.tag.result == 'success' || needs.plan.outputs.skip == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - uses: ./.github/actions/sf-auth   # deletes the shipped stories' scratch orgs
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Close out (stories, sprint, orgs, release branch)
+        env:
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          TAG: ${{ needs.tag.outputs.tag || needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          PREVIOUS: ${{ needs.plan.outputs.previous }}
+        run: node pipeline/bin/pipe.mjs closeout run --tag "$TAG" --sha "$SHA" ${PREVIOUS:+--previous "$PREVIOUS"}
+  backmerge:
+    name: back-merge into the open sprint
+    needs: [plan, closeout]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: gh workflow run back-merge.yml --ref main

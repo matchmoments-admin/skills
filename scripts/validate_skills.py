@@ -284,8 +284,12 @@ def main() -> int:
         # README + LICENSE are exempt.
         pass
 
-    print("→ internal-link check")
+    print("→ internal-link check (vendored upstream skills exempt: their docs carry example links)")
+    upstream_list = SKILLS / ".upstream-skills"
+    vendored = set(upstream_list.read_text().split()) if upstream_list.exists() else set()
     for f in md_files:
+        if f.relative_to(SKILLS).parts[0] in vendored:
+            continue
         all_errors += check_internal_links(f)
 
     if all_errors:

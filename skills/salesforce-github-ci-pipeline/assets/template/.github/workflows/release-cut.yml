@@ -1,0 +1,47 @@
+name: release-cut
+# BUTTON: Actions > release-cut > Run workflow (at sprint end). Opens the release PR (release/<sprint> -> main)
+# with notes from merged PRs and the sprint's stories. Then approve it to ship.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write        # starts CI on the release candidate without the App
+  pull-requests: write
+  issues: write         # the release card
+  checks: read          # the card reads the PR's checks (the gate's facts)
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }   # pipeline code from main, whatever ref this was started on
+      - id: id
+        uses: ./.github/actions/pipeline-identity
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: main
+      - name: The open sprint
+        id: ctx
+        run: node pipeline/bin/pipe.mjs context
+      - name: Open the release pull request
+        env:
+          REL: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
+          SPRINT: ${{ steps.ctx.outputs.SPRINT }}
+        run: |
+          [ -n "$REL" ] || { echo "::error::No open sprint"; exit 1; }
+          if [ -n "$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')" ]; then echo "release PR already open"; exit 0; fi
+          node pipeline/bin/pipe.mjs release notes "$SPRINT" > notes.md
+          gh pr create --base main --head "$REL" --title "Release $SPRINT" --body-file notes.md --label release
+          GH_TOKEN="${{ github.token }}" node pipeline/bin/pipe.mjs pr card "$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number')" || true
+          [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$REL" -f ref="$REL"
+          # UAT_ENABLED: the release candidate goes to UAT for business sign-off
+          if [ "${{ vars.UAT_ENABLED }}" = "true" ]; then
+            GH_TOKEN="${{ github.token }}" gh workflow run uat-deploy.yml --ref main -f pr="$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number')"
+          fi

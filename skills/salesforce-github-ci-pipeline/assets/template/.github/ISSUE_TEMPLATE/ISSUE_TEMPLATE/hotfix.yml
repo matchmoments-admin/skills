@@ -1,0 +1,25 @@
+name: Urgent production fix
+description: Something broken in production. It branches from main and ships on its own, before the sprint release.
+title: "Hotfix: "
+labels: [hotfix, start]   # submitting it starts it: branch from main + hotfix scratch org
+body:
+  - type: markdown
+    attributes:
+      value: Submitting starts it straight away (branch from main and a scratch org). The fix needs CI, production validation and one approval, then ships. Follow the **Pipeline status** card on the issue.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken, for whom, since when.
+    validations: { required: true }
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance criteria
+      description: How we know it is fixed.
+    validations: { required: true }
+  - type: textarea
+    id: where
+    attributes:
+      label: Where to see it in the UI
+    validations: { required: true }

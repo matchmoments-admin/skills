@@ -1,0 +1,53 @@
+name: metrics
+# Weekly delivery telemetry from the event log on the `metrics` branch (DORA to production, time per stage, what PRs
+# waited on, org minutes, AI cost per role; pipeline/src/events.mjs) and workflow health from GitHub data: written to the run summary,
+# to METRICS.md on the unprotected `metrics` branch (linked from the README), and to the issue "Delivery metrics".
+# Run by hand any time (days = window).
+on:
+  schedule:
+    - cron: "0 21 * * 0"   # Sunday 21:00 UTC (Monday morning AEST)
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Window in days
+        required: false
+        default: "28"
+permissions:
+  actions: read           # transcripts (AI cost) and run history
+  contents: write         # METRICS.md on the metrics branch
+  issues: write
+  pull-requests: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DAYS: ${{ inputs.days || '28' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: Measure
+        run: |
+          [[ "$DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "::error::days must be a number"; exit 1; }
+          node pipeline/bin/pipe.mjs metrics --days "$DAYS" --out metrics.md
+          cat metrics.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the "Delivery metrics" issue current
+        run: |
+          printf '%s\n\n_Updated %s by the metrics workflow._\n' "$(cat metrics.md)" "$(date -u +%Y-%m-%d)" > body.md
+          N=$(gh issue list --state open --search 'in:title "Delivery metrics"' --json number,title --jq '[.[] | select(.title == "Delivery metrics")][0].number // empty')
+          if [ -n "$N" ]; then gh issue edit "$N" --body-file body.md; else gh issue create --title "Delivery metrics" --body-file body.md; fi
+      - name: Publish METRICS.md on the metrics branch (the README links to it)
+        run: |
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin metrics >/dev/null; then git fetch -q origin metrics && git worktree add -q m origin/metrics && git -C m checkout -q -B metrics
+          else git worktree add -q --detach m && git -C m checkout -q --orphan metrics && git -C m rm -rfq .; fi
+          printf '# Delivery metrics\n\n_Last %s days, updated %s by the [metrics workflow](%s)._\n\n%s\n' "$DAYS" "$(date -u +%Y-%m-%d)" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/workflows/metrics.yml" "$(tail -n +2 metrics.md)" > m/METRICS.md
+          git -C m add METRICS.md
+          git -C m diff --cached --quiet || git -C m commit -qm "metrics: $(date -u +%Y-%m-%d)"
+          # events land on the same branch all the time: rebase onto them and retry
+          for _ in 1 2 3 4 5; do git -C m push -q origin metrics && exit 0; git -C m pull -q --rebase origin metrics; done; exit 1

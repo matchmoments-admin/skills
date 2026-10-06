@@ -1,0 +1,21 @@
+{
+  "name": "sf-lifecycle-labs",
+  "private": true,
+  "scripts": {
+    "format": "prettier --write \"force-app/**/*.{cls,trigger,js,html,json}\"",
+    "format:check": "prettier --check \"force-app/**/*.{cls,trigger,js,html,json}\"",
+    "lint": "eslint \"force-app/**/lwc/**/*.js\" --no-error-on-unmatched-pattern",
+    "test:unit": "sfdx-lwc-jest -- --passWithNoTests",
+    "e2e": "playwright test",
+    "test:pipeline": "node --test pipeline/test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@lwc/eslint-plugin-lwc": "^2.0.0",
+    "@playwright/test": "^1.50.0",
+    "@salesforce/eslint-config-lwc": "^3.6.0",
+    "@salesforce/sfdx-lwc-jest": "^7.0.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.0",
+    "prettier-plugin-apex": "^2.1.0"
+  }
+}
