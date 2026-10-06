@@ -1,0 +1,22 @@
+diff --git a/skills/ask-matt/SKILL.md b/skills/ask-matt/SKILL.md
+index 8d38b2b..1c34eba 100644
+--- a/skills/ask-matt/SKILL.md
++++ b/skills/ask-matt/SKILL.md
+@@ -25,11 +25,15 @@ The route most work travels. You have an idea and want it built.
+      - **`/implement-spec`** for the whole spec in one run. It reads the tickets as a **task graph**, runs implementer subagents across the ready **frontier** in parallel, and lands everything on one **integration branch**. Reach for it when you'd rather orchestrate the build than drive each ticket yourself.
+    - **No** → **`/implement`** right here, in the same context window.
+ 
+-   Either way, the code gets built by driving **`/tdd`** (one red-green slice at a time) and closes out with **`/code-review`**, a two-axis review (Standards + Spec) of the diff. `/implement` runs both per ticket; `/implement-spec`'s implementers each drive `/tdd`, and it runs one `/code-review` over the integration branch. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, and **`/code-review`** on its own whenever you want to review a branch or PR against a fixed point.
++   Either way, the code gets built by driving **`/tdd`** (one red-green slice at a time) and closes out with **`/code-review`**. `/implement` runs both per ticket; `/implement-spec`'s implementers each drive `/tdd`, and it runs one `/code-review` over the integration branch. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec.
++
++   For review, this install uses two skills of its own rather than Matt's `/code-review`, which is deliberately not vendored here:
++   - **`/code-review`** (Claude Code built-in): the default, and what `/implement` and `/implement-spec` reach. Correctness bugs plus reuse/simplification cleanups, at an effort level you pass in. It does not read a `CODING_STANDARDS.md`.
++   - **`/local-ultrareview`**: five parallel read-only agents (architecture, correctness, security, docs-drift, ops/cost) over a branch or PR, then an optional docs-update hand-off. Reach for it before a merge.
+ 
+    When the work goes up as a pull request, **`/pr`** shapes the body: the smallest visual that shows the change, before/after evidence that it works, and a one-way or two-way door call. It's model-invoked, so the agent reaches for it whenever it writes a PR.
+ 
+-4. **`/retro`** closes the loop. After a build, and especially one that went sideways, it looks back over the session and suggests changes to the agent's **environment**, not the code: navigation pointers, automated checks, the coding standards `/code-review` enforces, steering files, tooling. Mechanical mistakes become deterministic checks; judgement calls become coding standards. The next build then starts from a better environment.
++4. **`/retro`** closes the loop. After a build, and especially one that went sideways, it looks back over the session and suggests changes to the agent's **environment**, not the code: navigation pointers, automated checks, coding standards, steering files, tooling. Mechanical mistakes become deterministic checks; judgement calls become coding standards. The next build then starts from a better environment.
+ 
+ ### Context hygiene
+ 

@@ -36,7 +36,7 @@ Use this template for writing the PR body:
 
 Skip all preambles and keep prose brief. Use the user's domain language from `GLOSSARY.md`.
 
-In a Salesforce repo, read `docs/agents/salesforce.md` ("PR bodies") first: Summary as a tree of what changed per object or a Flow's decision path; Evidence as the Apex and Flow test results and the UI test's screenshot; one-way doors such as deleting or retyping a field, changing an org-wide default, or changing production data. Keep anything the repo's pipeline requires (for example `Closes #N` and a test plan).
+In a Salesforce repo, read `docs/agents/salesforce.md` ("PR bodies") first: Summary as a tree of what changed per object or a Flow's decision path; Evidence as the Apex and Flow test results and the UI test's screenshot; one-way doors such as deleting or retyping a field, changing an org-wide default, or changing production data. Keep anything the repo's pipeline requires (for example `Story #N` (never `Closes #N` in sf-lifecycle-labs: stories close when they reach production) and a test plan).
 
 ### Summary
 
