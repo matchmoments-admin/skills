@@ -73,6 +73,7 @@ export async function apply(p, { tag, tracker, orgs, git, gh, log = console.erro
   for (const { key, pr } of p.hotfix) {
     const s = await tracker.story(key);
     if (s.state === "OPEN") await tracker.done(key, `Hotfix released in ${tag} (PR #${pr}).`);
+    else await tracker.comment(key, `Hotfix released in ${tag} (PR #${pr}).`);   // closed early by an old "Closes #" PR: still say so
   }
   if (p.sprint) await tracker.closeSprint(p.sprint);
   for (const target of p.deleteOrgs) {

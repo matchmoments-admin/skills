@@ -146,7 +146,7 @@ jobs:
           git fetch -q origin "$BRANCH" "$BASE"
           [ "$(git rev-list --count "origin/$BASE..origin/$BRANCH")" -gt 0 ] || { node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "The AI run finished without pushing to \`$BRANCH\`. See the run's transcript artifact."; exit 1; }
           if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')" ]; then
-            if [[ "$KEY" =~ ^[0-9]+$ ]]; then CLOSES="Closes #$KEY"; else CLOSES="Story $KEY"; fi
+            if [[ "$KEY" =~ ^[0-9]+$ ]]; then CLOSES="Story #$KEY"; else CLOSES="Story $KEY"; fi   # not "Closes": close-out closes it when it is in production
             printf '%s\n\nBuilt by ai-implement in scratch org `%s`.\n' "$CLOSES" "$BRANCH" > pr-body.md
             gh pr create --base "$BASE" --head "$BRANCH" --title "$(git log -1 --format=%s "origin/$BRANCH")" --body-file pr-body.md ${MILESTONE:+--milestone "$MILESTONE"}
           fi

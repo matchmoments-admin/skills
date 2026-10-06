@@ -129,6 +129,11 @@ jobs:
             HEAD_SHA=$(git rev-parse HEAD)
             RUN=$(GH_TOKEN="$READ_TOKEN" gh run list --branch "$BRANCH" --workflow ci.yml --limit 10 --json databaseId,conclusion,headSha \
               --jq "([.[] | select(.conclusion==\"failure\" and .headSha==\"$HEAD_SHA\")] + [.[] | select(.conclusion==\"failure\")])[0].databaseId // empty")
+            # the newest failed UI test of this PR: its Playwright error (the fixer cannot see the report otherwise)
+            UI=$(GH_TOKEN="$READ_TOKEN" gh run list --workflow ui-test.yml --limit 20 --json databaseId,displayTitle,conclusion --jq "[.[] | select(.displayTitle | startswith(\"ui-test PR #$PR \")) | select(.conclusion==\"success\")][0].databaseId // empty")
+            if [ -n "$UI" ] && GH_TOKEN="$READ_TOKEN" gh run download "$UI" -n playwright-report -D "$RUNNER_TEMP/ui" >/dev/null 2>&1 && grep -qiE "failed|error" "$RUNNER_TEMP/ui/ui-out/playwright.log" 2>/dev/null; then
+              echo; echo "## Failed UI test (run $UI): the Playwright error"; tail -60 "$RUNNER_TEMP/ui/ui-out/playwright.log"
+            fi
             if [ -n "$RUN" ]; then
               echo; echo "## Failed CI checks (run $RUN): fix these first"
               GH_TOKEN="$READ_TOKEN" gh run view "$RUN" --log-failed | sed -E 's/\x1b\[[0-9;]*m//g; s/^[^\t]*\t[^\t]*\t[0-9TZ:.-]+ //' \

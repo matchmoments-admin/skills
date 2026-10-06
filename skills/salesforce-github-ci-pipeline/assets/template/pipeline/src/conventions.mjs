@@ -17,6 +17,9 @@ export const LABELS = {
   blocked: { color: "B60205", description: "A gate needs a person; see the latest comment" },
   release: { color: "0052CC", description: "The release PR of a sprint" },
   "in-sprint": { color: "0E8A16", description: "Merged into the sprint: ships with its release (the story closes when it is in production)" },
+  "needs-triage": { color: "D4C5F9", description: "A person needs to look at this issue before it becomes a story" },
+  "needs-info": { color: "D4C5F9", description: "Waiting on the person who raised it" },
+  wontfix: { color: "FFFFFF", description: "Will not be done" },
   spec: { color: "5319E7", description: "A spec (to-spec): split into stories with to-tickets, never built directly" },
   "needs-human": { color: "FBCA04", description: "A story a person builds (not Claude)" },
   "review:pass": { color: "0E8A16", description: "Verdict: AI review passed" },
@@ -101,6 +104,19 @@ export const milestoneTitle = (sprint) => `Sprint ${sprint}`;
 export function sprintOf(branch) {
   const m = String(branch || "").replace(/^origin\//, "").match(/^release\/(.+)$/);
   return m ? m[1] : null;
+}
+
+/** "Sprint 2026-w45" -> "2026-w45" (the tracker's milestone title), or null. */
+export const sprintOfMilestoneTitle = (title) => (String(title || "").match(/^Sprint (.+)$/) || [])[1] || null;
+
+/** The next sprint's name after these (YYYY-wNN; the week after the latest), or this ISO week when there is none. */
+export function nextSprint(sprints = [], now = new Date()) {
+  const weeks = sprints.map((s) => String(s).match(/^(\d{4})-w(\d{2})$/)).filter(Boolean).map((m) => [Number(m[1]), Number(m[2])]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const pad = (n) => String(n).padStart(2, "0");
+  if (weeks.length) { const [y, w] = weeks.at(-1); return w >= 52 ? `${y + 1}-w01` : `${y}-w${pad(w + 1)}`; }
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  return `${d.getUTCFullYear()}-w${pad(Math.ceil(((d - Date.UTC(d.getUTCFullYear(), 0, 1)) / 864e5 + 1) / 7))}`;
 }
 
 /** The single open release branch, from a list of branch names. Errors if more than one is open. */

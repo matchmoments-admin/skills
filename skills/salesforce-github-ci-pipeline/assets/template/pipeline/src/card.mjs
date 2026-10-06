@@ -19,7 +19,7 @@ const stateOf = (c) => (c === "success" ? "done" : ["failure", "error", "cancell
  *   pr/facts/decision are absent before the PR exists. facts = gate.gather(), decision = gate.evaluate(facts).
  * returns markdown.
  */
-export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null, planned = false }) {
+export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null, planned = false, releasePr = null }) {
   const now = activityLine(activity);
   const rows = [];
   const prUrl = pr ? `${repoUrl}/pull/${pr.number}` : null;
@@ -65,15 +65,17 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   else {
     const failed = rows.find((r) => r[0] === "failed");
     const waiting = rows.find((r) => r[0] === "waiting" || r[0] === "running");
-    if (failed) next = failed[1].startsWith("CI") ? `Fix the failing tests: [see what failed](${prUrl}/checks), then push to ${branchLink}.`
+    if (failed) next = failed[1].startsWith("CI") ? `Fix the failing tests ([see what failed](${prUrl}/checks))${ai.fix ? ": tick **Fix … with Claude** below, or push a fix" : `, then push to ${branchLink}`}.`
       : failed[1] === "AI review" ? `Address the review comments on [#${pr.number}](${prUrl})${ai.fix ? ", or tick **Fix … with Claude** below" : ""}.`
-      : `Fix the UI test failure ([report](${prUrl}/checks)), then tick **Run the UI test** below.`;
+      : `Fix the UI test failure ([report](${prUrl}/checks))${ai.fix ? ": tick **Fix … with Claude**, or fix it yourself and tick **Run the UI test**" : ", then tick **Run the UI test** below"}.`;
     else if (decision?.mergeable) next = "Nothing to do: merging now.";
     else if (waiting && waiting[1] !== "Approval" && waiting[0] === "running") next = `Waiting for ${waiting[1].toLowerCase()}. You can approve now: **[Approve here](${prUrl}/files)**.`;
     else if (waiting && waiting[1] === "Approval") next = `**[Approve here](${prUrl}/files)**: everything else is green.`;
     else next = waiting ? `${waiting[1]}: ${waiting[2]}` : "Waiting.";
   }
-  return render(key, next, rows, now, merged ? [] : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }));
+  const mergedActions = merged && !shipped && base !== "main" && !releasePr ? ["release-cut"] : [];   // nobody has cut the release yet
+  if (mergedActions.length) next = `${next} When the sprint's stories are merged, tick **Cut the sprint's release** below.`;
+  return render(key, next, rows, now, merged ? mergedActions : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }));
 }
 
 /** The boxes a story PR's card offers, from where it stands (pure). */
@@ -84,14 +86,24 @@ function storyActions(rows, { ai, base, ci }) {
   if (at("AI review") === "failed") ids.push("fix", "review");
   else if (["waiting", "running"].includes(at("AI review"))) ids.push("review");
   if (["failed", "waiting"].includes(at("UI test"))) ids.push(ai.uiTest ? "ai-test" : "test");
+  if (at("UI test") === "failed") ids.push("fix");   // the fixer reads the Playwright error
   if (at("Approval") === "waiting" && base !== "main") ids.push("ship");
+  if (at("Approval") === "waiting") ids.push("org-login");   // the approver can see the feature in the story's org
   return allowed([...new Set(ids)], ai);
 }
 
-/** The card on a story before /start (or a spec issue: write the spec first). */
-export function newStoryCard({ key, ai = {}, spec = false }) {
-  if (spec) return render(key, ai.plan ? "Tick **Write the spec with Claude**; answer its questions, then split it into stories." : "Write the spec in a comment, then open a story for each slice.",
-    [["waiting", "Spec", "not written yet"]], null, allowed(["spec"], ai));
+/** The card on a story before /start (or a spec issue: where the spec stands; stage: new | spec | breakdown | created). */
+export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [] }) {
+  if (spec) {
+    const rows = [[stage === "new" ? "waiting" : "done", "Spec", stage === "new" ? "not written yet" : "written: the **Spec** comment below"],
+      [["breakdown", "created"].includes(stage) ? "done" : "waiting", "Story breakdown", ["breakdown", "created"].includes(stage) ? "proposed: the **Story breakdown** comment below" : "after the spec"],
+      [stage === "created" ? "done" : "waiting", "Stories", stage === "created" ? stories.map((n) => `#${n}`).join(", ") : "created when you approve the breakdown"]];
+    const next = { new: ai.plan ? "Tick **Write the spec with Claude**; answer its questions, then split it into stories." : "Write the spec in a comment, then open a story for each slice.",
+      spec: "Read the **Spec** below: answer its questions (then /spec revises it), or tick **Split it into stories** on it.",
+      breakdown: "Check the **Story breakdown** below; tick **Create these stories** on it (or reply with changes and /tickets).",
+      created: `Done: the stories are created (${stories.map((n) => `#${n}`).join(", ")}); each one's card offers Plan and Start.` }[stage];
+    return render(key, next, rows, null, stage === "new" ? allowed(["spec"], ai) : []);
+  }
   return render(key, ai.plan ? "Bigger story? Tick **Plan it with Claude** first. Small story? Tick **Start**." : "Tick **Start** when you are ready to work on it.",
     [["waiting", "Branch and scratch org", "created when you start the story"]], null, allowed(["plan", "start", "hotfix"], ai));
 }
@@ -133,10 +145,11 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
   const at = (stage) => rows.find((r) => r[1] === stage)?.[0];
   const failed = rows.find((r) => r[0] === "failed");
   let next;
-  if (shipped) next = `Done: sprint ${sprint} is live in production ([${shipped.tag}](${shipped.url})).`;
+  if (shipped) next = `Done: sprint ${sprint} is live in production ([${shipped.tag}](${shipped.url})). Tick **Start the next sprint** when you are ready.`;
   else if (merged) next = "Nothing to do: it is deploying to production.";
   else if (pr.state === "CLOSED") next = "The release pull request was closed without merging.";
-  else if (failed) next = failed[1].startsWith("Production") ? "Production rejected it: fix it on the sprint branch (a story PR), then tick **Check again**." : `${failed[1]} failed: ${failed[2]}`;
+  else if (failed) next = failed[1].startsWith("UAT") ? `UAT failed: ${failed[2]}. Fix it with a story (or tick **Open a fix story**), or tick **UAT passed** after a retest.`
+    : `${failed[1].startsWith("Production") ? "Production rejected it" : `${failed[1]} failed`}: tick **Open a fix story** below (it lists what failed and goes through the sprint like any story), then the release runs again.`;
   else if (at("UAT sign-off") === "running") next = "Test it in UAT, then tick **UAT passed** below (or comment `/uat-fail <why>`).";
   else if (at("Approval") === "waiting") next = `**[Approve here](${prUrl}/files)** when you are happy for sprint ${sprint} to go to production${at("UAT sign-off") && at("UAT sign-off") !== "done" ? " (it also needs the UAT sign-off)" : ""}.`;
   else if (decision?.mergeable || validation === "running") next = "Nothing to do: the gate is validating it against production, then it merges and ships.";
@@ -146,12 +159,15 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
   if (!merged && pr.state === "OPEN") {
     if (ciState === "failed") ids.push("ci");
     if (staging === "failed") ids.push("staging");
-    if (at("UAT sign-off") === "running") ids.push("uat-pass");
+    if (["running", "failed"].includes(at("UAT sign-off"))) ids.push("uat-pass");
+    if (at("UAT sign-off") === "failed") ids.push("uat");
+    if ([ciState, staging, validation].includes("failed")) ids.push("fix-story");
     if (at("UAT sign-off") === "running" && /scratch org/.test(verdictFor(STATUS.uat, ctx).description || "")) ids.push("uat-login");
     if (at("UAT sign-off") === "waiting" && staging === "done") ids.push("uat");
     if (approved && !failed) ids.push("gate");
     if (validation === "failed") ids.push("gate");
   }
+  if (shipped) ids.push("sprint");
   return render(`release ${sprint}`, next, rows, activityLine(activity), [...new Set(ids)], { release: true });
 }
 
@@ -222,14 +238,15 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
     const openRel = host.openRelease();
     const f = pr ? host.prFacts(pr.number, { openReleaseBranch: openRel, ai }) : null;
     const planned = Boolean(planContext(await tracker.comments(key).catch(() => [])).plan);
-    return { branch, pr, ai, facts: f, planned, base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
+    const releasePr = pr?.state === "MERGED" && openRel ? (host.api("GET", `repos/${host.repo}/pulls?state=open&base=main&head=${host.repo.split("/")[0]}:${openRel}`) || [])[0]?.number || null : null;
+    return { branch, pr, ai, facts: f, planned, releasePr, base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
   }
   return {
     async refresh(key, { base = null, tag = null, activity = null, light = false } = {}) {
       try {
         let c = light ? seen.get(key) : null;
         if (!c) { c = await facts(key, base); seen.set(key, c); }
-        const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, base: c.base,
+        const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, base: c.base, releasePr: c.releasePr,
           shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null, activity });
         await tracker.card(key, body, CARD_MARK, CARD_TITLE);
         if (c.pr) await prTracker.card(c.pr.number, body, CARD_MARK, CARD_TITLE);   // the same card on the PR
@@ -240,8 +257,8 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
       await tracker.card(key, startingCard({ key, activity }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
     },
     /** A new story's card (before /start): what to do first, with the boxes to do it. */
-    async newStory(key, { spec = false } = {}) {
-      await tracker.card(key, newStoryCard({ key, ai: aiFeatures(), spec }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
+    async newStory(key, { spec = false, stage = "new", stories = [] } = {}) {
+      await tracker.card(key, newStoryCard({ key, ai: aiFeatures(), spec, stage, stories }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
     },
     /** The card of the pull request a commit was merged by (the release workflow knows only the SHA). */
     async refreshCommit(sha, opts) {

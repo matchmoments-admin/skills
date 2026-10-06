@@ -116,8 +116,8 @@ export function requiredVerdicts({ ai = {}, compare = {} }, story) {
   const ui = !files || uiFacing(files).length > 0;
   const spec = Boolean(story) && Array.isArray(files) && files.includes(storySpec(story));
   return [
-    { context: STATUS.review, what: "AI review", required: Boolean(ai.review), how: "it starts when the PR opens; or label ai:review" },
-    { context: STATUS.ui, what: "UI test", required: ui && (Boolean(ai.uiTest) || spec), how: ai.uiTest ? "label ai:test" : "label test to run the committed spec" },
+    { context: STATUS.review, what: "AI review", required: Boolean(ai.review), how: "it starts when the PR opens; or tick Run the AI review again" },
+    { context: STATUS.ui, what: "UI test", required: ui && (Boolean(ai.uiTest) || spec), how: ai.uiTest ? "tick Have Claude write and run the UI test" : "tick Run the committed UI test" },
   ];
 }
 
@@ -163,6 +163,12 @@ export function evaluate(facts) {
   if (rules.pure && compare.unreleasedSprintCommits > 0) {
     reasons.push(`it carries ${compare.unreleasedSprintCommits} unreleased sprint commit(s); a hotfix must branch from main`);
   }
+  // production was rolled back: nothing ships to main until the bad change is reverted or fixed (the open issue says how)
+  if (["release", "hotfix", "maintenance"].includes(r) && validate_(rules, compare) && facts.rolledBack) {
+    reasons.push(`production was rolled back (#${facts.rolledBack}): revert or fix forward on main first, then close that issue`);
+  }
+  // a story whose blockers have not landed in the sprint (or shipped) waits for them
+  for (const b of facts.blockers || []) if (!b.landed) reasons.push(`blocked by #${b.number}: it has not merged into the sprint yet`);
   const approved = humanApproval(ctx);
   const staleApproval = !approved && (facts.reviews || []).some((x) => x.user?.type === "User" && x.state === "APPROVED");
   if (rules.approval === "review" && !approved) reasons.push(staleApproval ? "your approval was for an older commit; approve again" : "not approved (Review changes > Approve)");
@@ -174,6 +180,8 @@ export function evaluate(facts) {
   const after = rules.after.map((a) => (a === "release-if-force-app" ? (forceApp ? "release" : null) : a)).filter(Boolean);
   return { route: r, rules, reasons, mergeable: reasons.length === 0, story: storyOf(pr.headRefName), validate, after };
 }
+
+const validate_ = (rules, compare) => rules.validate === true || (rules.validate === "if-force-app" && Boolean(compare.forceAppChanged));
 
 /** Facts for evaluate(), fetched through the io seam (all pages). */
 export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai = {}, uat = false } = {}) {
@@ -209,16 +217,29 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
       compare.unreleasedSprintCommits = (vsMain.commits || []).filter((c) => unreleased.has(c.sha)).length;
     }
   }
-  return { pr, reviews, checkRuns, labelEvents, comments, statuses, diffsToHead, compare, ai, uat };
+  // routes into main: an open rollback issue; a story: the stories its body says block it, and whether they landed
+  const r = route(pr);
+  const rolledBack = ["release", "hotfix", "maintenance"].includes(r) ? (gh(["issue", "list", "--state", "open", "--search", 'in:title "Production rolled back to"', "--json", "number"], { allowFail: true }) || [])[0]?.number || null : null;
+  const key = storyOf(pr.headRefName);
+  const body = key && /^\d+$/.test(key) ? gh(["issue", "view", key, "--json", "body"], { allowFail: true })?.body || "" : "";
+  const blockers = [...new Set([...String(body).matchAll(/Blocked by ((?:#\d+(?:,\s*)?)+)/gi)].flatMap((m) => [...m[1].matchAll(/#(\d+)/g)].map((x) => x[1])))].map((n) => {
+    const i = gh(["issue", "view", n, "--json", "state,labels"], { allowFail: true });
+    return { number: Number(n), landed: !i || i.state === "CLOSED" || (i.labels || []).some((l) => l.name === "in-sprint") };
+  });
+  return { pr, reviews, checkRuns, labelEvents, comments, statuses, diffsToHead, compare, ai, uat, rolledBack, blockers };
 }
 
 /** Re-run the gate when a person has signed off (or the PR needs no sign-off), so it merges when its last input lands.
  *  The gate itself decides whether that sign-off still covers the code. */
 export function nudge(prNumber, { gh, ghPages }) {
   const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
-  const pr = gh(["pr", "view", String(prNumber), "--json", "state,labels,headRefName,baseRefName"]);
+  const pr = gh(["pr", "view", String(prNumber), "--json", "state,labels,headRefName,baseRefName,headRefOid"]);
   if (pr.state !== "OPEN") return { action: "none", why: "PR is not open" };
   if (route(pr) === "backmerge" || pr.labels.some((l) => l.name === "ready")) return { action: "dispatch" };
   const approved = ghPages(`repos/${repo}/pulls/${prNumber}/reviews?per_page=100`).some((r) => r.user?.type === "User" && r.state === "APPROVED");
-  return approved ? { action: "dispatch" } : { action: "none", why: "not signed off yet" };
+  if (approved) return { action: "dispatch" };
+  // a ticked Sign off (or /ship): the trusted pipeline/sign-off status on the head
+  const signedOff = ghPages(`repos/${repo}/commits/${pr.headRefOid}/statuses?per_page=100`)
+    .some((s) => s.context === STATUS.signoff && s.state === "success" && TRUSTED_STATUS_CREATORS.includes(s.creator?.login));
+  return signedOff ? { action: "dispatch" } : { action: "none", why: "not signed off yet" };
 }

@@ -55,7 +55,7 @@ import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -135,9 +135,9 @@ const commands = {
   },
   "uat tester": () => {
     // a person's UAT login, emailed by Salesforce (the UAT stand-in scratch org); says where it went, never a secret
-    const r = orgs().tester("uat", { login: flag("login"), email: flag("email") });
+    const r = orgs().tester(flag("alias", "uat"), { login: flag("login"), email: flag("email") });
     const masked = flag("email").replace(/^(.).*?(@.*)$/, "$1***$2");
-    io.gh(["pr", "comment", flag("pr"), "--body", `🔑 @${flag("login")}: Salesforce has emailed **${masked}** a link to set a UAT password. Username: \`${r.username}\`. It has the release's permission sets (Standard User profile), so you test what users will see.`]);
+    io.gh(["pr", "comment", flag("pr"), "--body", `🔑 @${flag("login")}: Salesforce has emailed **${masked}** a link to set a password for **${flag("alias", "uat") === "uat" ? "UAT" : `the story's scratch org (${flag("alias")})`}**. Username: \`${r.username}\`. It has the permission sets in the code (Standard User profile), so you see what users will see.`]);
     return say(r.username);
   },
   "lane acquire": () => {
@@ -268,8 +268,8 @@ const commands = {
   // ---- specs (bigger work): Claude writes the spec, splits it, a person approves the breakdown (pipeline/src/spec.mjs)
   "spec context": async () => { writeFileSync(flag("out"), await specs.specFile(tracker, arg(0), { forTickets: flag("for") === "tickets" }) + "\n" + pack.packForCheckout(io, { text: (await tracker.story(arg(0))).body, log })); return say(`wrote ${flag("out")}`); },
   "spec pending": async () => { const t = flag("for") === "tickets"; await tracker.card(arg(0), specs.pendingComment(t ? specs.BREAKDOWN_MARK : specs.SPEC_MARK, t ? specs.BREAKDOWN_TITLE : specs.SPEC_TITLE, { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl }), t ? specs.BREAKDOWN_MARK : specs.SPEC_MARK); return say("pending"); },
-  "spec post": async () => { await tracker.card(arg(0), specs.specComment(readFileSync(flag("file"), "utf8")), specs.SPEC_MARK); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true }); return say(`spec on #${arg(0)}`); },
-  "spec breakdown": async () => { const t = specs.parseTickets(readFileSync(flag("file"), "utf8")); await tracker.card(arg(0), specs.breakdownComment(t), specs.BREAKDOWN_MARK); return say(`${t.length} stories proposed on #${arg(0)}`); },
+  "spec post": async () => { await tracker.card(arg(0), specs.specComment(readFileSync(flag("file"), "utf8")), specs.SPEC_MARK); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true }); await cards.newStory(arg(0), { spec: true, stage: "spec" }); return say(`spec on #${arg(0)}`); },
+  "spec breakdown": async () => { const t = specs.parseTickets(readFileSync(flag("file"), "utf8")); await tracker.card(arg(0), specs.breakdownComment(t), specs.BREAKDOWN_MARK); await cards.newStory(arg(0), { spec: true, stage: "breakdown" }); return say(`${t.length} stories proposed on #${arg(0)}`); },
   "story new": async () => { await cards.newStory(arg(0), { spec: has("spec") }); return say(`card for new ${has("spec") ? "spec" : "story"} ${arg(0)}`); },
   "pr card": async () => {
     // the card of a pull request (release card or its story's); --sha: of the PR a commit was merged by

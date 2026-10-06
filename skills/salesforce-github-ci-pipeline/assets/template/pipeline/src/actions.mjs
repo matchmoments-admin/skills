@@ -6,7 +6,7 @@
 // Effects: a label (applied as the pipeline App, so its workflow starts), a trusted commit status from an agent-free job
 // (the sign-off and UAT verdicts the gate reads), or a workflow dispatch.
 import { STATUS } from "./gate.mjs";
-import { storyOf } from "./conventions.mjs";
+import { storyOf, nextSprint, sprintOfMilestoneTitle } from "./conventions.mjs";
 
 export const ACTIONS = {
   spec: { label: "📝 Write the spec with Claude: the problem, the solution, user stories, decisions, open questions", on: "issue", adds: ["ai:spec"], flag: "plan" },
@@ -24,6 +24,10 @@ export const ACTIONS = {
   "uat-pass": { label: "✅ UAT passed: tested in UAT, ready for production", on: "pr" },
   "uat-login": { label: "🔑 Send me a UAT login (Salesforce emails you a link to set a password)", on: "pr" },
   gate: { label: "🔁 Check again (re-run the gate)", on: "pr" },
+  "fix-story": { label: "🛠 Open a fix story for the failing tests (it goes into the sprint; Plan / Start / Build it like any story)", on: "pr" },
+  "org-login": { label: "🔑 Send me a login to this story's scratch org (to see the feature yourself)", on: "pr" },
+  sprint: { label: "🏁 Start the next sprint (release branch, staging org, milestone)", on: "any" },
+  "release-cut": { label: "📦 Cut the sprint's release (the release PR: staging, UAT, approval, production)", on: "any" },
   ci: { label: "🔁 Re-run CI", on: "pr" },
   staging: { label: "🔁 Re-run the staging regression", on: "pr" },
   uat: { label: "🔁 Deploy this commit to UAT again", on: "pr" },
@@ -31,7 +35,7 @@ export const ACTIONS = {
 // the comment commands, and the action each one is
 const COMMANDS = { "/spec": "spec", "/tickets": "tickets", "/plan": "plan", "/start": "start", "/build": "build", "/hotfix": "hotfix", "/review": "review", "/fix": "fix",
   "/test": "test", "/ui-test": "ai-test", "/ship": "ship", "/uat-pass": "uat-pass", "/uat-fail": "uat-fail", "/gate": "gate", "/ci": "ci",
-  "/staging": "staging", "/uat": "uat", "/help": "help" };
+  "/staging": "staging", "/uat": "uat", "/fix-story": "fix-story", "/login": "org-login", "/sprint-start": "sprint", "/release-cut": "release-cut", "/help": "help" };
 
 const MARK = (id) => `<!-- act:${id} -->`;
 
@@ -80,6 +84,8 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
     return { done: pass ? `UAT signed off by @${who} on ${pr.headRefOid.slice(0, 7)}` : `UAT marked failed by @${who}` };
   }
   if (!a) return { said: null };
+  if (id === "sprint") { host.dispatch("sprint-start.yml", { sprint: arg || where.nextSprint }); return { done: `starting sprint ${arg || where.nextSprint}` }; }
+  if (id === "release-cut") { host.dispatch("release-cut.yml"); return { done: "cutting the sprint's release" }; }
   if (a.on === "pr" && !where.isPr) return { said: `\`${id}\` works on a pull request.` };
   if (a.on === "issue" && where.isPr) return { said: `\`${id}\` works on the story (the issue).` };
   if (id === "ship") {
@@ -94,6 +100,18 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
   if (id === "staging") { host.dispatch("staging-deploy.yml", {}, where.pr.headRefName); return { done: "re-running the staging regression" }; }
   if (id === "uat") { host.dispatch("uat-deploy.yml", { pr: where.number, again: "true" }); return { done: "deploying to UAT again" }; }
   if (id === "uat-login") { host.dispatch("uat-login.yml", { pr: where.number, who }); return { done: `sending @${who} a UAT login` }; }
+  if (id === "org-login") { host.dispatch("uat-login.yml", { pr: where.number, who, target: where.pr.headRefName }); return { done: `sending @${who} a login to ${where.pr.headRefName}` }; }
+  if (id === "fix-story") {
+    // a sprint story for what failed on the release (the failing checks' own lists), so it goes through the normal flow
+    const failed = (gh(["api", `repos/${host.repo}/commits/${where.pr.headRefOid}/check-runs?per_page=100`]) || {}).check_runs?.filter((c) => c.conclusion === "failure") || [];
+    const lines = failed.flatMap((c) => String(c.output?.text || "").split("\n").filter((l) => /^\| (test|component|coverage) \|/.test(l)).slice(0, 20));
+    const body = ["### Summary", "", `Release PR #${where.number} cannot ship: ${failed.map((c) => c.name).join(", ") || "a check"} failed. Fix what is listed below on the sprint branch.`, "",
+      "### Acceptance criteria", "", "- Every test listed under Out of scope's \"What failed\" passes in the staging regression", "- The production validation passes on the release PR", "- No production code changes beyond what the failures need", "",
+      "### Access", "", "No change", "", "### Where to see it in the UI", "", `The release card on #${where.number} shows the staging regression and production validation green.`, "",
+      "### Out of scope", "", "Anything not needed to make the listed checks pass.", "", "What failed:", "", "| | what | problem |", "|---|---|---|", ...lines].join("\n");
+    const url = appGh(["issue", "create", "--title", `Story: Fix the release ${where.pr.headRefName.replace(/^release\//, "")}: failing checks`, "--label", "feature", "--body", body]);
+    return { said: `Opened ${url}: its card offers Plan / Start / Build. When it merges, staging and UAT run again on the release.` };
+  }
   // labels start the action's own workflow; remove first, since adding a label that is already there fires nothing
   for (const l of a.adds || []) {
     appGh(["issue", "edit", String(where.number), "--remove-label", l], { allowFail: true });
@@ -120,6 +138,7 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
   const requested = text !== null ? [command(text)].filter(Boolean) : ticked(before, after).map((id) => ({ id, arg: "" }));
   if (!requested.length) return "no action";
   const pr = isPr ? io.gh(["pr", "view", String(number), "--json", "number,headRefName,headRefOid,baseRefName,state"]) : null;
+  const sprints = requested.some((r) => r.id === "sprint") ? (io.gh(["api", `repos/${host.repo}/milestones?state=all&per_page=100`]) || []).map((m) => sprintOfMilestoneTitle(m.title)).filter(Boolean) : [];
   const appGh = (args, o) => io.gh(args, { ...o, env: { GH_TOKEN: appToken || process.env.GH_TOKEN } });
   const inUat = (sha) => io.ghPages(`repos/${host.repo}/commits/${sha}/statuses?per_page=100`)
     .some((s) => s.context === STATUS.uat && s.creator?.login === "github-actions[bot]" && String(s.description || "").startsWith("In UAT"));
@@ -129,9 +148,10 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
       const r = createStories({ gh: appGh, repo: host.repo, spec: number, body: after, log });
       io.gh(["api", "-X", "PATCH", `repos/${host.repo}/issues/comments/${commentId}`, "-f", `body=${r.body}`]);
       host.record("stage", { story: String(number), what: r.already ? "stories already created" : `created stories ${r.numbers.map((n) => `#${n}`).join(" ")} by @${who}`, state: "running" });
+      await cards.newStory(String(number), { spec: true, stage: "created", stories: r.numbers });
       continue;
     }
-    const r = perform(id, arg, { number, isPr, pr }, who, { host, appGh, gh: io.gh, inUat });
+    const r = perform(id, arg, { number, isPr, pr, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat });
     if (r.said) io.gh(["issue", "comment", String(number), "--body", r.said]);
     if (r.done) { log(r.done); host.record("stage", { story: storyOf(pr?.headRefName || "") || (isPr ? undefined : String(number)), pr: isPr ? Number(number) : undefined, what: `${id} by @${who}`, state: "running" }); }
   }

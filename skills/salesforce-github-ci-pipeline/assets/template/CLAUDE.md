@@ -11,7 +11,8 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
   and commit `.claude/skills` (and the skills repo), so the reusable skill rebuilds exactly this. CI checks it.
 - Never commit secrets, auth URLs, keys or `.sfdx`/`.sf` folders.
 - Commit messages: `type(scope): summary (#<issue>)`, for example `feat(account): add tier field (#12)`.
-- The PR body must contain `Closes #<issue>` and a short test plan.
+- The PR body starts with `Story #<issue>` (never `Closes #`: the pipeline closes the story when it is in production)
+  and has a short test plan.
 
 ## Apex
 - One trigger per object, logic in a handler class, `with sharing` by default.

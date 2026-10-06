@@ -15,7 +15,7 @@ export const MAX_FIX_ROUNDS = 2;
 // The PR body the build writes (the `pr` skill, adapted: docs/agents/salesforce.md). The pipeline needs Closes and a test plan.
 export const PR_BODY = (key) => [
   "Write the PR body to a file with the Write tool and pass it with `--body-file`. Use these sections, briefly:",
-  `\`Closes #${key}\` (or \`Story ${key}\` for a Jira key) on the first line;`,
+  `\`Story #${key}\` (or \`Story ${key}\` for a Jira key) on the first line (never "Closes": the pipeline closes the story when it reaches production);`,
   "`## Summary`: the smallest view of what changed, e.g. a tree per object (Account -> Sales_Region__c (picklist) -> Sales_Region_Access -> Account Layout) or the Flow's decision path;",
   "`## Evidence`: the Apex and Flow test results for this change (Class.method pass/fail, coverage of changed classes);",
   "`## Merge danger`: **Door:** one-way (deletes or retypes a field, changes an org-wide default, changes data, removes access) or two-way, and **Blast radius:** in Salesforce terms (one page, every Opportunity save...);",

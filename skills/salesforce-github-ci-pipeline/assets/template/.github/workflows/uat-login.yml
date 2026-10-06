@@ -3,12 +3,13 @@ name: uat-login
 # sandbox logins). Makes the person a tester in the UAT org (Standard User + the release's permission sets) and has
 # Salesforce email them a link to set a password: no password or session is ever in GitHub. Their address comes from
 # the repository variable UAT_TESTERS ({"github-login": "email"}), else their public GitHub email.
-run-name: "${{ format('uat-login @{0} (PR #{1})', inputs.who, inputs.pr) }}"
+run-name: "${{ format('login @{0} to {1} (PR #{2})', inputs.who, inputs.target || 'UAT', inputs.pr) }}"
 on:
   workflow_dispatch:
     inputs:
       pr: { description: Release pull request number, required: true }
       who: { description: GitHub login of the tester, required: true }
+      target: { description: "A story branch (its scratch org); empty = the release's UAT org", required: false, default: "" }
 permissions:
   contents: write       # the event log
   pull-requests: write
@@ -17,7 +18,7 @@ env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   login:
-    if: vars.UAT_ENABLED == 'true'
+    if: vars.UAT_ENABLED == 'true' || inputs.target != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -33,7 +34,7 @@ jobs:
           SANDBOX: ${{ secrets.SF_UAT_USERNAME != '' }}
         run: |
           [[ "$PR" =~ ^[0-9]+$ && "$WHO" =~ ^[A-Za-z0-9-]+$ ]] || { echo "::error::bad input"; exit 1; }
-          if [ "$SANDBOX" = true ]; then gh pr comment "$PR" --body "@$WHO: UAT is a sandbox here: log in with your sandbox account (ask an admin for one)."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$SANDBOX" = true ] && [ -z "${{ inputs.target }}" ]; then gh pr comment "$PR" --body "@$WHO: UAT is a sandbox here: log in with your sandbox account (ask an admin for one)."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           EMAIL=$(jq -r --arg w "$WHO" '.[$w] // empty' <<<"${TESTERS:-{\}}" 2>/dev/null || true)
           [ -n "$EMAIL" ] || EMAIL=$(gh api "users/$WHO" --jq '.email // empty')
           if [ -z "$EMAIL" ]; then
@@ -58,5 +59,8 @@ jobs:
           EMAIL: ${{ steps.who.outputs.email }}
           SPRINT: ${{ steps.who.outputs.sprint }}
         run: |
-          node pipeline/bin/pipe.mjs org attach "uat:$SPRINT"
-          node pipeline/bin/pipe.mjs uat tester --pr "$PR" --login "$WHO" --email "$EMAIL"
+          TARGET="${{ inputs.target }}"
+          if [ -n "$TARGET" ]; then [[ "$TARGET" =~ ^(issue-[0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story branch"; exit 1; }
+            ALIAS=$(node pipeline/bin/pipe.mjs org attach "$TARGET")
+          else node pipeline/bin/pipe.mjs org attach "uat:$SPRINT" >/dev/null; ALIAS=uat; fi
+          node pipeline/bin/pipe.mjs uat tester --pr "$PR" --login "$WHO" --email "$EMAIL" --alias "$ALIAS"

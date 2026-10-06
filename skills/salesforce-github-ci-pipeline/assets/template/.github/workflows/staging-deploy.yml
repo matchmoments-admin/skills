@@ -102,8 +102,10 @@ jobs:
             !candidate/**/trace.zip
             !candidate/**/*.webm
   nudge:
-    # Separate job: the write permissions never sit next to the release branch's code.
+    # Separate job: the write permissions never sit next to the release branch's code. Runs after a failed regression
+    # too, so the release card says it failed and offers a fix.
     needs: staging
+    if: always() && needs.staging.result != 'skipped' && needs.staging.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

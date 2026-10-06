@@ -265,6 +265,24 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Never let the agent create issues itself**: it writes a JSON breakdown; `parseTickets` validates it (criteria,
   blockers point backwards, at most 15) and only a person's tick creates them, once.
 
+## Completion review (6 Oct)
+
+- **A ticked Sign off never merged later**: `gate.nudge` re-ran the gate for approvals only, not the `pipeline/sign-off`
+  status. → It counts the trusted sign-off too.
+- **Hotfix stories closed when their PR merged**, before production: PRs into main said `Closes #N`. → PR bodies say
+  `Story #N`; close-out closes the story when the release is live (and still comments on one closed early).
+- **A failed release had no way forward on its card.** → The staging follow-up runs after a failure too; the release
+  card offers **Open a fix story** (a sprint story listing the failing tests), **UAT passed** again after a UAT failure,
+  and **Start the next sprint** once shipped. Merged story cards offer **Cut the sprint's release**.
+- **Approvers could not see a story's org without the CLI.** → **Send me a login to this story's scratch org**
+  (the same emailed-tester flow as UAT).
+- **A failed UI test could not be fixed by Claude.** → The card offers the fix; ai-fix's feedback includes the Playwright
+  error.
+- **Rollback left stories "Done" and did not stop the next release.** → It reopens the stories it took out; the gate
+  refuses routes into main while a "Production rolled back" issue is open.
+- **"Blocked by" was decoration.** → The gate holds a story until its blockers are merged into the sprint or shipped.
+- **The spec issue's card never moved on.** → It follows the spec: written, breakdown proposed, stories created.
+
 ## UAT access
 
 - **The release card asked for a UAT sign-off with no way to get into UAT** (the stand-in scratch org has no human

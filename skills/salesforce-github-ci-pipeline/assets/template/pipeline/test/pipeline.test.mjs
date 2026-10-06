@@ -120,10 +120,10 @@ test("AI flags: all off = CI and an approval; each flag adds only its own verdic
   assert.deepEqual(gate.evaluate(pr({})).reasons, []);                                           // manual pipeline
   assert.match(gate.evaluate(pr({ review: true })).reasons.join(), /AI review has not run/);
   assert.doesNotMatch(gate.evaluate(pr({ review: true })).reasons.join(), /UI test/);
-  assert.match(gate.evaluate(pr({ uiTest: true })).reasons.join(), /UI test has not run on this code \(label ai:test\)/);
+  assert.match(gate.evaluate(pr({ uiTest: true })).reasons.join(), /UI test has not run on this code \(tick Have Claude write and run the UI test\)/);
   assert.deepEqual(gate.evaluate(pr({ uiTest: true }, { compare: { prFiles: ["force-app/main/default/classes/X.cls"] } })).reasons, []);   // not UI-facing
   const withSpec = { compare: { prFiles: ["force-app/main/default/layouts/A.layout-meta.xml", "e2e/story-2.spec.ts"] } };
-  assert.match(gate.evaluate(pr({}, withSpec)).reasons.join(), /UI test has not run on this code \(label test/);   // committed spec, no AI
+  assert.match(gate.evaluate(pr({}, withSpec)).reasons.join(), /UI test has not run on this code \(tick Run the committed UI test/);   // committed spec, no AI
   const failed = { ...ok(head, gate.STATUS.ui), state: "failure" };
   assert.match(gate.evaluate(pr({}, { statuses: [failed] })).reasons.join(), /UI test did not pass/);   // never ignored
 });
@@ -1306,7 +1306,8 @@ test("release card: what ships, each stage, what to do next, and only the boxes 
   assert.match(rejected, /Production rejected it/);
   const shipped = releaseCard({ ...base, pr: { ...pr, state: "MERGED" }, facts: approved, shipped: { tag: "v1", url: "https://x/v1" } });
   assert.match(shipped, /Done: sprint 2026-w45 is live in production/);
-  assert.doesNotMatch(shipped, /act:/);
+  assert.deepEqual([...shipped.matchAll(/act:([a-z-]+)/g)].map((m) => m[1]), ["sprint"], "shipped: only the next sprint");
+  assert.match(rejected, /act:fix-story/);
   assert.match(newStoryCard({ key: "120", ai: { plan: true } }), /act:plan[\s\S]*act:start[\s\S]*act:hotfix/);
 });
 
@@ -1436,7 +1437,7 @@ test("Apex tests run as production's CI user would: the story permission sets ar
 });
 
 test("engineering skills: the agents get the pr body, the spec-axis review and the diagnosing loop; the skills' conventions exist", () => {
-  assert.match(verdict.instructions("implement", { key: "106" }), /Closes #106[\s\S]*## Summary[\s\S]*## Evidence[\s\S]*## Merge danger[\s\S]*## Test plan/);
+  assert.match(verdict.instructions("implement", { key: "106" }), /Story #106[\s\S]*## Summary[\s\S]*## Evidence[\s\S]*## Merge danger[\s\S]*## Test plan/);
   assert.match(verdict.instructions("review"), /### Acceptance criteria[\s\S]*met, missing or partly met[\s\S]*### Standards/);
   assert.match(verdict.instructions("fix"), /one failing test method alone/);
   for (const f of ["docs/agents/issue-tracker.md", "docs/agents/triage-labels.md", "docs/agents/domain.md", "docs/agents/salesforce.md", "docs/org/CONTEXT.md", "CONTEXT-MAP.md"]) {
@@ -1532,4 +1533,36 @@ test("UAT access from GitHub: the card links UAT; a stand-in offers 'Send me a U
   const wf = readFileSync(new URL("../../.github/workflows/uat-login.yml", import.meta.url), "utf8");
   assert.match(wf, /::add-mask::\$EMAIL/);
   assert.doesNotMatch(wf, /generate password|org open|frontdoor/i, "no password or session in GitHub");
+});
+
+test("completion fixes: a ticked sign-off re-runs the gate later; UAT failure offers a retest; a spec card follows the spec; sprint names", () => {
+  const head = "h1";
+  const io = (statuses, reviews = []) => ({
+    gh: () => ({ state: "OPEN", labels: [], headRefName: "issue-5", baseRefName: "release/w45", headRefOid: head }),
+    ghPages: (p) => (p.includes("/reviews") ? reviews : statuses),
+  });
+  assert.equal(gate.nudge(5, io([{ context: "pipeline/sign-off", state: "success", creator: { login: "github-actions[bot]" } }])).action, "dispatch");
+  assert.equal(gate.nudge(5, io([{ context: "pipeline/sign-off", state: "success", creator: { login: "someone" } }])).action, "none");
+  const pr = { number: 110, state: "OPEN", headRefName: "release/w45", baseRefName: "main", headRefOid: "h" };
+  const st = { sha: "h", context: gate.STATUS.uat, state: "failure", description: "totals wrong", created_at: "2026-10-06T10:00:00Z", creator: { login: "github-actions[bot]" } };
+  const failedUat = releaseCard({ repoUrl: "https://github.com/o/r", pr, uat: true, facts: { checkRuns: [], statuses: [st], reviews: [] } });
+  assert.match(failedUat, /act:uat-pass[\s\S]*act:uat\b/);
+  assert.match(newStoryCard({ key: "125", spec: true, stage: "breakdown" }), /tick \*\*Create these stories\*\*/);
+  assert.match(newStoryCard({ key: "125", spec: true, stage: "created", stories: [130, 131] }), /Done: the stories are created \(#130, #131\)/);
+  assert.equal(names.nextSprint(["2026-w45", "2026-w44"]), "2026-w46");
+  assert.equal(names.nextSprint(["2026-w52"]), "2027-w01");
+  assert.match(names.nextSprint([]), /^\d{4}-w\d{2}$/);
+  assert.match(verdict.instructions("implement", { key: "7" }), /Story #7[^\n]*never "Closes"/);
+});
+
+test("the gate holds main while production is rolled back, and a story until its blockers have landed", () => {
+  const rel = { ...open(fixture(26)), ai: {} };
+  const rr = gate.evaluate({ ...rel, rolledBack: 131 });
+  assert.ok(rr.reasons.some((x) => /production was rolled back \(#131\)/.test(x)), rr.reasons.join(" | "));
+  const f = { ...open(fixture(23)), ai: {}, statuses: [], reviews: [] };
+  const blocked = gate.evaluate({ ...f, blockers: [{ number: 201, landed: false }, { number: 202, landed: true }] });
+  assert.ok(blocked.reasons.includes("blocked by #201: it has not merged into the sprint yet"));
+  assert.ok(!blocked.reasons.some((x) => /#202/.test(x)));
+  const wf = readFileSync(new URL("../../.github/workflows/rollback.yml", import.meta.url), "utf8");
+  assert.match(wf, /gh issue reopen "\$KEY"/);
 });

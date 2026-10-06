@@ -82,7 +82,7 @@ jobs:
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --base "$BASE"
       - name: The story card says it failed, and where to look
         if: failure() && steps.ctx.outcome == 'success'
-        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "starting the story" --failed --retry "fix it, then comment /start to retry"
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "starting the story" --failed --retry "no sprint open? tick Start the next sprint on the last release card (or comment /sprint-start); otherwise see the run, then tick Start again"
       - name: Remove the button label (the card shows what happened)
         if: always()
         run: gh issue edit "$KEY" --remove-label start >/dev/null 2>&1 || true
