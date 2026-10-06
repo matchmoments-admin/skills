@@ -24,7 +24,7 @@
 //   event     agent --role R --file transcript [--key K] [--pr N] · rollback --tag T --sha S   (the event log; the
 //             commands above record their own: stage, tests, validation, gate, org, verdict, lane, release)
 //   metrics   [--days N] [--out file]                   DORA and pipeline telemetry as markdown
-//   act       --number N [--pr] --by LOGIN [--by-type T] (--command "/x ..." | --before F --after F)   a person's
+//   act       --number N [--is-pr] --by LOGIN [--by-type T] (--command "/x ..." | --before F --after F)   a person's
 //             action from a comment command or a ticked card box (pipeline/src/actions.mjs)
 //   pr        card <n> | --sha S [--now "what" [--failed]] [--tag T]   the release card, or the story card of a story PR
 //   story     new <key>                                  the card of a story not started yet (boxes: plan, start)
@@ -279,7 +279,7 @@ const commands = {
   },
   "act ": async () => {
     // a person's action from a comment command (--command) or a ticked card box (--before/--after the edit)
-    const said = await actions.act({ number: flag("number"), isPr: has("pr"), who: flag("by"), whoType: flag("by-type"),
+    const said = await actions.act({ number: flag("number"), isPr: has("is-pr"), who: flag("by"), whoType: flag("by-type"),
       command: flag("command"), before: flag("before") && readFileSync(flag("before"), "utf8"), after: flag("after") && readFileSync(flag("after"), "utf8"), commentId: flag("comment") },
       { io, host, cards, log, appToken: process.env.APP_TOKEN, createStories: specs.createStories });
     return say(said);

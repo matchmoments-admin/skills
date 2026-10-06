@@ -1,4 +1,4 @@
-// A lane: one job at a time in an org, and a queue that never drops anyone (see CONTEXT.md: Lane).
+// A lane: one job at a time in an org, and a queue that never drops anyone (see GLOSSARY.md: Lane).
 //
 // GitHub's concurrency groups keep only the newest waiting run and cancel the one before it, which silently loses a
 // fix, a test run, or a required check when different jobs share an org. A lane is a git ref, refs/locks/<name>, created

@@ -1,4 +1,4 @@
-// The org registry: find, create, prepare and delete scratch orgs (see CONTEXT.md: Issue org, Staging org,
+// The org registry: find, create, prepare and delete scratch orgs (see GLOSSARY.md: Issue org, Staging org,
 // Org registry). The Dev Hub's ScratchOrgInfo records are the registry, matched on Description, so a deleted
 // org can never look alive. Logins use the CI certificate (JWT) with the Dev Hub's connected app.
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";

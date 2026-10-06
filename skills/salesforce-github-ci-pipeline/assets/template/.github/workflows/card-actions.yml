@@ -51,7 +51,7 @@ jobs:
       - name: Do what was ticked
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --before "$RUNNER_TEMP/before.md" --after "$RUNNER_TEMP/after.md" --comment "${{ github.event.comment.id }}"
+        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--is-pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --before "$RUNNER_TEMP/before.md" --after "$RUNNER_TEMP/after.md" --comment "${{ github.event.comment.id }}"
   new-story:
     if: github.event_name == 'issues' && (contains(github.event.issue.labels.*.name, 'feature') || contains(github.event.issue.labels.*.name, 'spec'))
     runs-on: ubuntu-latest

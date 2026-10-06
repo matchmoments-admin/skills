@@ -1,4 +1,4 @@
-// The code host: the GitHub calls the pipeline makes, behind one interface (see CONTEXT.md: Code host). Where a GitHub
+// The code host: the GitHub calls the pipeline makes, behind one interface (see GLOSSARY.md: Code host). Where a GitHub
 // quirk lives (commit statuses vs check runs, the App's identity, the run link), and where a call is made once per
 // process however many callers ask (the open release branch, a story's PR, a PR's gate facts). Tests pass a fake `io`.
 // A second host (Bitbucket, GitLab) would be a second adapter with this interface.

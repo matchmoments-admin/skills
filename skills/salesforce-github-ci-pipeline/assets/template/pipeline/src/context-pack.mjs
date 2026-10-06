@@ -1,5 +1,5 @@
 // The context pack: what already exists for the objects a story touches, and production's sharing model, appended to
-// the story file every agent reads (see CONTEXT.md: Context pack). Agents explore the repo anyway; the pack makes sure
+// the story file every agent reads (see GLOSSARY.md: Context pack). Agents explore the repo anyway; the pack makes sure
 // the facts that cause the worst mistakes are always in front of them (a second trigger on an object, a Flow that
 // already does it, a permission set to extend, an org-wide default the change relies on), at a fixed small size
 // however large the repo grows. Pure: pack() takes paths, a reader and the sharing model.

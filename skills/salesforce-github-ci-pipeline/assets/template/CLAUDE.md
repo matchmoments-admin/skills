@@ -4,7 +4,7 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
 
 ## Rules for every change
 - Work only on the branch you were given: the story key in branch form (`issue-12`, or a Jira key such as `LIFE-123`). Never push to `main`.
-- Never edit `.github/` or `pipeline/` in story work (the delivery pipeline itself; see `CONTEXT.md`). Pipeline
+- Never edit `.github/` or `pipeline/` in story work (the delivery pipeline itself; see `GLOSSARY.md`). Pipeline
   maintenance happens on non-story branches into main, reviewed against `REVIEW.md` only; CI blocks story PRs that touch it.
 - Keep the change scoped to the issue's acceptance criteria. Do not refactor unrelated code.
 - Pipeline maintenance: after changing `pipeline/`, `.github/`, `scripts/` or `config/`, run `scripts/skills-sync.sh`
@@ -58,7 +58,7 @@ The pipeline runs adapted versions of these on GitHub (`/spec`, `/tickets`, and 
 prompts). `to-spec`, `to-tickets`, `tdd`, `diagnosing-bugs`, `pr`, `code-review` and `improve-codebase-architecture` read
 `docs/agents/` (issue tracker and story format, label mapping, domain docs) and **`docs/agents/salesforce.md`**, which
 says what their advice means for Apex, Flows and metadata (seams, slices, tests, debugging, PR bodies, review). The
-business glossary is `docs/org/CONTEXT.md`; `CONTEXT.md` is the pipeline's.
+business glossary is `docs/org/GLOSSARY.md`; `GLOSSARY.md` is the pipeline's.
 
 ## Tests (what makes a good one)
 - Test behaviour at a seam (`docs/agents/salesforce.md`): the record after DML, a public method, the Flow's outcome, the

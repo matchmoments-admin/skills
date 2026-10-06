@@ -265,6 +265,13 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Never let the agent create issues itself**: it writes a JSON breakdown; `parseTickets` validates it (criteria,
   blockers point backwards, at most 15) and only a person's tick creates them, once.
 
+## Ticks on pull requests did nothing ("@null cannot act here")
+
+- **Every tick box and comment command on a PR was refused** after `--pr` became a value flag (for `ship candidate
+  --pr N`): `act --pr --by me` read `--by` as the PR number and the person as nobody. Issues worked (no `--pr`), so
+  it went unnoticed until the release's UAT tick. → The switch is `--is-pr`; a test fails any `has("x")` switch that is
+  also a value flag, and parses the workflows' own `act` arguments.
+
 ## Completion review (6 Oct)
 
 - **A ticked Sign off never merged later**: `gate.nudge` re-ran the gate for approvals only, not the `pipeline/sign-off`

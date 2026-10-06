@@ -1,4 +1,4 @@
-// Close-out after a production release (see CONTEXT.md). plan() is pure; gather() reads GitHub and git;
+// Close-out after a production release (see GLOSSARY.md). plan() is pure; gather() reads GitHub and git;
 // apply() acts through the tracker and the org registry.
 import { storyOf, sprintOf, releaseBranch } from "./conventions.mjs";
 

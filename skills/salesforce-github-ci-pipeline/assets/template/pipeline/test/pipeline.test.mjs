@@ -2,7 +2,7 @@ process.env.PIPELINE_BOTS = "github-actions,__owner__-pipeline";   // the pipeli
 // Tests through each module's interface. Gate fixtures are this repo's real PRs from sprint 2026-w41.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import * as names from "../src/conventions.mjs";
 import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
@@ -1165,7 +1165,9 @@ test("pipe.mjs is a thin command table: no GitHub, git or Salesforce logic of it
 });
 
 // ---------------------------------------------------------------- one engine for both skills
-test("the scratch-org skill runs this pipeline's test selection: its engine is tests.mjs, verbatim, and agrees on a real repo", async () => {
+// the scratch-org skill is vendored in the reference repo only; a repo made from the template does not carry it
+const scratchSkill = new URL("../../.claude/skills/salesforce-scratch-org-tests/scripts/engine/tests.mjs", import.meta.url);
+test("the scratch-org skill runs this pipeline's test selection: its engine is tests.mjs, verbatim, and agrees on a real repo", { skip: !existsSync(scratchSkill) && "the scratch-org skill is not vendored here" }, async () => {
   const { execFileSync } = await import("node:child_process");
   const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -1440,9 +1442,11 @@ test("engineering skills: the agents get the pr body, the spec-axis review and t
   assert.match(verdict.instructions("implement", { key: "106" }), /Story #106[\s\S]*## Summary[\s\S]*## Evidence[\s\S]*## Merge danger[\s\S]*## Test plan/);
   assert.match(verdict.instructions("review"), /### Acceptance criteria[\s\S]*met, missing or partly met[\s\S]*### Standards/);
   assert.match(verdict.instructions("fix"), /one failing test method alone/);
-  for (const f of ["docs/agents/issue-tracker.md", "docs/agents/triage-labels.md", "docs/agents/domain.md", "docs/agents/salesforce.md", "docs/org/CONTEXT.md", "CONTEXT-MAP.md"]) {
+  for (const f of ["docs/agents/issue-tracker.md", "docs/agents/triage-labels.md", "docs/agents/domain.md", "docs/agents/salesforce.md", "GLOSSARY-MAP.md"]) {
     assert.ok(readFileSync(new URL(`../../${f}`, import.meta.url), "utf8").length > 200, f);
   }
+  // the org glossary is the project's own: a new repo starts with just its heading and table
+  assert.match(readFileSync(new URL("../../docs/org/GLOSSARY.md", import.meta.url), "utf8"), /^# The Salesforce org: domain glossary[\s\S]*\| Term \| Meaning \| In the org \|/);
   const tracker = readFileSync(new URL("../../docs/agents/issue-tracker.md", import.meta.url), "utf8");
   for (const h of ["### Summary", "### Acceptance criteria", "### Access", "### Where to see it in the UI", "### Out of scope"]) assert.ok(tracker.includes(h), h);
   assert.deepEqual(plans.criteria("### Acceptance criteria\n- a\n- b\n\n### Access\nNo change"), ["a", "b"], "the Access section does not leak into the criteria");
@@ -1565,4 +1569,19 @@ test("the gate holds main while production is rolled back, and a story until its
   assert.ok(!blocked.reasons.some((x) => /#202/.test(x)));
   const wf = readFileSync(new URL("../../.github/workflows/rollback.yml", import.meta.url), "utf8");
   assert.match(wf, /gh issue reopen "\$KEY"/);
+});
+
+test("pipe act parses the workflows' own arguments: who acted and that it is a PR (a value flag must not swallow them)", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  for (const n of ["commands", "card-actions"]) assert.match(wf(n), /'--is-pr'/, n);
+  // the argument parser is the one in pipe.mjs: run a dry parse through a tiny shim of the same VALUE_FLAGS rule
+  const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  const valueFlags = new Set(JSON.parse(`[${src.match(/const VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\)/)[1].replace(/\s+/g, " ")}]`));
+  const switches = [...new Set([...src.matchAll(/has\("([a-z-]+)"\)/g)].map((m) => m[1]))];
+  assert.deepEqual(switches.filter((s) => valueFlags.has(s)), [], "a switch that is also a value flag swallows the next argument");
+  const argv = ["--number", "110", "--is-pr", "--by", "matchmoments-admin", "--by-type", "User", "--command", "/uat-pass"];
+  const flags = {};
+  for (let i = 0; i < argv.length; i++) if (argv[i].startsWith("--")) { const n = argv[i].slice(2); flags[n] = valueFlags.has(n) ? argv[++i] : true; }
+  assert.deepEqual([flags.number, flags["is-pr"], flags.by, flags["by-type"], flags.command], ["110", true, "matchmoments-admin", "User", "/uat-pass"]);
 });

@@ -1,4 +1,4 @@
-// Actions: what a person can make the pipeline do from a story or a pull request (see CONTEXT.md: Action). One
+// Actions: what a person can make the pipeline do from a story or a pull request (see GLOSSARY.md: Action). One
 // catalogue behind two doors: a tick box on the card (the card offers only the actions that make sense now) and a
 // comment command (/plan, /start, /build, /review, /fix, /test, /ship, /uat-pass ...). Both doors end in perform(), so
 // a tick and a command do exactly the same thing. Who may act is checked here too: write access, never a bot.
