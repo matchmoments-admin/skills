@@ -41,4 +41,4 @@ jobs:
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
           IS_PR: ${{ github.event.issue.pull_request != null }}
-        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --command "$BODY"
+        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--is-pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --command "$BODY"

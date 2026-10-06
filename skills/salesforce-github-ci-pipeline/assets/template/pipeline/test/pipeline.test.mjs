@@ -1566,3 +1566,18 @@ test("the gate holds main while production is rolled back, and a story until its
   const wf = readFileSync(new URL("../../.github/workflows/rollback.yml", import.meta.url), "utf8");
   assert.match(wf, /gh issue reopen "\$KEY"/);
 });
+
+test("pipe act parses the workflows' own arguments: who acted and that it is a PR (a value flag must not swallow them)", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  for (const n of ["commands", "card-actions"]) assert.match(wf(n), /'--is-pr'/, n);
+  // the argument parser is the one in pipe.mjs: run a dry parse through a tiny shim of the same VALUE_FLAGS rule
+  const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  const valueFlags = new Set(JSON.parse(`[${src.match(/const VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\)/)[1].replace(/\s+/g, " ")}]`));
+  const switches = [...new Set([...src.matchAll(/has\("([a-z-]+)"\)/g)].map((m) => m[1]))];
+  assert.deepEqual(switches.filter((s) => valueFlags.has(s)), [], "a switch that is also a value flag swallows the next argument");
+  const argv = ["--number", "110", "--is-pr", "--by", "matchmoments-admin", "--by-type", "User", "--command", "/uat-pass"];
+  const flags = {};
+  for (let i = 0; i < argv.length; i++) if (argv[i].startsWith("--")) { const n = argv[i].slice(2); flags[n] = valueFlags.has(n) ? argv[++i] : true; }
+  assert.deepEqual([flags.number, flags["is-pr"], flags.by, flags["by-type"], flags.command], ["110", true, "matchmoments-admin", "User", "/uat-pass"]);
+});
