@@ -1,7 +1,8 @@
 // The org registry: find, create, prepare and delete scratch orgs (see CONTEXT.md: Issue org, Staging org,
 // Org registry). The Dev Hub's ScratchOrgInfo records are the registry, matched on Description, so a deleted
 // org can never look alive. Logins use the CI certificate (JWT) with the Dev Hub's connected app.
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { orgFor } from "./conventions.mjs";
 import { PIPELINE_ROOT } from "./io.mjs";
@@ -179,6 +180,28 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       for (const r of rows) sf(["data", "delete", "record", "-o", alias, "-s", "PermissionSetAssignment", "-i", r.Id], { allowFail: true });
       log(`tests run as production's CI user would: ${rows.length} permission set(s) taken from ${username} for the run`);
       try { return fn(); } finally { self.prepare(alias, dir); }   // prepare gives them back (UI tests and people need them)
+    },
+
+    /**
+     * A UAT tester for a person (UAT stand-in scratch org only): a Standard User with every permission set in the
+     * source, made once per login, and a password-reset email from Salesforce to their address. No password or session
+     * ever leaves the org. Returns { username, created }.
+     */
+    tester(alias, { login, email }, dir = "force-app") {
+      const orgId = sf(["org", "display", "-o", alias]).id;
+      const username = `${String(login).toLowerCase().replace(/[^a-z0-9]/g, "")}.uat@${String(orgId).slice(0, 15).toLowerCase()}.pipeline`;
+      const found = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM User WHERE Username = '${username}'`], { allowFail: true })?.records?.[0];
+      let id = found?.Id;
+      if (!id) {
+        const made = sf(["org", "create", "user", "-o", alias, `username=${username}`, `email=${email}`, `lastName=${login}`, "profileName=Standard User", `permsets=${permissionSets(dir).join(",")}`]);
+        id = made?.fields?.id || sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM User WHERE Username = '${username}'`]).records[0].Id;
+      } else for (const p of permissionSets(dir)) sf(["org", "assign", "permset", "--name", p, "-o", alias, "--on-behalf-of", username], { allowFail: true });
+      sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", id, "-v", `Email=${email} CountryCode=AU UserPreferencesLightningExperiencePreferred=true`], { allowFail: true });
+      const apex = join(tmpdir(), `reset-${process.pid}.apex`);
+      writeFileSync(apex, `System.resetPassword('${id}', true);\n`);
+      sf(["apex", "run", "-o", alias, "--file", apex]);
+      log(`UAT tester ${username}: password email sent`);
+      return { username, created: !found };
     },
 
     /** Delete the target's org if it is alive. Returns true if one was deleted. */

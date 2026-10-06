@@ -85,7 +85,7 @@ export function verdictFor(context, { statuses = [], head, diffsToHead = {} }) {
   if (!mine.length) return { state: "missing" };
   const last = mine[mine.length - 1];
   if (!onlySpecsSince(last.sha, head, diffsToHead)) return { state: "stale", sha: last.sha };
-  return { state: last.state, description: last.description || "" };
+  return { state: last.state, description: last.description || "", url: last.url || null };
 }
 
 /** Has a person approved the code as it is now? Latest decisive review per human, on the head (or e2e-only since). */
@@ -187,7 +187,7 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
   const statuses = [];
   for (const c of pr.commits || []) {
     for (const s of ghPages(`repos/${repo}/commits/${c.oid}/statuses?per_page=100`)) {
-      if (Object.values(STATUS).includes(s.context)) statuses.push({ sha: c.oid, context: s.context, state: s.state, description: s.description, created_at: s.created_at, creator: { login: s.creator?.login } });
+      if (Object.values(STATUS).includes(s.context)) statuses.push({ sha: c.oid, context: s.context, state: s.state, description: s.description, url: s.target_url, created_at: s.created_at, creator: { login: s.creator?.login } });
     }
   }
   const diffsToHead = {};

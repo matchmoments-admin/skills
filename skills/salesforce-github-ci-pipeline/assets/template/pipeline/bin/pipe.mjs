@@ -55,7 +55,7 @@ import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -133,6 +133,13 @@ const commands = {
     for (const g of gone) record("org", { action: "deleted", org: g.description, why: g.why });
     return say(`deleted ${gone.length} orphan org(s)${gone.length ? `: ${gone.map((o) => `${o.description} (${o.why})`).join(", ")}` : ""}`);
   },
+  "uat tester": () => {
+    // a person's UAT login, emailed by Salesforce (the UAT stand-in scratch org); says where it went, never a secret
+    const r = orgs().tester("uat", { login: flag("login"), email: flag("email") });
+    const masked = flag("email").replace(/^(.).*?(@.*)$/, "$1***$2");
+    io.gh(["pr", "comment", flag("pr"), "--body", `🔑 @${flag("login")}: Salesforce has emailed **${masked}** a link to set a UAT password. Username: \`${r.username}\`. It has the release's permission sets (Standard User profile), so you test what users will see.`]);
+    return say(r.username);
+  },
   "lane acquire": () => {
     const { org, l } = orgLane(arg(0));
     const t0 = Date.now();
@@ -202,7 +209,7 @@ const commands = {
   "status set": () => {
     // a verdict on an exact commit; agent-free steps only, with the Actions token (see gate.mjs)
     const [context, state, sha, ...desc] = positional;
-    host.status(sha, context, state, desc.join(" "));
+    host.status(sha, context, state, desc.join(" "), flag("url") || host.runUrl);
     if (context.startsWith("pipeline/") && context !== gate.GATE_STATUS) record("verdict", { context, state, sha, pr: flag("pr") ? Number(flag("pr")) : undefined, why: desc.join(" ").slice(0, 139) });
     return say(`${context}=${state} on ${sha.slice(0, 7)}`);
   },

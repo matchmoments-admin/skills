@@ -80,6 +80,7 @@ jobs:
           else
             node pipeline/bin/pipe.mjs org ensure "uat:$SPRINT"
             echo "kind=scratch org standing in for a UAT sandbox" >> "$GITHUB_OUTPUT"
+            echo "url=$(sf org display -o uat --json | jq -r .result.instanceUrl)" >> "$GITHUB_OUTPUT"   # its login page (no session)
           fi
       - name: Deploy the release candidate to UAT
         if: steps.seen.outputs.skip != 'true'
@@ -95,8 +96,9 @@ jobs:
           URL: ${{ steps.org.outputs.url }}
           SPRINT: ${{ steps.pr.outputs.sprint }}
         run: |
-          node pipeline/bin/pipe.mjs status set pipeline/uat pending "$SHA" "In UAT: test it, then tick UAT passed on the release card (or /uat-fail)"
-          if [ -n "$URL" ]; then WHERE="Log in to the UAT sandbox: $URL"
-          else WHERE="It is in the UAT scratch org (\`uat-$SPRINT\`). Open it with \`node pipeline/bin/pipe.mjs org attach uat:$SPRINT && sf org open -o uat\` (needs the CI key)."; fi
+          case "$KIND" in sandbox) WHAT="sandbox" ;; *) WHAT="scratch org" ;; esac
+          node pipeline/bin/pipe.mjs status set pipeline/uat pending "$SHA" "In UAT ($WHAT): test it, then tick UAT passed on the release card" --url "$URL"
+          if [ "$KIND" = sandbox ]; then WHERE="Open UAT: $URL (log in with your sandbox account)."
+          else WHERE="Open UAT: $URL. No login yet? Tick **Send me a UAT login** on the release card: Salesforce emails you a link to set a password."; fi
           gh pr comment "$PR" --body "$(printf '**Ready for UAT** (%s), commit `%s`.\n\n%s\n\nWhen it has been tested, tick **UAT passed** on the release card (or comment **/uat-fail** with what is wrong). The release ships only after a UAT pass on this exact commit; a newer commit redeploys and needs a new sign-off.' "$KIND" "${SHA:0:7}" "$WHERE")"
           node pipeline/bin/pipe.mjs pr card "$PR"

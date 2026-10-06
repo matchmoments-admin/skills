@@ -265,6 +265,15 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Never let the agent create issues itself**: it writes a JSON breakdown; `parseTickets` validates it (criteria,
   blockers point backwards, at most 15) and only a person's tick creates them, once.
 
+## UAT access
+
+- **The release card asked for a UAT sign-off with no way to get into UAT** (the stand-in scratch org has no human
+  logins; opening it needed the CI key). → The UAT status links the org's login page; a **Send me a UAT login** box
+  (`uat-login.yml`) creates a Standard User tester with the release's permission sets and runs
+  `System.resetPassword(id, true)`, so Salesforce emails the set-password link. Never put a frontdoor URL, session or
+  password in a comment: anyone who can read the repo could use it. Emails come from `UAT_TESTERS` or the public
+  GitHub email.
+
 ## Live spec test
 
 - **The spec said a field "is not in the repo"**: `ai-spec` read `main`, but the field lived in the open sprint. → It

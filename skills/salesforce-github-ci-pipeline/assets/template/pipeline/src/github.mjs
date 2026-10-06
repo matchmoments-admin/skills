@@ -38,8 +38,8 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
     prFacts: (number, opts) => once(`facts:${number}`, () => gather(String(number), io, opts)),
 
     /** A verdict as a commit status on an exact commit, linked to this run. Agent-free steps only (see gate.mjs). */
-    status(sha, context, state, description) {
-      io.gh(["api", `repos/${repo}/statuses/${sha}`, "-f", `state=${state}`, "-f", `context=${context}`, "-f", `description=${String(description).slice(0, 139)}`, ...(host.runUrl ? ["-f", `target_url=${host.runUrl}`] : [])]);
+    status(sha, context, state, description, url = host.runUrl) {
+      io.gh(["api", `repos/${repo}/statuses/${sha}`, "-f", `state=${state}`, "-f", `context=${context}`, "-f", `description=${String(description).slice(0, 139)}`, ...(url ? ["-f", `target_url=${url}`] : [])]);
     },
 
     /** A check run on a commit, created once and updated as work progresses (the live view on the PR). Progress is

@@ -22,6 +22,7 @@ export const ACTIONS = {
   test: { label: "🧪 Run the committed UI test", on: "pr", adds: ["test"] },
   ship: { label: "🚀 Sign off: merge it into the sprint when everything is green", on: "pr" },
   "uat-pass": { label: "✅ UAT passed: tested in UAT, ready for production", on: "pr" },
+  "uat-login": { label: "🔑 Send me a UAT login (Salesforce emails you a link to set a password)", on: "pr" },
   gate: { label: "🔁 Check again (re-run the gate)", on: "pr" },
   ci: { label: "🔁 Re-run CI", on: "pr" },
   staging: { label: "🔁 Re-run the staging regression", on: "pr" },
@@ -92,6 +93,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
   if (id === "ci") { host.dispatch("ci.yml", { ref: where.pr.headRefName }, where.pr.headRefName); return { done: "re-running CI" }; }
   if (id === "staging") { host.dispatch("staging-deploy.yml", {}, where.pr.headRefName); return { done: "re-running the staging regression" }; }
   if (id === "uat") { host.dispatch("uat-deploy.yml", { pr: where.number, again: "true" }); return { done: "deploying to UAT again" }; }
+  if (id === "uat-login") { host.dispatch("uat-login.yml", { pr: where.number, who }); return { done: `sending @${who} a UAT login` }; }
   // labels start the action's own workflow; remove first, since adding a label that is already there fires nothing
   for (const l of a.adds || []) {
     appGh(["issue", "edit", String(where.number), "--remove-label", l], { allowFail: true });

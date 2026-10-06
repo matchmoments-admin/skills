@@ -1497,3 +1497,39 @@ test("labels follow conventions.mjs on main; specs read the open sprint like /pl
   assert.match(wf("labels"), /paths: \["pipeline\/src\/conventions.mjs"\]/);
   assert.match(wf("ai-spec"), /git checkout -q "origin\/\$REL"/);
 });
+
+test("UAT access from GitHub: the card links UAT; a stand-in offers 'Send me a UAT login'; the tester gets an email, never a secret", async () => {
+  const pr = { number: 110, state: "OPEN", headRefName: "release/2026-w45", baseRefName: "main", headRefOid: "h" };
+  const run = (name) => ({ name, conclusion: "success", status: "completed", started_at: "2026-10-06T08:00:00Z" });
+  const green = ["static checks (no org)", "deploy and Apex tests (scratch org)", "staging regression"].map(run);
+  const uat = (description, url) => ({ sha: "h", context: gate.STATUS.uat, state: "pending", description, url, created_at: "2026-10-06T09:00:00Z", creator: { login: "github-actions[bot]" } });
+  const card = (d, u) => releaseCard({ repoUrl: "https://github.com/o/r", pr, uat: true, facts: { checkRuns: green, statuses: [uat(d, u)], reviews: [] } });
+  const stand = card("In UAT (scratch org): test it", "https://uat-x.my.salesforce.com");
+  assert.match(stand, /\*\*\[open UAT\]\(https:\/\/uat-x\.my\.salesforce\.com\)\*\*/);
+  assert.match(stand, /act:uat-login/);
+  const sandbox = card("In UAT (sandbox): test it", "https://acme--uat.sandbox.my.salesforce.com");
+  assert.match(sandbox, /your UAT sandbox login/);
+  assert.doesNotMatch(sandbox, /act:uat-login/);
+  const did = [];
+  actions.perform("uat-login", "", { number: 110, isPr: true, pr }, "tester1", { host: { dispatch: (w, i) => did.push([w, i]) } });
+  assert.deepEqual(did, [["uat-login.yml", { pr: 110, who: "tester1" }]]);
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/uat-`);
+  mkdirSync(`${dir}/permissionsets`, { recursive: true });
+  writeFileSync(`${dir}/permissionsets/Sales_Region_Access.permissionset-meta.xml`, "<PermissionSet/>");
+  const calls = [];
+  const sf = (args) => {
+    calls.push(args.join(" "));
+    if (args[0] === "org" && args[1] === "display") return { id: "00DRt00000YW6BXMA1" };
+    if (args[0] === "data" && args[1] === "query") return { records: calls.filter((c) => c.startsWith("org create user")).length ? [{ Id: "005X" }] : [] };
+    return {};
+  };
+  const r = orgRegistry({ sf, log: () => {}, packages: [] }).tester("uat", { login: "Tester-1", email: "t@example.com" }, dir);
+  assert.deepEqual(r, { username: "tester1.uat@00drt00000yw6bx.pipeline", created: true });
+  assert.ok(calls.some((c) => /org create user .*profileName=Standard User permsets=Sales_Region_Access/.test(c)));
+  assert.ok(calls.some((c) => c.startsWith("apex run -o uat --file")), "Salesforce emails the password link");
+  const wf = readFileSync(new URL("../../.github/workflows/uat-login.yml", import.meta.url), "utf8");
+  assert.match(wf, /::add-mask::\$EMAIL/);
+  assert.doesNotMatch(wf, /generate password|org open|frontdoor/i, "no password or session in GitHub");
+});

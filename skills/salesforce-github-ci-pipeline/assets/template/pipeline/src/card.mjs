@@ -116,7 +116,9 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
   rows.push([staging, "Staging regression (Apex, Flow and UI)", staging === "failed" ? `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)` : staging === "done" ? "passed on this commit" : "runs after each merge into the sprint"]);
   if (uat) {
     const u = merged ? { state: "success" } : verdictFor(STATUS.uat, ctx);
-    const row = { success: ["done", "signed off"], failure: ["failed", `failed: ${u.description || "see the comments"}`], pending: ["running", "in UAT now: test it, then tick **UAT passed**"],
+    const open = u.url ? `**[open UAT](${u.url})** (⌘/Ctrl-click: a new tab; GitHub links cannot open one themselves)` : "open UAT";
+    const how = /scratch org/.test(u.description || "") ? " (no login yet? tick **Send me a UAT login**)" : " (your UAT sandbox login)";
+    const row = { success: ["done", "signed off"], failure: ["failed", `failed: ${u.description || "see the comments"}`], pending: ["running", `in UAT now: ${open}${how}, test it, then tick **UAT passed**`],
       stale: ["waiting", "signed off an older commit: it redeploys, then sign off again"], missing: ["waiting", "deploys after the staging regression"] }[u.state] || ["waiting", u.state];
     rows.push([row[0], "UAT sign-off", row[1]]);
   }
@@ -145,6 +147,7 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
     if (ciState === "failed") ids.push("ci");
     if (staging === "failed") ids.push("staging");
     if (at("UAT sign-off") === "running") ids.push("uat-pass");
+    if (at("UAT sign-off") === "running" && /scratch org/.test(verdictFor(STATUS.uat, ctx).description || "")) ids.push("uat-login");
     if (at("UAT sign-off") === "waiting" && staging === "done") ids.push("uat");
     if (approved && !failed) ids.push("gate");
     if (validation === "failed") ids.push("gate");

@@ -1,0 +1,62 @@
+name: uat-login
+# BUTTON: "Send me a UAT login" on the release card (the UAT stand-in scratch org; a real UAT sandbox uses people's own
+# sandbox logins). Makes the person a tester in the UAT org (Standard User + the release's permission sets) and has
+# Salesforce email them a link to set a password: no password or session is ever in GitHub. Their address comes from
+# the repository variable UAT_TESTERS ({"github-login": "email"}), else their public GitHub email.
+run-name: "${{ format('uat-login @{0} (PR #{1})', inputs.who, inputs.pr) }}"
+on:
+  workflow_dispatch:
+    inputs:
+      pr: { description: Release pull request number, required: true }
+      who: { description: GitHub login of the tester, required: true }
+permissions:
+  contents: write       # the event log
+  pull-requests: write
+  issues: write
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  login:
+    if: vars.UAT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ inputs.pr }}
+      WHO: ${{ inputs.who }}
+    steps:
+      - name: The release PR, and the tester's email
+        id: who
+        env:
+          TESTERS: ${{ vars.UAT_TESTERS }}
+          SANDBOX: ${{ secrets.SF_UAT_USERNAME != '' }}
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ && "$WHO" =~ ^[A-Za-z0-9-]+$ ]] || { echo "::error::bad input"; exit 1; }
+          if [ "$SANDBOX" = true ]; then gh pr comment "$PR" --body "@$WHO: UAT is a sandbox here: log in with your sandbox account (ask an admin for one)."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          EMAIL=$(jq -r --arg w "$WHO" '.[$w] // empty' <<<"${TESTERS:-{\}}" 2>/dev/null || true)
+          [ -n "$EMAIL" ] || EMAIL=$(gh api "users/$WHO" --jq '.email // empty')
+          if [ -z "$EMAIL" ]; then
+            gh pr comment "$PR" --body "@$WHO: I need an email to send your UAT login to. Ask an admin to add you to the repository variable \`UAT_TESTERS\` (\`{\"$WHO\": \"you@company.com\"}\`), or make your GitHub email public, then tick the box again."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "::add-mask::$EMAIL"
+          echo "email=$EMAIL" >> "$GITHUB_OUTPUT"
+          echo "sprint=$(gh pr view "$PR" --json headRefName --jq '.headRefName | sub("^release/"; "")')" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.who.outputs.skip != 'true'
+        with: { ref: main }
+      - uses: ./.github/actions/sf-auth
+        if: steps.who.outputs.skip != 'true'
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The tester, and Salesforce's email to them
+        if: steps.who.outputs.skip != 'true'
+        env:
+          EMAIL: ${{ steps.who.outputs.email }}
+          SPRINT: ${{ steps.who.outputs.sprint }}
+        run: |
+          node pipeline/bin/pipe.mjs org attach "uat:$SPRINT"
+          node pipeline/bin/pipe.mjs uat tester --pr "$PR" --login "$WHO" --email "$EMAIL"
