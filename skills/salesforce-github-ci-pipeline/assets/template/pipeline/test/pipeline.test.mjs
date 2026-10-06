@@ -1440,7 +1440,7 @@ test("engineering skills: the agents get the pr body, the spec-axis review and t
   assert.match(verdict.instructions("implement", { key: "106" }), /Story #106[\s\S]*## Summary[\s\S]*## Evidence[\s\S]*## Merge danger[\s\S]*## Test plan/);
   assert.match(verdict.instructions("review"), /### Acceptance criteria[\s\S]*met, missing or partly met[\s\S]*### Standards/);
   assert.match(verdict.instructions("fix"), /one failing test method alone/);
-  for (const f of ["docs/agents/issue-tracker.md", "docs/agents/triage-labels.md", "docs/agents/domain.md", "docs/agents/salesforce.md", "docs/org/CONTEXT.md", "CONTEXT-MAP.md"]) {
+  for (const f of ["docs/agents/issue-tracker.md", "docs/agents/triage-labels.md", "docs/agents/domain.md", "docs/agents/salesforce.md", "docs/org/GLOSSARY.md", "GLOSSARY-MAP.md"]) {
     assert.ok(readFileSync(new URL(`../../${f}`, import.meta.url), "utf8").length > 200, f);
   }
   const tracker = readFileSync(new URL("../../docs/agents/issue-tracker.md", import.meta.url), "utf8");

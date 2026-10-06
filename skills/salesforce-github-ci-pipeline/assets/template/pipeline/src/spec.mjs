@@ -1,4 +1,4 @@
-// Specs and story breakdowns, on GitHub (see CONTEXT.md: Spec, Story breakdown). The to-spec and to-tickets skills,
+// Specs and story breakdowns, on GitHub (see GLOSSARY.md: Spec, Story breakdown). The to-spec and to-tickets skills,
 // adapted to run in the pipeline: Claude writes a Spec (one comment on the spec issue, edited in place) and then a
 // breakdown into stories (JSON it writes to a file); a person approves the breakdown by ticking a box, and an
 // agent-free step creates the Story issues in the pipeline's story format, linked to the spec, blockers first.

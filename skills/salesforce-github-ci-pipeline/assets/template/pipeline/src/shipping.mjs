@@ -1,4 +1,4 @@
-// Shipping: getting one merge commit into production, keyed by its SHA (see CONTEXT.md: Shipping).
+// Shipping: getting one merge commit into production, keyed by its SHA (see GLOSSARY.md: Shipping).
 //
 // The gate validates a candidate it builds itself (the base branch's tip with the PR merged in), while it holds the
 // lock that serialises everything landing on main, so production checks exactly what main will contain. The release

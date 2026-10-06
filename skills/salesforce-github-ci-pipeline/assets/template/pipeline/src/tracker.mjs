@@ -1,4 +1,4 @@
-// The tracker: where stories and sprints live (see CONTEXT.md). One interface, two adapters.
+// The tracker: where stories and sprints live (see GLOSSARY.md). One interface, two adapters.
 //   story(key) -> { key, title, body, state: "OPEN"|"CLOSED", labels[], url }
 //   comment(key, text) · done(key, text) · carry(key, sprint, text)
 //   sprintStories(sprint) -> [{ key, title, state }] · openSprint(sprint) · closeSprint(sprint)

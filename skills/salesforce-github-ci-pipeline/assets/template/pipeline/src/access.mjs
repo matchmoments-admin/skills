@@ -1,4 +1,4 @@
-// The access check: does a change keep Salesforce access least-privilege? (see CONTEXT.md: Access check)
+// The access check: does a change keep Salesforce access least-privilege? (see GLOSSARY.md: Access check)
 // Deterministic and free, so it runs in CI with every AI switch off; the build plan, the builder and the review
 // follow the same rules (CLAUDE.md "Access"). Pure: findings() takes the changed paths and a file reader.
 //

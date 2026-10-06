@@ -1,4 +1,4 @@
-// The delivery event log: one small JSON file per thing that happened, appended to the `metrics` branch (see CONTEXT.md:
+// The delivery event log: one small JSON file per thing that happened, appended to the `metrics` branch (see GLOSSARY.md:
 // Event log). The pipeline commands that know an outcome record it themselves (a test run, a production validation, a
 // gate decision, an org made or deleted, an agent's cost, a release), so workflows need no extra steps and nothing is
 // reconstructed from leftovers later. Writing never fails the caller. The weekly metrics read the log (summarize()).

@@ -1,6 +1,6 @@
 # Architecture
 
-Workflows are thin adapters. The decisions live in `pipeline/` (Node, no dependencies), called through one interface: `node pipeline/bin/pipe.mjs <command>`. The domain words are defined in the template's `CONTEXT.md`.
+Workflows are thin adapters. The decisions live in `pipeline/` (Node, no dependencies), called through one interface: `node pipeline/bin/pipe.mjs <command>`. The domain words are defined in the template's `GLOSSARY.md`.
 
 ## Modules
 

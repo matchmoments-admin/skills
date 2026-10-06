@@ -1,4 +1,4 @@
-// Every name the pipeline uses, built and parsed in one place (see CONTEXT.md).
+// Every name the pipeline uses, built and parsed in one place (see GLOSSARY.md).
 // Pure: no I/O. Workflows get these through `pipe context`; other modules import them.
 
 export const LABELS = {

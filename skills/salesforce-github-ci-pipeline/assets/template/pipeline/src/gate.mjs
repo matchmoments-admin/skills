@@ -1,4 +1,4 @@
-// The gate: may this PR merge, and how? (see CONTEXT.md: Gate, Verdict, Sign-off)
+// The gate: may this PR merge, and how? (see GLOSSARY.md: Gate, Verdict, Sign-off)
 // evaluate() is pure: it takes recorded GitHub facts and returns the decision. gather() fetches those facts.
 //
 // Trust model: a verdict counts only as a commit status (pipeline/ai-review, pipeline/ui-test) on the exact commit
