@@ -7,7 +7,7 @@ description: Create stunning, animation-rich, zero-dependency HTML presentations
 
 Create zero-dependency, animation-rich HTML presentations that run entirely in the browser.
 
-Vendored and adapted from [zarazhangrui/frontend-slides](https://github.com/zarazhangrui/frontend-slides) (MIT). This local copy is trimmed to the core system (no 34-template "bold pack") and adds an **Ask Arthur** brand preset. Supporting files live under `slide-deck/`.
+Vendored and adapted from [zarazhangrui/frontend-slides](https://github.com/zarazhangrui/frontend-slides) (MIT). This local copy is trimmed to the core system (no 34-template "bold pack") and adds an **Ask Arthur** brand preset. Supporting files live under ``.
 
 ## Core Principles
 
@@ -46,12 +46,12 @@ These invariants apply to EVERY slide in EVERY presentation:
 - The stage scales uniformly to fit the viewport. It may letterbox/pillarbox; it must not re-layout content.
 - Do not use responsive breakpoints to rearrange slide content for phones.
 - Use fixed internal slide measurements at the 1920×1080 design size.
-- Slide visibility must be controlled by `.active` / `.visible` using `visibility`, `opacity`, and `pointer-events` from `slide-deck/viewport-base.css`. Do not use `display: none` / `display: block` for slide switching; later layout classes such as `.slide-content { display: flex; }` can override them and make every slide visible at once.
+- Slide visibility must be controlled by `.active` / `.visible` using `visibility`, `opacity`, and `pointer-events` from `viewport-base.css`. Do not use `display: none` / `display: block` for slide switching; later layout classes such as `.slide-content { display: flex; }` can override them and make every slide visible at once.
 - Use `clamp()` only for non-slide UI outside the stage, or for small fallback previews where a full stage is impractical.
 - Include `prefers-reduced-motion` support.
 - Never negate CSS functions directly (`-clamp()`, `-min()`, `-max()` are silently ignored) — use `calc(-1 * clamp(...))` instead.
 
-**When generating, read `slide-deck/viewport-base.css` and include its full contents in every presentation.**
+**When generating, read `viewport-base.css` and include its full contents in every presentation.**
 
 ### Content Density Modes
 
@@ -139,7 +139,7 @@ If the user already gave a vibe, use it. If they did not, infer the likely mood 
 
 If the user explicitly names a preset (including **Ask Arthur**), honor that as one option and generate the remaining preview slots around it.
 
-Read [slide-deck/STYLE_PRESETS.md](slide-deck/STYLE_PRESETS.md) for preset candidates.
+Read [STYLE_PRESETS.md](STYLE_PRESETS.md) for preset candidates.
 
 | Mood                | Suggested Presets                                  |
 | ------------------- | -------------------------------------------------- |
@@ -198,15 +198,15 @@ Apply the user's density choice throughout the deck:
 
 If the user's stated needs are mixed, choose the closer of the two modes instead of inventing a middle option: live audience persuasion defaults low-density; async circulation or detailed review defaults high-density. Never let high density become visual clutter — if a slide starts to overflow, split it.
 
-If the user selected a **preset** (including Ask Arthur), read its full entry in `slide-deck/STYLE_PRESETS.md` and treat it as the design recipe: preserve its fonts, palette, decorative vocabulary, spacing rhythm, and component grammar across every slide.
+If the user selected a **preset** (including Ask Arthur), read its full entry in `STYLE_PRESETS.md` and treat it as the design recipe: preserve its fonts, palette, decorative vocabulary, spacing rhythm, and component grammar across every slide.
 
 If the user selected a **self-generated custom wildcard**, treat that preview's CSS and layout as the design recipe: preserve its fonts, palette, decorative vocabulary, spacing rhythm, grid logic, and component grammar, and expand the same visual system across the full deck. Do not switch to a preset after the user picked the custom direction. Design any missing slide layouts from that system rather than importing patterns from another style.
 
 **Before generating, read these supporting files:**
 
-- [slide-deck/html-template.md](slide-deck/html-template.md) — HTML architecture and JS features
-- [slide-deck/viewport-base.css](slide-deck/viewport-base.css) — Mandatory CSS (include in full)
-- [slide-deck/animation-patterns.md](slide-deck/animation-patterns.md) — Animation reference for the chosen feeling
+- [html-template.md](html-template.md) — HTML architecture and JS features
+- [viewport-base.css](viewport-base.css) — Mandatory CSS (include in full)
+- [animation-patterns.md](animation-patterns.md) — Animation reference for the chosen feeling
 
 **Key requirements:**
 
@@ -270,10 +270,10 @@ Options: Deploy to URL / Export to PDF / Both / No thanks. If the user declines,
 
 | File                                               | Purpose                                                              | When to Read              |
 | -------------------------------------------------- | -------------------------------------------------------------------- | ------------------------- |
-| [slide-deck/STYLE_PRESETS.md](slide-deck/STYLE_PRESETS.md)         | 12 curated presets + Ask Arthur brand preset (colors, fonts, signatures) | Phase 2 (style selection) |
-| [slide-deck/viewport-base.css](slide-deck/viewport-base.css)       | Mandatory fixed-stage CSS — copy into every presentation             | Phase 3 (generation)      |
-| [slide-deck/html-template.md](slide-deck/html-template.md)         | HTML structure, JS features, inline-editing, code quality standards  | Phase 3 (generation)      |
-| [slide-deck/animation-patterns.md](slide-deck/animation-patterns.md) | CSS/JS animation snippets and effect-to-feeling guide             | Phase 3 (generation)      |
-| [slide-deck/scripts/extract-pptx.py](slide-deck/scripts/extract-pptx.py) | Python script for PPT content extraction                     | Phase 4 (conversion)      |
-| [slide-deck/scripts/deploy.sh](slide-deck/scripts/deploy.sh)       | Deploy slides to Vercel for instant sharing                          | Phase 6 (sharing)         |
-| [slide-deck/scripts/export-pdf.sh](slide-deck/scripts/export-pdf.sh) | Export slides to PDF                                              | Phase 6 (sharing)         |
+| [STYLE_PRESETS.md](STYLE_PRESETS.md)         | 12 curated presets + Ask Arthur brand preset (colors, fonts, signatures) | Phase 2 (style selection) |
+| [viewport-base.css](viewport-base.css)       | Mandatory fixed-stage CSS — copy into every presentation             | Phase 3 (generation)      |
+| [html-template.md](html-template.md)         | HTML structure, JS features, inline-editing, code quality standards  | Phase 3 (generation)      |
+| [animation-patterns.md](animation-patterns.md) | CSS/JS animation snippets and effect-to-feeling guide             | Phase 3 (generation)      |
+| [scripts/extract-pptx.py](scripts/extract-pptx.py) | Python script for PPT content extraction                     | Phase 4 (conversion)      |
+| [scripts/deploy.sh](scripts/deploy.sh)       | Deploy slides to Vercel for instant sharing                          | Phase 6 (sharing)         |
+| [scripts/export-pdf.sh](scripts/export-pdf.sh) | Export slides to PDF                                              | Phase 6 (sharing)         |
