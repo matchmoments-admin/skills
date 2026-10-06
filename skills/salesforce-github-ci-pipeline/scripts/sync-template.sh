@@ -12,7 +12,9 @@ copy() { for p in "$@"; do [ -e "$SRC/$p" ] || continue; mkdir -p "$T/$(dirname 
 copy pipeline .github scripts/ci scripts/skills-sync.sh config e2e/support playwright.config.ts \
      devhub-setup/main/default/settings \
      CLAUDE.md REVIEW.md CONTEXT.md package.json .prettierrc .eslintrc.json jest.config.js .forceignore \
-     sfdx-project.json code-analyzer.yml .gitignore
+     sfdx-project.json code-analyzer.yml .gitignore docs/agents CONTEXT-MAP.md .github/ISSUE_TEMPLATE
+# the org's business glossary is the project's own: the template starts it empty
+mkdir -p "$T/docs/org" && printf '# The Salesforce org: domain glossary\n\nThe business words specs and stories use, and what each one is in the org.\n\n| Term | Meaning | In the org |\n| --- | --- | --- |\n' > "$T/docs/org/CONTEXT.md"
 rm -rf "$T/pipeline/test/fixtures/"*.json.tmp "$T/node_modules"
 # placeholders for anything project-specific
 OWNER=$(git -C "$SRC" remote get-url origin | sed -E 's#.*github.com[:/]([^/]+)/.*#\1#')

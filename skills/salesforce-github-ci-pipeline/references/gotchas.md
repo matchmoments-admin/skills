@@ -257,7 +257,20 @@ Every entry happened in a real run. Search this file for the error text you see.
   uat-deploy's "In UAT" status.
 - **A production validation that could not start said only "could not start".** → It reports the CLI's error per level.
 
+## Story labels
+
+- **Stories looked unfinished on the issue list** (`start`, `ai:implement` stayed on for ever; nothing said "merged,
+  waiting for the release"). → Workflows remove their button label when done; the gate adds `in-sprint` when a story
+  merges into the sprint; close-out removes it and closes the story when the release is in production.
+
 ## Agent context and access
+
+- **Production rejected a release that passed CI, staging and UAT**: 7 tests read or wrote custom fields as the running
+  user. In scratch orgs `org prepare` gives that user every permission set; in production the CI user (System
+  Administrator) has none, so the fields were invisible ("No such column", "fields being inaccessible"). → CI and the
+  staging regression run Apex and Flow tests with the story permission sets taken from the running user
+  (`orgRegistry.asProductionUser`, given back afterwards); CLAUDE.md: set up and read test data in system mode and test
+  access inside `System.runAs` with a user you create.
 
 - **`/build` refused "issue-106 was not cut from release/…" once another story (or a back-merge) landed in the sprint
   after `/start`**: the route check demanded the branch contain the whole base. → `pipe gate route-check` refuses only

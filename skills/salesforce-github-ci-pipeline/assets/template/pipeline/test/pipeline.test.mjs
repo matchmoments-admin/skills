@@ -289,7 +289,7 @@ test("GitHub adapter: carry over removes the milestone; sprint stories map to ke
   const gh = (args) => { calls.push(args.join(" ")); return args[1] === "list" ? [{ number: 2, title: "Urgent", state: "OPEN" }] : null; };
   const t = githubTracker({ gh, repo: "o/r" });
   await t.carry("2", "w41", "carried");
-  assert.deepEqual(calls, ["issue comment 2 --body carried", "issue edit 2 --remove-milestone"]);
+  assert.deepEqual(calls, ["issue comment 2 --body carried", "issue edit 2 --remove-milestone --remove-label in-sprint"]);
   assert.deepEqual(await t.sprintStories("w41"), [{ key: "2", title: "Urgent", state: "OPEN" }]);
   assert.equal(adfToText({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "a" }, { type: "hardBreak" }, { type: "text", text: "b" }] }] }).trim(), "a\nb");
 });
@@ -1410,4 +1410,39 @@ test("clarity: a carried-over story says how to pick it up again; a waiting job 
   mk("1").acquire("org-issue-2");
   assert.throws(() => mk("2", (h) => waits.push(h.job)).acquire("org-issue-2", { timeoutMinutes: 5 }));
   assert.deepEqual(waits, ["ci#1"], "said once per holder");
+});
+
+test("Apex tests run as production's CI user would: the story permission sets are taken away for the run and given back", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/ps-`);
+  mkdirSync(`${dir}/permissionsets`, { recursive: true });
+  writeFileSync(`${dir}/permissionsets/Sales_Region_Access.permissionset-meta.xml`, "<PermissionSet/>");
+  const calls = [];
+  const sf = (args) => {
+    calls.push(args.slice(0, 3).join(" "));
+    if (args[0] === "org" && args[1] === "display") return { username: "admin@scratch" };
+    if (args[0] === "data" && args[1] === "query") return { records: [{ Id: "0PaX1" }] };
+    return {};
+  };
+  const r = orgRegistry({ sf, log: () => {}, packages: [] });
+  const seen = r.asProductionUser("issue-1", () => { calls.push("RUN TESTS"); return 42; }, dir);
+  assert.equal(seen, 42);
+  const at = (c) => calls.indexOf(c);
+  assert.ok(at("data delete record") < at("RUN TESTS") && at("RUN TESTS") < at("org assign permset"), calls.join(" | "));
+  assert.throws(() => r.asProductionUser("issue-1", () => { throw new Error("tests failed"); }, dir), /tests failed/);
+  assert.equal(calls.filter((c) => c === "org assign permset").length, 2, "given back even when the tests fail");
+});
+
+test("engineering skills: the agents get the pr body, the spec-axis review and the diagnosing loop; the skills' conventions exist", () => {
+  assert.match(verdict.instructions("implement", { key: "106" }), /Closes #106[\s\S]*## Summary[\s\S]*## Evidence[\s\S]*## Merge danger[\s\S]*## Test plan/);
+  assert.match(verdict.instructions("review"), /### Acceptance criteria[\s\S]*met, missing or partly met[\s\S]*### Standards/);
+  assert.match(verdict.instructions("fix"), /one failing test method alone/);
+  for (const f of ["docs/agents/issue-tracker.md", "docs/agents/triage-labels.md", "docs/agents/domain.md", "docs/agents/salesforce.md", "docs/org/CONTEXT.md", "CONTEXT-MAP.md"]) {
+    assert.ok(readFileSync(new URL(`../../${f}`, import.meta.url), "utf8").length > 200, f);
+  }
+  const tracker = readFileSync(new URL("../../docs/agents/issue-tracker.md", import.meta.url), "utf8");
+  for (const h of ["### Summary", "### Acceptance criteria", "### Access", "### Where to see it in the UI", "### Out of scope"]) assert.ok(tracker.includes(h), h);
+  assert.deepEqual(plans.criteria("### Acceptance criteria\n- a\n- b\n\n### Access\nNo change"), ["a", "b"], "the Access section does not leak into the criteria");
+  assert.ok(names.LABELS["in-sprint"] && names.LABELS.spec);
 });

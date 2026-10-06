@@ -166,6 +166,21 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       return assigned;
     },
 
+    /**
+     * Run fn with the org's running user holding none of the source's permission sets, then give them back: Apex and
+     * Flow tests run with production's access (the CI user deploys and tests as a System Administrator with no story
+     * permission set), so a test that depends on the running user's field access fails here, not at the release.
+     */
+    asProductionUser(alias, fn, dir = "force-app") {
+      const names = permissionSets(dir);
+      if (!names.length) return fn();
+      const username = sf(["org", "display", "-o", alias]).username;
+      const rows = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM PermissionSetAssignment WHERE Assignee.Username = '${username}' AND PermissionSet.Name IN (${names.map((n) => `'${n}'`).join(",")})`], { allowFail: true })?.records || [];
+      for (const r of rows) sf(["data", "delete", "record", "-o", alias, "-s", "PermissionSetAssignment", "-i", r.Id], { allowFail: true });
+      log(`tests run as production's CI user would: ${rows.length} permission set(s) taken from ${username} for the run`);
+      try { return fn(); } finally { self.prepare(alias, dir); }   // prepare gives them back (UI tests and people need them)
+    },
+
     /** Delete the target's org if it is alive. Returns true if one was deleted. */
     remove(target, opts) {
       const org = self.find(target, opts);

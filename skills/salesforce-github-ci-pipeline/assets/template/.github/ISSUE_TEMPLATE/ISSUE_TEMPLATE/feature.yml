@@ -1,0 +1,27 @@
+name: Feature
+description: A change to build in a scratch org
+labels: ["feature"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What should change and why, in two or three sentences.
+    validations: { required: true }
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: One checkable statement per line. The AI builder, reviewer and UI tester all work from these.
+      placeholder: "- A Tier picklist exists on Account with Bronze, Silver, Gold\n- Gold requires a non-empty Industry"
+    validations: { required: true }
+  - type: textarea
+    id: ui
+    attributes:
+      label: Where to see it in the UI
+      description: The page and clicks a tester should use, for example "Open an Account, edit, set Tier".
+    validations: { required: true }
+  - type: textarea
+    id: out
+    attributes:
+      label: Out of scope

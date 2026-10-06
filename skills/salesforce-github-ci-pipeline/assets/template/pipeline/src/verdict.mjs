@@ -12,6 +12,16 @@ export const UI_COMMIT_PREFIX = "test(e2e):";
 export const REVIEW_LINE = { pass: "AI-REVIEW: PASS", changes: "AI-REVIEW: CHANGES" };
 export const MAX_FIX_ROUNDS = 2;
 
+// The PR body the build writes (the `pr` skill, adapted: docs/agents/salesforce.md). The pipeline needs Closes and a test plan.
+export const PR_BODY = (key) => [
+  "Write the PR body to a file with the Write tool and pass it with `--body-file`. Use these sections, briefly:",
+  `\`Closes #${key}\` (or \`Story ${key}\` for a Jira key) on the first line;`,
+  "`## Summary`: the smallest view of what changed, e.g. a tree per object (Account -> Sales_Region__c (picklist) -> Sales_Region_Access -> Account Layout) or the Flow's decision path;",
+  "`## Evidence`: the Apex and Flow test results for this change (Class.method pass/fail, coverage of changed classes);",
+  "`## Merge danger`: **Door:** one-way (deletes or retypes a field, changes an org-wide default, changes data, removes access) or two-way, and **Blast radius:** in Salesforce terms (one page, every Opportunity save...);",
+  "`## Test plan`: how a person checks it in the scratch org.",
+].join(" ");
+
 // The cheapest model that does each job well (repo variable AI_MODEL overrides every role).
 export const MODELS = {
   implement: "claude-sonnet-5-5",
@@ -38,11 +48,11 @@ export function instructions(role, { key = "N" } = {}) {
   const common = SHELL_RULE + "\nDo not edit .github/ or pipeline/.";
   switch (role) {
     case "implement":
-      return `${common}\nCommit as \`${COMMIT.implement(key)}\` and push the branch.`;
+      return `${common}\nTests per acceptance criterion at a seam (docs/agents/salesforce.md): write a criterion's tests, deploy, run them alone (--tests Class.method), then the code; then everything the change needs.\nCommit as \`${COMMIT.implement(key)}\` and push the branch. ${PR_BODY(key)}`;
     case "fix":
-      return `${common}\nCommit as \`${COMMIT.fix}\` and push. Do not open a new PR.`;
+      return `${common}\nFor each failure, the diagnosing loop (docs/agents/salesforce.md "Debugging"): reproduce it with the one failing test method alone (\`sf apex run test --tests Class.method --synchronous\`, or \`sf flow run test --tests Flow.Test\`), read the message and stack, list the likely causes (the running user's access, Flow entry criteria, another automation on the object, bulk limits), check the most likely first, fix, run that test again, then the change's tests. For a review finding without a failing test, write the test that shows it first.\nCommit as \`${COMMIT.fix}\` and push. Do not open a new PR.`;
     case "review":
-      return `${common}\nDo not push commits. Do not approve or merge. Post ONE summary comment that ends with exactly one line: \`${REVIEW_LINE.pass}\` or \`${REVIEW_LINE.changes}\`.`;
+      return `${common}\nDo not push commits. Do not approve or merge. Post ONE summary comment with two parts: \`### Acceptance criteria\` (each criterion from the story file on its own line: met, missing or partly met, and where; then anything built that no criterion asked for) and \`### Standards\` (REVIEW.md findings by severity). A missing or partly met criterion is a [major]. End with exactly one line: \`${REVIEW_LINE.pass}\` or \`${REVIEW_LINE.changes}\`.`;
     case "plan":
       return `${common}\nDo not change any file except the plan file named in the prompt. Do not commit, push or comment. Write the plan in markdown with these sections, in order: \`### Proposed build\` (objects and fields, Flows, Apex, permission sets, layouts and pages; say what you would reuse), \`### Access\` (who must see and change what: the permission set to add or extend, each touched object's org-wide default from the story file and whether the change relies on it, and whether each Flow or class runs as the user or the system, and why), \`### Tests\` (Apex, Flow and UI tests, by acceptance criterion, including the permission test: a user without the access is refused), \`### Risks\`, \`### Open questions\` (numbered; only what you cannot decide from the story and the repo; none if there are none). End with one line: \`PLAN-SIZE: S\`, \`PLAN-SIZE: M\` or \`PLAN-SIZE: L\`.`;
     case "ui-test":

@@ -43,9 +43,28 @@ Least privilege: a user gets exactly the access the story needs, and every grant
 - Flows: record-triggered Flows run as the system (they see and change records the user cannot); say so in the plan
   when that matters. Screen and autolaunched Flows keep the default run mode; `SystemModeWithoutSharing` only with
   `sharing: <why>` in the Flow's description.
+- Tests run as production's CI user does: a System Administrator with **none** of the story permission sets (CI takes
+  them away from the scratch org's user for the test run). So set up and read test data in system mode
+  (`Database.insert(records, AccessLevel.SYSTEM_MODE)`, `[SELECT ... WITH SYSTEM_MODE]`), and test access inside
+  `System.runAs` with a user you create and assign the permission set to. A test that needs the running user to have a
+  story permission set passes in a scratch org and fails in production.
 - The permission test proves a boundary: a user **without** the story's permission set is refused (or does not see the
   field), and a user with it succeeds. A test that passes only because the org-wide default is Public Read/Write
   proves nothing; create the record as another user, or assert on access (`UserRecordAccess`, `Schema` describe).
+
+## Engineering skills and their conventions
+`to-spec`, `to-tickets`, `tdd`, `diagnosing-bugs`, `pr`, `code-review` and `improve-codebase-architecture` read
+`docs/agents/` (issue tracker and story format, label mapping, domain docs) and **`docs/agents/salesforce.md`**, which
+says what their advice means for Apex, Flows and metadata (seams, slices, tests, debugging, PR bodies, review). The
+business glossary is `docs/org/CONTEXT.md`; `CONTEXT.md` is the pipeline's.
+
+## Tests (what makes a good one)
+- Test behaviour at a seam (`docs/agents/salesforce.md`): the record after DML, a public method, the Flow's outcome, the
+  page. Never private helpers or a Flow's internal elements.
+- One test method per acceptance criterion and case (positive, negative, permission, bulk); name it after the behaviour
+  (`firstWinSetsCustomerSince`).
+- A bug fix starts with a test that fails for the reported reason.
+- A test that cannot fail (asserts what it just set, or nothing) is a blocker in review.
 
 ## The agreed plan
 When the story file has an "Agreed plan" (from `/plan`) and "Answers", build what the plan says; where an answer

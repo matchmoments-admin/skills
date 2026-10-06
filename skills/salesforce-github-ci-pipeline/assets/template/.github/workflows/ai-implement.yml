@@ -120,19 +120,22 @@ jobs:
           github-token: ${{ steps.id.outputs.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # /build and Jira dispatches arrive as the pipeline App; empty = none
           max-turns: "60"   # a story with trigger, handler, field, permission set, layout and four test categories took 42
-          allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(sf:*),Bash(git:*),Bash(npm run:*),Bash(npm install:*),Bash(npx prettier:*),Bash(npx sfdx-lwc-jest:*),Bash(ls:*),Bash(jq:*),Bash(gh pr create:*),Bash(gh pr view:*)"
+          allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(sf:*),Bash(git:*),Bash(npm run:*),Bash(npm install:*),Bash(npx prettier:*),Bash(npx sfdx-lwc-jest:*),Bash(ls:*),Bash(jq:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr edit:*)"
           prompt: |
             You are the implementer for story ${{ env.KEY }}. The story, with its acceptance criteria, is in ${{ runner.temp }}/story.md (read it with the Read tool), and the rules are in CLAUDE.md. The acceptance criteria are the scope.
             The story file ends with "The codebase today": what already exists for the objects it touches and production's org-wide defaults. Reuse and extend what exists (CLAUDE.md: one trigger per object), and follow CLAUDE.md's Access rules: least privilege through a permission set, and a permission test that would fail without it.
             You are on branch ${{ steps.ctx.outputs.STORY_BRANCH }}. The scratch org alias is ${{ steps.ctx.outputs.ORG_ALIAS }} and is already authenticated.
             Build the change in force-app, with Apex tests covering positive, negative, permission and bulk cases, a permission set entry for any new field or object, and any layout or record page users need to see it (CLAUDE.md).
             Deploy with `sf project deploy start -o ${{ steps.ctx.outputs.ORG_ALIAS }} -d force-app --ignore-conflicts`, run `sf apex run test -o ${{ steps.ctx.outputs.ORG_ALIAS }} --test-level RunLocalTests --code-coverage --result-format human --wait 20`, and fix failures until they pass. Run `npm run format` before committing.
-            Then open a pull request into ${{ steps.ctx.outputs.BASE_BRANCH }} with `gh pr create --base ${{ steps.ctx.outputs.BASE_BRANCH }} --fill`, its body naming story ${{ env.KEY }} and a short test plan. Stop after opening the PR.
+            Then open a pull request into ${{ steps.ctx.outputs.BASE_BRANCH }} with `gh pr create --base ${{ steps.ctx.outputs.BASE_BRANCH }} --title "<your commit subject>" --body-file <the body file>` (the PR body format is below). Stop after opening the PR.
       - name: Let the next job into the org's lane
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "story:$KEY" || true
+      - name: Remove the button label (the card shows what happened)
+        if: always() && github.event_name == 'issues'
+        run: gh issue edit "$KEY" --remove-label ai:implement >/dev/null 2>&1 || true
       - name: Make sure the work is pushed and a PR exists
         if: always() && steps.ctx.outcome == 'success'   # plumbing holds even when the agent step reports an error
         env:

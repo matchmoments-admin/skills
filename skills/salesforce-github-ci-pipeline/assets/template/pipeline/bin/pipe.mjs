@@ -295,11 +295,11 @@ const commands = {
     const alias = arg(0);
     const story = names.storyOf(process.env.REF || process.env.GITHUB_HEAD_REF || "");
     let polls = 0;
-    const r = tests.runForCheckout(io, {
+    const r = orgs().asProductionUser(alias, () => tests.runForCheckout(io, {
       host, alias, base: flag("base", "origin/main"), sha: flag("sha"), all: has("all"), min: Number(flag("min", "75")), outDir: flag("out", "test-results"), sleep, log,
       // the card's Now line, every ~2 minutes, reusing this process's facts (two comment edits, no re-gathering)
       onProgress: (st, title) => { if (story && polls++ % 8 === 0) cards.refresh(story, { light: true, activity: { state: "running", what: `CI is testing the change in its scratch org (${title})`, url: host.runUrl } }).catch(() => {}); },
-    });
+    }));
     if (!r.result) return say("no Salesforce changes");
     record("tests", { story, sha: flag("sha"), org: alias, mode: r.plan.mode, ok: r.result.ok, seconds: r.seconds, reasons: r.result.ok ? undefined : r.result.reasons,
       apex: { ran: r.state.apex.ran, passed: r.state.apex.passed }, flows: { ran: r.state.flows.ran, passed: r.state.flows.passed } });

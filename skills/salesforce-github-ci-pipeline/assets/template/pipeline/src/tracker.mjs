@@ -30,11 +30,12 @@ export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || proce
     },
     async done(key, text) {
       if (text) gh(["issue", "comment", String(key), "--body", text]);
+      gh(["issue", "edit", String(key), "--remove-label", "in-sprint"], { allowFail: true });
       gh(["issue", "close", String(key), "--reason", "completed"], { allowFail: true });
     },
     async carry(key, sprint, text) {
       gh(["issue", "comment", String(key), "--body", text]);
-      gh(["issue", "edit", String(key), "--remove-milestone"], { allowFail: true });
+      gh(["issue", "edit", String(key), "--remove-milestone", "--remove-label", "in-sprint"], { allowFail: true });
     },
     async sprintStories(sprint) {
       const list = gh(["issue", "list", "--milestone", milestoneTitle(sprint), "--state", "all", "--limit", "200", "--json", "number,title,state"]) || [];
