@@ -2,23 +2,26 @@
 // answer in comments, and the agreed plan joins the story as part of the spec. Pure: the tracker adapters fetch and
 // post the comments; this module decides what they say and what the agents read.
 
+import { isPipelineAuthor } from "./conventions.mjs";
+
 export const PLAN_MARK = "<!-- pipeline:build-plan -->";
 export const PLAN_TITLE = "Build plan";
 export const READINESS_MARK = "<!-- pipeline:readiness -->";
 export const READINESS_TITLE = "Story readiness";
 
-const isPipeline = (c) => /\[bot\]$|^github-actions$|^app\//.test(c.author || "") || /<!-- pipeline:/.test(c.body || "");
+// the pipeline's own comments: its exact identities (conventions.isPipelineAuthor), or anything carrying its marker
+const isPipeline = (c) => isPipelineAuthor(c.author) || c.author === "app/pipeline" || /<!-- pipeline:/.test(c.body || "");
 const isCommand = (c) => /^\s*\//.test(c.body || "");
 
 /**
  * comments: [{ author, body, created }] oldest first (GitHub issue comments or Jira comments as text).
  * Returns { plan, answers[] }: the latest build plan, and what people wrote after it (no /commands, no pipeline posts).
  */
-export function planContext(comments) {
+export function planContext(comments, { mark = PLAN_MARK, title = PLAN_TITLE } = {}) {
   const sorted = [...comments].sort((a, b) => String(a.created).localeCompare(String(b.created)));
-  const at = sorted.map((c) => ((c.body || "").includes(PLAN_MARK) || (c.body || "").includes(`### ${PLAN_TITLE}`)) && !(c.body || "").includes(PENDING)).lastIndexOf(true);
+  const at = sorted.map((c) => ((c.body || "").includes(mark) || (c.body || "").includes(`### ${title}`)) && !(c.body || "").includes(PENDING)).lastIndexOf(true);
   if (at < 0) return { plan: null, answers: [] };
-  const plan = sorted[at].body.replace(PLAN_MARK, "").trim();
+  const plan = sorted[at].body.replace(mark, "").replace(/\n\*\*Do it from here:\*\*[\s\S]*$/, "").trim();
   const answers = sorted.slice(at + 1).filter((c) => !isPipeline(c) && !isCommand(c) && (c.body || "").trim()).map((c) => ({ author: c.author, body: c.body.trim() }));
   return { plan, answers };
 }

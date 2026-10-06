@@ -1,27 +1,27 @@
-name: Feature
-description: A change to build in a scratch org
-labels: ["feature"]
+name: New spec (bigger work)
+description: Something too big for one story. Claude writes the spec and splits it into stories you approve.
+title: "Spec: "
+labels: [spec]
 body:
-  - type: textarea
-    id: summary
+  - type: markdown
     attributes:
-      label: Summary
-      description: What should change and why, in two or three sentences.
+      value: |
+        Describe the problem and what you have in mind. A card appears: tick **Write the spec with Claude**, answer its
+        questions in comments, then tick **Split it into stories**. You approve the stories before any is created.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who has the problem, and what it costs them today.
     validations: { required: true }
   - type: textarea
-    id: acceptance
+    id: idea
     attributes:
-      label: Acceptance criteria
-      description: One checkable statement per line. The AI builder, reviewer and UI tester all work from these.
-      placeholder: "- A Tier picklist exists on Account with Bronze, Silver, Gold\n- Gold requires a non-empty Industry"
+      label: What you have in mind
+      description: The outcome you want; rough is fine.
     validations: { required: true }
   - type: textarea
-    id: ui
+    id: notes
     attributes:
-      label: Where to see it in the UI
-      description: The page and clicks a tester should use, for example "Open an Account, edit, set Tier".
-    validations: { required: true }
-  - type: textarea
-    id: out
-    attributes:
-      label: Out of scope
+      label: Notes
+      description: Constraints, who may see it, data involved, deadlines.

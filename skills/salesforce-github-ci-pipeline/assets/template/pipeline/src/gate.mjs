@@ -152,8 +152,8 @@ export function evaluate(facts) {
     const u = verdictFor(STATUS.uat, ctx);
     if (u.state === "missing") reasons.push("not in UAT yet (it deploys there after the release PR opens)");
     else if (u.state === "stale") reasons.push("UAT signed off an older version; it redeploys, then sign off again (/uat-pass)");
-    else if (u.state === "pending") reasons.push("waiting for UAT sign-off: test in UAT, then comment /uat-pass (or /uat-fail)");
-    else if (u.state !== "success") reasons.push(`UAT failed (${u.description || u.state}); fix it, or comment /uat-pass after a retest`);
+    else if (u.state === "pending") reasons.push("waiting for UAT sign-off: test in UAT, then tick UAT passed on the release card (or comment /uat-pass)");
+    else if (u.state !== "success") reasons.push(`UAT failed (${u.description || u.state}); fix it, or tick UAT passed after a retest`);
   }
   if (rules.trusted) {
     if (!isPipelineAuthor(pr.author?.login)) reasons.push("a back-merge must be opened by the pipeline");

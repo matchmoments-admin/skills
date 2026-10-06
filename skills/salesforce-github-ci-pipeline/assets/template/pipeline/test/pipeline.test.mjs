@@ -25,6 +25,7 @@ import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
 import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
 import * as actions from "../src/actions.mjs";
+import * as specs from "../src/spec.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -1159,7 +1160,7 @@ test("the GitHub tracker finds a marked comment once, then edits it directly", a
 
 test("pipe.mjs is a thin command table: no GitHub, git or Salesforce logic of its own", () => {
   const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
-  assert.ok(src.split("\n").length < 400, "small");
+  assert.ok(src.split("\n").length < 450, "small: one line or a few per command");
   assert.doesNotMatch(src, /fetch\(|check-runs`, \{|sgd", "source", "delta"|createSign/);
 });
 
@@ -1312,7 +1313,7 @@ test("release card: what ships, each stage, what to do next, and only the boxes 
 test("tick boxes: the card-actions workflow acts only on a person's edit of a card, through the same pipe act as commands", () => {
   const y = readFileSync(new URL("../../.github/workflows/card-actions.yml", import.meta.url), "utf8");
   assert.match(y, /github.event.sender.type != 'Bot'/);
-  assert.match(y, /contains\(github.event.comment.body, '<!-- pipeline:story-card -->'\)/);
+  assert.match(y, /contains\(github.event.comment.body, '<!-- pipeline:'\)/);
   assert.match(y, /pipe.mjs act --number .* --before .* --after/);
   assert.match(readFileSync(new URL("../../.github/workflows/commands.yml", import.meta.url), "utf8"), /pipe.mjs act --number .* --command "\$BODY"/);
 });
@@ -1445,4 +1446,54 @@ test("engineering skills: the agents get the pr body, the spec-axis review and t
   for (const h of ["### Summary", "### Acceptance criteria", "### Access", "### Where to see it in the UI", "### Out of scope"]) assert.ok(tracker.includes(h), h);
   assert.deepEqual(plans.criteria("### Acceptance criteria\n- a\n- b\n\n### Access\nNo change"), ["a", "b"], "the Access section does not leak into the criteria");
   assert.ok(names.LABELS["in-sprint"] && names.LABELS.spec);
+});
+
+test("every workflow that refreshes a card can read checks (the card is built from the gate's facts)", () => {
+  for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml"))) {
+    const y = readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8");
+    if (!/pipe\.mjs (pr card|story card|act |gate nudge|gate evaluate)/.test(y)) continue;
+    assert.match(y, /checks: (read|write)/, `${f} refreshes a card without checks permission`);   // workflow or job level
+  }
+});
+
+// ---------------------------------------------------------------- specs and story breakdowns (to-spec, to-tickets on GitHub)
+test("spec: the comment offers the split; a breakdown is validated, approved by a tick and created once, blockers first", () => {
+  const spec = specs.specComment("### Problem\nx\n### Open questions\n1. Which regions?\n");
+  assert.match(spec, /answer the question in a comment/);
+  assert.match(spec, /act:tickets/);
+  const raw = [{ title: "Story: Region field", summary: "Sales wants it", criteria: ["- A picklist exists"], where: "Account page", blockedBy: [] },
+    { title: "Region report", summary: "Managers report on it", criteria: ["A report groups by region"], where: "Reports", blockedBy: [0] }];
+  const t = specs.parseTickets(JSON.stringify(raw));
+  assert.deepEqual([t[0].title, t[0].criteria[0], t[0].access, t[1].blockedBy], ["Region field", "A picklist exists", "No change", [0]]);
+  assert.throws(() => specs.parseTickets([{ ...raw[0], blockedBy: [1] }, raw[1]]), /does not come before it/);
+  assert.throws(() => specs.parseTickets([{ ...raw[0], criteria: [] }]), /no acceptance criteria/);
+  const body = specs.breakdownComment(t);
+  assert.match(body, /\| 2 \| \*\*Region report\*\*/);
+  assert.match(body, /act:create-stories/);
+  assert.deepEqual(specs.readBreakdown(body).tickets[1].title, "Region report");
+  const calls = [];
+  let n = 200;
+  const gh = (a) => { calls.push(a.slice(0, 2).join(" ")); if (a[0] === "issue" && a[1] === "create") { calls.push(a[a.indexOf("--body") + 1]); return `https://github.com/o/r/issues/${++n}`; } return null; };
+  const r = specs.createStories({ gh, repo: "o/r", spec: 150, body });
+  assert.deepEqual(r.numbers, [201, 202]);
+  assert.ok(calls.some((c) => /### Acceptance criteria\n\n- A report groups by region[\s\S]*Blocked by #201\.[\s\S]*Part of spec #150/.test(c)));
+  assert.match(r.body, /\*\*Created:\*\* #201, #202/);
+  assert.doesNotMatch(r.body, /act:create-stories/, "the box is gone once created");
+  assert.equal(specs.createStories({ gh: () => { throw new Error("must not create twice"); }, repo: "o/r", spec: 150, body: r.body }).already, true);
+  assert.deepEqual(plans.criteria(specs.storyBody(t[0], { spec: 150 })), ["A picklist exists"], "a created story reads like a story");
+});
+
+test("spec wiring: the agents' prompts, the spec issue form and the boxes", () => {
+  assert.match(verdict.instructions("spec"), /### One-way doors/);
+  assert.match(verdict.instructions("tickets"), /JSON array, blockers first/);
+  assert.equal(verdict.modelFor("tickets", ""), "claude-sonnet-5-5");
+  assert.match(newStoryCard({ key: "150", ai: { plan: true }, spec: true }), /act:spec/);
+  assert.deepEqual(actions.command("/tickets"), { id: "tickets", arg: "" });
+  assert.match(readFileSync(new URL("../../.github/workflows/ai-spec.yml", import.meta.url), "utf8"), /spec breakdown "\$KEY"/);
+});
+
+test("labels follow conventions.mjs on main; specs read the open sprint like /plan", () => {
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  assert.match(wf("labels"), /paths: \["pipeline\/src\/conventions.mjs"\]/);
+  assert.match(wf("ai-spec"), /git checkout -q "origin\/\$REL"/);
 });

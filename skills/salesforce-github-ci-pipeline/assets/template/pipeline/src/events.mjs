@@ -140,6 +140,7 @@ export function summarize(events, { days = 28 } = {}) {
 }
 
 export function toMarkdown(s) {
+  const runs = (n) => `${n} run${n === 1 ? "" : "s"}`;
   const v = (x, unit = "") => (x === null || x === undefined ? "n/a" : `${x}${unit}`);
   return [
     `## Delivery metrics from the event log, last ${s.days} days (${s.events} events)`, "",
@@ -149,8 +150,8 @@ export function toMarkdown(s) {
     `| Change failure rate ((hotfix releases + rollbacks) / releases) | ${v(s.dora.changeFailureRate, "%")} (${s.counts.hotfixReleases} hotfix, ${s.counts.rollbacks} rollback) |`,
     `| Time to restore (hotfix started to in production) | ${v(s.dora.timeToRestoreHours, " h")} |`, "",
     "| Stage | value |", "|---|---|",
-    `| Scratch-org tests | ${s.stages.tests.runs} runs, ${v(s.stages.tests.passRate, "%")} pass; median ${v(s.stages.tests.medianMinutesRelevant, " min")} (story) / ${v(s.stages.tests.medianMinutesAll, " min")} (all) |`,
-    `| Production validation | ${s.stages.validation.runs} runs, ${v(s.stages.validation.passRate, "%")} pass; median ${v(s.stages.validation.medianMinutes, " min")} |`,
+    `| Scratch-org tests | ${runs(s.stages.tests.runs)}, ${v(s.stages.tests.passRate, "%")} pass; median ${v(s.stages.tests.medianMinutesRelevant, " min")} (story) / ${v(s.stages.tests.medianMinutesAll, " min")} (all) |`,
+    `| Production validation | ${runs(s.stages.validation.runs)}, ${v(s.stages.validation.passRate, "%")} pass; median ${v(s.stages.validation.medianMinutes, " min")} |`,
     `| Waiting for an org's lane | ${s.stages.lanes.waits} waits, median ${v(s.stages.lanes.medianMinutes, " min")}, ${v(s.stages.lanes.totalMinutes, " runner-min")} in all |`,
     `| Scratch orgs | ${s.stages.orgs.created} created, ${s.stages.orgs.completed} finished after a failure, ${s.stages.orgs.deleted} deleted; ${v(s.stages.orgs.orgHours, " org-hours")} |`, "",
     "| What PRs waited on most (gate) | PRs |", "|---|---|",

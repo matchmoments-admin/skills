@@ -88,8 +88,10 @@ function storyActions(rows, { ai, base, ci }) {
   return allowed([...new Set(ids)], ai);
 }
 
-/** The card on a story before /start: what to do first. */
-export function newStoryCard({ key, ai = {} }) {
+/** The card on a story before /start (or a spec issue: write the spec first). */
+export function newStoryCard({ key, ai = {}, spec = false }) {
+  if (spec) return render(key, ai.plan ? "Tick **Write the spec with Claude**; answer its questions, then split it into stories." : "Write the spec in a comment, then open a story for each slice.",
+    [["waiting", "Spec", "not written yet"]], null, allowed(["spec"], ai));
   return render(key, ai.plan ? "Bigger story? Tick **Plan it with Claude** first. Small story? Tick **Start**." : "Tick **Start** when you are ready to work on it.",
     [["waiting", "Branch and scratch org", "created when you start the story"]], null, allowed(["plan", "start", "hotfix"], ai));
 }
@@ -235,8 +237,8 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
       await tracker.card(key, startingCard({ key, activity }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
     },
     /** A new story's card (before /start): what to do first, with the boxes to do it. */
-    async newStory(key) {
-      await tracker.card(key, newStoryCard({ key, ai: aiFeatures() }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
+    async newStory(key, { spec = false } = {}) {
+      await tracker.card(key, newStoryCard({ key, ai: aiFeatures(), spec }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
     },
     /** The card of the pull request a commit was merged by (the release workflow knows only the SHA). */
     async refreshCommit(sha, opts) {

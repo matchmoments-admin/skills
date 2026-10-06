@@ -28,6 +28,8 @@
 //             action from a comment command or a ticked card box (pipeline/src/actions.mjs)
 //   pr        card <n> | --sha S [--now "what" [--failed]] [--tag T]   the release card, or the story card of a story PR
 //   story     new <key>                                  the card of a story not started yet (boxes: plan, start)
+//   spec      context <n> --out F [--for tickets] · pending <n> --now W [--for tickets] [--failed] · post <n> --file F
+//             breakdown <n> --file F                    bigger work: the spec, and its stories for approval
 import { appendFileSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { io, PIPELINE_ROOT } from "../src/io.mjs";
@@ -50,9 +52,10 @@ import { lane } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
 import * as actions from "../src/actions.mjs";
+import * as specs from "../src/spec.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -255,7 +258,12 @@ const commands = {
     return say(`card updated for ${key}`);
   },
   "story base": async () => say(names.baseFor({ labels: (await tracker.story(arg(0))).labels, openReleaseBranch: host.openRelease() })),   // as /start: hotfix -> main, else the sprint
-  "story new": async () => { await cards.newStory(arg(0)); return say(`card for new story ${arg(0)}`); },
+  // ---- specs (bigger work): Claude writes the spec, splits it, a person approves the breakdown (pipeline/src/spec.mjs)
+  "spec context": async () => { writeFileSync(flag("out"), await specs.specFile(tracker, arg(0), { forTickets: flag("for") === "tickets" }) + "\n" + pack.packForCheckout(io, { text: (await tracker.story(arg(0))).body, log })); return say(`wrote ${flag("out")}`); },
+  "spec pending": async () => { const t = flag("for") === "tickets"; await tracker.card(arg(0), specs.pendingComment(t ? specs.BREAKDOWN_MARK : specs.SPEC_MARK, t ? specs.BREAKDOWN_TITLE : specs.SPEC_TITLE, { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl }), t ? specs.BREAKDOWN_MARK : specs.SPEC_MARK); return say("pending"); },
+  "spec post": async () => { await tracker.card(arg(0), specs.specComment(readFileSync(flag("file"), "utf8")), specs.SPEC_MARK); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true }); return say(`spec on #${arg(0)}`); },
+  "spec breakdown": async () => { const t = specs.parseTickets(readFileSync(flag("file"), "utf8")); await tracker.card(arg(0), specs.breakdownComment(t), specs.BREAKDOWN_MARK); return say(`${t.length} stories proposed on #${arg(0)}`); },
+  "story new": async () => { await cards.newStory(arg(0), { spec: has("spec") }); return say(`card for new ${has("spec") ? "spec" : "story"} ${arg(0)}`); },
   "pr card": async () => {
     // the card of a pull request (release card or its story's); --sha: of the PR a commit was merged by
     const activity = flag("now") ? { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl, retry: flag("retry") } : null;
@@ -265,8 +273,8 @@ const commands = {
   "act ": async () => {
     // a person's action from a comment command (--command) or a ticked card box (--before/--after the edit)
     const said = await actions.act({ number: flag("number"), isPr: has("pr"), who: flag("by"), whoType: flag("by-type"),
-      command: flag("command"), before: flag("before") && readFileSync(flag("before"), "utf8"), after: flag("after") && readFileSync(flag("after"), "utf8") },
-      { io, host, cards, log, appToken: process.env.APP_TOKEN });
+      command: flag("command"), before: flag("before") && readFileSync(flag("before"), "utf8"), after: flag("after") && readFileSync(flag("after"), "utf8"), commentId: flag("comment") },
+      { io, host, cards, log, appToken: process.env.APP_TOKEN, createStories: specs.createStories });
     return say(said);
   },
   "story plan-pending": async () => {

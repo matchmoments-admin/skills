@@ -8,6 +8,7 @@ permissions:
   actions: write        # starts CI on the release candidate without the App
   pull-requests: write
   issues: write         # the release card
+  checks: read          # the card reads the PR's checks (the gate's facts)
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:

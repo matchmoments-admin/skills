@@ -14,13 +14,14 @@ permissions:
   statuses: write        # sign-off and UAT verdicts
   issues: write
   pull-requests: write
+  checks: read          # the card reads the PR's checks (the gate's facts)
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   tick:
     if: >-
       github.event_name == 'issue_comment' && github.event.sender.type != 'Bot' &&
-      contains(github.event.comment.body, '<!-- pipeline:story-card -->') && contains(github.event.comment.body, '<!-- act:')
+      contains(github.event.comment.body, '<!-- pipeline:') && contains(github.event.comment.body, '<!-- act:')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
@@ -50,9 +51,9 @@ jobs:
       - name: Do what was ticked
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --before "$RUNNER_TEMP/before.md" --after "$RUNNER_TEMP/after.md"
+        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --before "$RUNNER_TEMP/before.md" --after "$RUNNER_TEMP/after.md" --comment "${{ github.event.comment.id }}"
   new-story:
-    if: github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'feature')
+    if: github.event_name == 'issues' && (contains(github.event.issue.labels.*.name, 'feature') || contains(github.event.issue.labels.*.name, 'spec'))
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
@@ -61,4 +62,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
-      - run: node pipeline/bin/pipe.mjs story new "${{ github.event.issue.number }}"
+      - run: node pipeline/bin/pipe.mjs story new "${{ github.event.issue.number }}" ${{ contains(github.event.issue.labels.*.name, 'spec') && '--spec' || '' }}

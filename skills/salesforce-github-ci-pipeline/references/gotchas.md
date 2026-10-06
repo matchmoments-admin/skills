@@ -257,6 +257,21 @@ Every entry happened in a real run. Search this file for the error text you see.
   uat-deploy's "In UAT" status.
 - **A production validation that could not start said only "could not start".** → It reports the CLI's error per level.
 
+## Skills on GitHub
+
+- **Local skills do not help a team that works from GitHub.** → The useful ones run in the pipeline, adapted: to-spec and
+  to-tickets as `/spec` and `/tickets` (Claude writes; a person approves the breakdown with a tick; an agent-free step
+  creates the issues), pr / code-review / diagnosing-bugs / tdd inside the build, review and fix prompts.
+- **Never let the agent create issues itself**: it writes a JSON breakdown; `parseTickets` validates it (criteria,
+  blockers point backwards, at most 15) and only a person's tick creates them, once.
+
+## Live spec test
+
+- **The spec said a field "is not in the repo"**: `ai-spec` read `main`, but the field lived in the open sprint. → It
+  reads the open sprint (else main), as `/plan` does.
+- **New labels existed only after a manual `pipe labels sync`.** → `labels.yml` syncs them whenever
+  `pipeline/src/conventions.mjs` changes on main.
+
 ## Story labels
 
 - **Stories looked unfinished on the issue list** (`start`, `ai:implement` stayed on for ever; nothing said "merged,

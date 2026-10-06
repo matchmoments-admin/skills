@@ -6,6 +6,8 @@ export const LABELS = {
   hotfix: { color: "B60205", description: "Urgent production fix: branches from main, ships after its gates" },
   start: { color: "1D76DB", description: "BUTTON: create the story branch and its scratch org" },
   "ai:plan": { color: "C2E0C6", description: "BUTTON (AI_PLAN): Claude proposes the build and asks its open questions (before /start)" },
+  "ai:spec": { color: "C2E0C6", description: "BUTTON (AI_PLAN): Claude writes the spec of a bigger piece of work" },
+  "ai:tickets": { color: "C2E0C6", description: "BUTTON (AI_PLAN): Claude splits the spec into stories for you to approve" },
   "ai:implement": { color: "5319E7", description: "BUTTON (AI_IMPLEMENT): AI builds the story in its scratch org and opens a PR" },
   "ai:review": { color: "C5DEF5", description: "BUTTON (AI_REVIEW): run the AI review again" },
   "ai:fix": { color: "FBCA04", description: "BUTTON (AI_FIX): AI fixes what the reviewers found" },

@@ -53,7 +53,8 @@ Least privilege: a user gets exactly the access the story needs, and every grant
   proves nothing; create the record as another user, or assert on access (`UserRecordAccess`, `Schema` describe).
 
 ## Engineering skills and their conventions
-`to-spec`, `to-tickets`, `tdd`, `diagnosing-bugs`, `pr`, `code-review` and `improve-codebase-architecture` read
+The pipeline runs adapted versions of these on GitHub (`/spec`, `/tickets`, and inside the build, review and fix
+prompts). `to-spec`, `to-tickets`, `tdd`, `diagnosing-bugs`, `pr`, `code-review` and `improve-codebase-architecture` read
 `docs/agents/` (issue tracker and story format, label mapping, domain docs) and **`docs/agents/salesforce.md`**, which
 says what their advice means for Apex, Flows and metadata (seams, slices, tests, debugging, PR bodies, review). The
 business glossary is `docs/org/CONTEXT.md`; `CONTEXT.md` is the pipeline's.
