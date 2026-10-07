@@ -43,7 +43,7 @@
     },
     {
       "parameters": {
-        "do_not_enforce_on_create": false,
+        "do_not_enforce_on_create": true,
         "required_status_checks": [
           {
             "context": "static checks (no org)"

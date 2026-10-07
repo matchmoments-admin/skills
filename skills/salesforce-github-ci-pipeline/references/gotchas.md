@@ -50,6 +50,8 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Auto-chain labels a merged PR** → the review finished after the merge. → Chain only when the PR is still open.
 - **An AI label while its switch is off** → nothing would run and the person waits. → An `off` job comments which variable to set and removes the label.
 
+- **sprint-start fails with GH013 "Required status check pipeline/gate is expected" when pushing `release/<sprint>`** → a required status check also applies when a branch is *created*, and main's commit never carries `pipeline/gate` (only PR heads do). → The release ruleset sets `do_not_enforce_on_create: true`: creating the sprint branch from a green main is allowed, every merge into it is still gated.
+
 ## Playwright against Lightning
 
 - **`JSON.parse` fails on `sf org open --json` inside Playwright** → Playwright sets `FORCE_COLOR`, so the CLI colours its JSON. → `login.ts` sets `FORCE_COLOR=0` for the CLI call.
