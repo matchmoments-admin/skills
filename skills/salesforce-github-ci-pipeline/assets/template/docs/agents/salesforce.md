@@ -65,7 +65,7 @@ a 200-record bulk limit (SOQL or DML in a loop).
 Summary: the smallest metadata view, for example a tree of what changed per object
 (`Account → Sales_Region__c (picklist) → Sales_Region_Access → Account Layout`) or a Flow's decision path. Evidence: the
 Apex and Flow test results for this change (class.method pass/fail, coverage of changed classes) and what the UI test
-saw; before and after for a fix. Merge Danger: one-way doors above; blast radius in Salesforce terms (one object, every
+saw (link the story's **UI evidence** comment when there is one); before and after for a fix. Merge Danger: one-way doors above; blast radius in Salesforce terms (one object, every
 user of a page, every Opportunity save). Keep `Closes #N` and the test plan.
 
 ## Review (`code-review`)

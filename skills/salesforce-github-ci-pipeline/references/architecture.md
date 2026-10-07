@@ -67,6 +67,7 @@ Every AI step is optional; the gate's `requiredVerdicts()` decides what a PR nee
 | `AI_FIX` | a person pushing fixes | none |
 | `AI_UI_TEST` | a person writing the spec | `pipeline/ui-test` required for UI-facing PRs (otherwise only when a story spec is committed) |
 | `AI_AUTO_CHAIN` | a person adding `ai:fix` / `ai:test` | none |
+| `UI_EVIDENCE` (not AI) | a reviewer logging in to look | none: a passing UI test posts its `evidence()` screenshots (WebP, ≤100 KB, ≤6) as one comment on the story, linked from the card; stored on the `evidence` branch (latest passing commit, open stories only; the janitor squashes it). Off = nothing taken, stored or posted |
 | `AI_TRIAGE` | nothing | Jev may skip a low-risk review (posts success "not needed") and re-run a flaky UI test once |
 
 A failed verdict always blocks. Models per role live in `verdict.mjs` `MODELS` (Haiku for review and UI test,

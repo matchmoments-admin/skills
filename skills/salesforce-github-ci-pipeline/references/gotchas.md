@@ -55,6 +55,8 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **`JSON.parse` fails on `sf org open --json` inside Playwright** → Playwright sets `FORCE_COLOR`, so the CLI colours its JSON. → `login.ts` sets `FORCE_COLOR=0` for the CLI call.
 - **`Cannot navigate to invalid URL`** → no `baseURL` (the org's domain is known only after login). → `openPath(page, path)`.
 - **"logged out due to inactivity" at login, intermittently** → a front-door login bounce in shaped orgs. → `login()` retries once with a fresh URL.
+- **Screenshots as evidence leak a session, or bloat the repo** → `page.url()` right after login is a front-door URL with a session id, and full-page PNGs are megabytes that live in git history forever. → `evidence()` keeps only the Lightning *path*, shrinks in the browser (canvas → WebP, 960 px, ≤100 KB; no image library), the trusted job re-checks WebP magic, size and count before publishing, each publish replaces the story's folder in one commit, and the janitor squashes the `evidence` branch to one parentless commit of open stories.
+- **WebP from GitHub in a comment** → `blob/<branch>/<file>.webp?raw=true` renders for anyone with access to the private repo (raw serves `image/webp`). The comment links records by path on the story org's instance URL (no secret); people get in with the card's **Send me a login to this story's scratch org**.
 - **Jest runs the Playwright spec** → `testPathIgnorePatterns: ["<rootDir>/e2e/"]`.
 - **Prettier breaks LWC templates (`lwc:if="{x}"`)** → HTML parser. → Prettier override `parser: lwc` for `**/lwc/**/*.html`.
 

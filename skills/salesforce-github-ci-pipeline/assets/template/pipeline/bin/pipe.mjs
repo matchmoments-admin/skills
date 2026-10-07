@@ -30,7 +30,8 @@
 //   story     new <key>                                  the card of a story not started yet (boxes: plan, start)
 //   spec      context <n> --out F [--for tickets] · pending <n> --now W [--for tickets] [--failed] · post <n> --file F
 //             breakdown <n> --file F                    bigger work: the spec, and its stories for approval
-import { appendFileSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+//   evidence  publish --key K --pr N --sha S --dir D [--org-url U] · squash   UI evidence screenshots (UI_EVIDENCE)
+import { appendFileSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { io, PIPELINE_ROOT } from "../src/io.mjs";
 import * as names from "../src/conventions.mjs";
@@ -53,9 +54,10 @@ import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
+import * as evidence from "../src/evidence.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -233,6 +235,26 @@ const commands = {
     const t = await triageUiFailure(jev(), { log: read(flag("log")), story: read(flag("story")) });
     output({ kind: t.kind, confidence: t.confidence, why: t.why });
     return say(`${t.kind} (${t.why})`);
+  },
+  // ---- UI evidence (pipeline/src/evidence.mjs): checked, stored on the evidence branch, one comment on the story
+  "evidence publish": async () => {
+    if (!evidence.evidenceOn()) return say("UI evidence is off (UI_EVIDENCE is not true): nothing posted");
+    const dir = flag("dir");
+    const files = dir && existsSync(dir) ? readdirSync(dir).map((name) => ({ name, data: readFileSync(join(dir, name)) })) : [];
+    const { shots, rejected } = evidence.check(files);
+    for (const r of rejected) log(`::warning::UI evidence not published: ${r}`);
+    if (!shots.length) return say("no UI evidence: the spec took no screenshots");
+    const [key, sha, pr] = [flag("key"), flag("sha"), flag("pr")];
+    evidence.store({ api: host.api, repo: host.repo, key, sha, shots, sleep });
+    const url = await tracker.card(key, evidence.evidenceComment({ key, pr, sha, shots, orgUrl: flag("org-url"), repoUrl: host.repoUrl }), evidence.EVIDENCE_MARK, "UI evidence");
+    output({ url: url || "", shots: shots.length });
+    return say(url || `posted ${shots.length} screenshot(s) on ${key}`);
+  },
+  "evidence squash": async () => {
+    // runs whatever the switch says, so turning UI_EVIDENCE off still clears what was stored
+    const isOpen = async (k) => { try { return (await tracker.story(k)).state !== "CLOSED"; } catch { return true; } };
+    const r = await evidence.squash({ api: host.api, repo: host.repo, isOpen });
+    return say(r ? `evidence branch: ${r.kept} open stories kept${r.removed.length ? `, removed ${r.removed.join(", ")}` : ""}` : "no evidence branch");
   },
   "triage review": async () => {
     const range = `${flag("base", "origin/main")}...${flag("head", "HEAD")}`;

@@ -2,6 +2,8 @@ name: ui-test
 # BUTTONS on a PR:
 #   `test`     runs the PR's committed story spec (e2e/story-<key>.spec.ts). No AI. Works with every AI flag off.
 #   `ai:test`  FLAG AI_UI_TEST=true: Claude writes that spec from the story and pushes it, then it runs as above.
+# FLAG UI_EVIDENCE=true: a passing run's screenshots (evidence() in the spec) go on the story as one comment, linked
+# from the card. Off (unset), the spec's evidence() calls do nothing and nothing is stored or posted.
 # The spec runs in its own job, after production access is gone; its result travels only as the step's outcome. A
 # separate job on a fresh runner posts the commit status pipeline/ui-test on that exact commit (the gate trusts
 # only that). With AI_TRIAGE=true, a failure is classified by Jev; a likely flake is re-run once.
@@ -128,6 +130,7 @@ jobs:
             Use getByRole / getByLabel locators only. Cover the happy path and one negative case from the criteria.
             Assert what the platform stores, not what you typed: Salesforce changes some values when records change state (closing an Opportunity with a future Close Date sets it to today). Use dates in the past and read the record back for the expected value.
             Test the feature as a user sees it. Never configure the org through the UI (no Lightning App Builder, no Setup pages); if the feature is not visible where the story says, that is a failure of the feature, not something to build in the test.
+            After each criterion's assertion, call `evidence(page, "AC<n>: <what it shows>", <locator of the component that shows it>)` from e2e/support/evidence.ts: one per criterion, at most 6. It takes a small screenshot for the story when the test passes (it does nothing while you run it here).
             Run it with `npx playwright test e2e/story-${{ steps.org.outputs.key }}.spec.ts`. If it fails because the feature is wrong, say so; if the test is wrong, fix the test (at most 3 attempts).
       - name: Make sure the spec is committed and pushed (even if the agent stopped early)
         if: always() && steps.org.outputs.key != ''
@@ -167,6 +170,7 @@ jobs:
       has-spec: ${{ steps.spec.outputs.exists }}
       outcome: ${{ steps.test.outcome }}
       branch: ${{ steps.spec.outputs.branch }}
+      org-url: ${{ steps.deploy.outputs.org-url }}
     steps:
       - name: The PR's head now (after any spec commit)
         id: head
@@ -202,12 +206,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH"
       - name: Deploy this exact head to the story's org and prepare it
+        id: deploy
         if: steps.spec.outputs.exists == 'true'
         run: |
           ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ensure "$BRANCH")   # attaches, or rebuilds an expired org
           node .pipeline/pipeline/bin/pipe.mjs org deploy "$ALIAS"
           node .pipeline/pipeline/bin/pipe.mjs org prepare "$ALIAS"
           echo "SCRATCH_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+          # the org's address for the evidence links (not a secret: it needs a login); never a front-door URL
+          echo "org-url=$(sf org display -o "$ALIAS" --json 2>/dev/null | jq -r '.result.instanceUrl // empty')" >> "$GITHUB_OUTPUT"
       - name: Drop production access before running the PR's spec code
         if: steps.spec.outputs.exists == 'true'
         run: |
@@ -221,6 +228,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ""
+          EVIDENCE_DIR: ${{ vars.UI_EVIDENCE == 'true' && 'ui-out/evidence' || '' }}   # empty: evidence() does nothing
         run: |
           set -o pipefail
           mkdir -p ui-out
@@ -257,13 +265,19 @@ jobs:
       KEY: ${{ needs.run.outputs.key }}
       HAS_SPEC: ${{ needs.run.outputs.has-spec }}
       OUTCOME: ${{ needs.run.outputs.outcome }}
+      ORG_URL: ${{ needs.run.outputs.org-url }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: main }
       - uses: actions/download-artifact@v4
-        if: env.OUTCOME == 'failure' && vars.AI_TRIAGE == 'true'
+        if: (env.OUTCOME == 'failure' && vars.AI_TRIAGE == 'true') || (env.OUTCOME == 'success' && vars.UI_EVIDENCE == 'true')
         continue-on-error: true
         with: { name: playwright-report, path: art }
+      - name: UI evidence on the story (screenshots checked here, never trusted as sent)
+        id: evidence
+        if: env.OUTCOME == 'success' && vars.UI_EVIDENCE == 'true' && env.HAS_SPEC == 'true'
+        continue-on-error: true   # no screenshots never fails the verdict
+        run: node pipeline/bin/pipe.mjs evidence publish --key "$KEY" --pr "$PR" --sha "$HEAD_SHA" --dir art/ui-out/evidence --org-url "$ORG_URL"
       - name: Why did it fail? (Jev triage)
         id: triage
         if: env.OUTCOME == 'failure' && vars.AI_TRIAGE == 'true'
@@ -277,12 +291,13 @@ jobs:
         env:
           KIND: ${{ steps.triage.outputs.kind }}
           WHY: ${{ steps.triage.outputs.why }}
+          EVIDENCE_URL: ${{ steps.evidence.outputs.url }}
         run: |
           gh pr edit "$PR" --remove-label ui:pass --remove-label ui:fail --remove-label test --remove-label ai:test 2>/dev/null || true
           if [ "$HAS_SPEC" != "true" ]; then
             node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "no spec e2e/story-$KEY.spec.ts committed"; gh pr edit "$PR" --add-label ui:fail
           elif [ "$OUTCOME" = "success" ]; then
-            node pipeline/bin/pipe.mjs status set pipeline/ui-test success "$HEAD_SHA" "UI test passed"; gh pr edit "$PR" --add-label ui:pass
+            node pipeline/bin/pipe.mjs status set pipeline/ui-test success "$HEAD_SHA" "UI test passed" ${EVIDENCE_URL:+--url "$EVIDENCE_URL"}; gh pr edit "$PR" --add-label ui:pass
           else
             node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "the spec failed${KIND:+ (Jev guesses: $KIND)}"; gh pr edit "$PR" --add-label ui:fail
             if [ -n "$KIND" ] && [ "$KIND" != "unknown" ]; then gh pr comment "$PR" --body "UI test failed. Jev's guess: **$KIND** ($WHY). It is a guess: check the report (screenshot and error context) before acting on it."; fi

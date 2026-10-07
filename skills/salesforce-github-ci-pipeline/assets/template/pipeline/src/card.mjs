@@ -45,9 +45,10 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
 
   const ctx = { ...(facts || {}), head: pr.headRefOid };
   for (const v of requiredVerdicts(facts || {}, key)) {
-    const got = verdictFor(v.context, ctx).state;
+    const { state: got, url } = verdictFor(v.context, ctx);
     const label = v.context === STATUS.review ? "AI review" : "UI test";
-    if (got === "success") rows.push(["done", label, v.context === STATUS.review ? "passed" : "passed in the scratch org"]);
+    const shots = url && /#issuecomment-|\/browse\//.test(url) ? `: **[see the screenshots](${url})**` : "";   // UI evidence (UI_EVIDENCE)
+    if (got === "success") rows.push(["done", label, v.context === STATUS.review ? "passed" : `passed in the scratch org${shots}`]);
     else if (["failure", "error"].includes(got)) rows.push(["failed", label, v.context === STATUS.review ? `asks for changes: [read the comments](${prUrl})` : `[see the report](${prUrl}/checks)`]);
     else if (v.required) rows.push([got === "stale" ? "waiting" : "running", label, got === "stale" ? `run it again (${v.how})` : `waiting (${v.how})`]);
     else rows.push(["off", label, v.context === STATUS.review ? "off: your approval is the review" : "not needed"]);

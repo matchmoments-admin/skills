@@ -26,6 +26,7 @@ import { codeHost } from "../src/github.mjs";
 import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
+import * as evidence from "../src/evidence.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -1584,4 +1585,89 @@ test("pipe act parses the workflows' own arguments: who acted and that it is a P
   const flags = {};
   for (let i = 0; i < argv.length; i++) if (argv[i].startsWith("--")) { const n = argv[i].slice(2); flags[n] = valueFlags.has(n) ? argv[++i] : true; }
   assert.deepEqual([flags.number, flags["is-pr"], flags.by, flags["by-type"], flags.command], ["110", true, "matchmoments-admin", "User", "/uat-pass"]);
+});
+
+// ---------------------------------------------------------------- UI evidence
+const webp = (kb = 10) => { const b = Buffer.alloc(kb * 1024); b.write("RIFF", 0, "latin1"); b.write("WEBP", 8, "latin1"); return b; };
+const meta = (o) => Buffer.from(JSON.stringify(o));
+
+test("UI evidence is behind UI_EVIDENCE: off unless exactly true, and the workflows obey it", () => {
+  assert.equal(evidence.evidenceOn({}), false);
+  assert.equal(evidence.evidenceOn({ PIPELINE_VARS: JSON.stringify({ UI_EVIDENCE: "false" }) }), false);
+  assert.equal(evidence.evidenceOn({ PIPELINE_VARS: JSON.stringify({ UI_EVIDENCE: "true" }) }), true);
+  assert.equal(evidence.evidenceOn({ UI_EVIDENCE: "TRUE" }), true);
+  const wf = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
+  // off: the spec gets no EVIDENCE_DIR (evidence() does nothing) and nothing is published; the spec step has no token
+  assert.match(wf, /GH_TOKEN: ""\n\s+EVIDENCE_DIR: \$\{\{ vars\.UI_EVIDENCE == 'true' && 'ui-out\/evidence' \|\| '' \}\}/);
+  assert.match(wf, /id: evidence\n\s+if: env\.OUTCOME == 'success' && vars\.UI_EVIDENCE == 'true'/);
+  assert.match(wf, /continue-on-error: true   # no screenshots never fails the verdict/);
+  assert.match(readFileSync(new URL("../../e2e/support/evidence.ts", import.meta.url), "utf8"), /const dir = process\.env\.EVIDENCE_DIR;\n\s+if \(!dir\) return;/);
+  assert.match(readFileSync(new URL("../../.github/workflows/scratch-janitor.yml", import.meta.url), "utf8"), /pipe\.mjs evidence squash/);
+});
+
+test("UI evidence: only small WebP shots with safe names are published, at most 6, never a URL", () => {
+  const files = [
+    { name: "01-ac1-customer-since.webp", data: webp() }, { name: "01-ac1-customer-since.json", data: meta({ caption: "AC1: *Customer* [Since]", path: "/lightning/r/Account/001xx/view" }) },
+    { name: "02-png.webp", data: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(100)]) },
+    { name: "03-big.webp", data: webp(130) },
+    { name: "../x.webp", data: webp() },
+    { name: "04-url.webp", data: webp() }, { name: "04-url.json", data: meta({ caption: "x", path: "https://evil.example/secur/frontdoor.jsp?sid=1" }) },
+    ...[5, 6, 7, 8, 9].map((n) => ({ name: `0${n}-more.webp`, data: webp() })),
+  ];
+  const { shots, rejected } = evidence.check(files);
+  assert.deepEqual(shots.map((s) => s.name), ["01-ac1-customer-since.webp", "04-url.webp", "05-more.webp", "06-more.webp", "07-more.webp", "08-more.webp"]);
+  assert.equal(shots[0].path, "/lightning/r/Account/001xx/view");
+  assert.equal(shots[1].path, null, "a URL with a query is never kept");
+  assert.ok(rejected.some((r) => /02-png\.webp: not a WebP/.test(r)));
+  assert.ok(rejected.some((r) => /03-big\.webp: 130 KB is over 120 KB/.test(r)));
+  assert.ok(rejected.some((r) => /\.\.\/x\.webp: not an evidence file name/.test(r)));
+  assert.ok(rejected.some((r) => /09-more\.webp: more than 6/.test(r)));
+
+  const body = evidence.evidenceComment({ key: "84", pr: 90, sha: "abcdef1234", shots, orgUrl: "https://x-dev-ed.scratch.my.salesforce.com", repoUrl: "https://github.com/o/r" });
+  assert.ok(body.startsWith(evidence.EVIDENCE_MARK));
+  assert.match(body, /\*\*AC1: \\\*Customer\\\* \\\[Since\\\]\*\* · \[open in the scratch org\]\(https:\/\/x-dev-ed\.scratch\.my\.salesforce\.com\/lightning\/r\/Account\/001xx\/view\)/);
+  assert.match(body, /!\[.*\]\(https:\/\/github\.com\/o\/r\/blob\/evidence\/story-84\/abcdef1\/01-ac1-customer-since\.webp\?raw=true\)/);
+  assert.match(body, /Send me a login to this story's scratch org/);
+  assert.doesNotMatch(body, /sid=|frontdoor|evil/);
+  assert.doesNotMatch(evidence.evidenceComment({ key: "84", pr: 90, sha: "abc", shots, orgUrl: "https://evil.example", repoUrl: "https://github.com/o/r" }), /open in the scratch org|evil/);
+  assert.throws(() => evidence.folder("../84"), /not a story key/);
+});
+
+test("UI evidence storage: one commit replaces the story's folder (retrying a moved branch); squash keeps open stories only", async () => {
+  const calls = [];
+  let patches = 0;
+  const api = (m, path, body) => {
+    calls.push([m, path, body]);
+    if (m === "POST" && path.endsWith("/git/blobs")) return { sha: `blob${calls.length}` };
+    if (m === "GET" && path.endsWith("/git/ref/heads/evidence")) return { object: { sha: "head1" } };
+    if (m === "GET" && path.includes("/git/commits/")) return { tree: { sha: "tree1" }, parents: [{ sha: "p" }] };
+    if (m === "GET" && path.includes("/git/trees/")) return { tree: [{ type: "blob", path: "story-84/old0000/01-a.webp", sha: "o1", mode: "100644" }, { type: "blob", path: "story-7/aaa/01-b.webp", sha: "o2", mode: "100644" }] };
+    if (m === "POST" && path.endsWith("/git/trees")) return { sha: "newtree" };
+    if (m === "POST" && path.endsWith("/git/commits")) return { sha: "newcommit" };
+    if (m === "PATCH") return ++patches === 1 && !body.force ? { status: 422, message: "not a fast forward" } : {};
+    return {};
+  };
+  const shots = [{ name: "01-a.webp", data: webp(1) }];
+  assert.equal(evidence.store({ api, repo: "o/r", key: "84", sha: "abcdef1234", shots }), "newcommit");
+  const tree = calls.filter(([m, p]) => m === "POST" && p.endsWith("/git/trees")).pop()[2];
+  assert.deepEqual(tree.tree.map((e) => [e.path, e.sha]), [["story-84/abcdef1/01-a.webp", "blob1"], ["story-84/old0000/01-a.webp", null]], "the old head's shot is deleted, other stories untouched");
+  assert.equal(calls.filter(([m]) => m === "PATCH").length, 2, "a moved branch is retried");
+
+  calls.length = 0;
+  const r = await evidence.squash({ api, repo: "o/r", isOpen: async (k) => k === "84" });
+  assert.deepEqual(r, { kept: 1, removed: ["7"] });
+  const squashTree = calls.find(([m, p]) => m === "POST" && p.endsWith("/git/trees"))[2];
+  assert.deepEqual(squashTree.tree.map((e) => e.path), ["story-84/old0000/01-a.webp"]);
+  assert.deepEqual(calls.find(([m, p]) => m === "POST" && p.endsWith("/git/commits"))[2].parents, [], "one parentless commit: old screenshots stop costing storage");
+  assert.equal(calls.find(([m]) => m === "PATCH")[2].force, true);
+});
+
+test("the card's UI test row links the evidence comment when the verdict carries it", () => {
+  const base = { key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/2026-w41" };
+  const f = { ...open(fixture(23)), ai: { uiTest: true }, reviews: [] };
+  const withUrl = (url) => ({ ...f, statuses: [{ ...ok(f.pr.headRefOid, gate.STATUS.ui), url }] });
+  const shown = storyCard({ ...base, pr: f.pr, facts: withUrl("https://github.com/o/r/issues/2#issuecomment-9"), decision: gate.evaluate(withUrl(null)) });
+  assert.match(shown, /UI test \| passed in the scratch org: \*\*\[see the screenshots\]\(https:\/\/github\.com\/o\/r\/issues\/2#issuecomment-9\)\*\*/);
+  const plain = storyCard({ ...base, pr: f.pr, facts: withUrl("https://github.com/o/r/actions/runs/1"), decision: gate.evaluate(withUrl(null)) });
+  assert.match(plain, /UI test \| passed in the scratch org \|/, "a run link is not evidence: the row stays as it was");
 });

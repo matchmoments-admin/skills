@@ -20,13 +20,15 @@ export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || proce
     async comments(key) {
       return list(`repos/${repo}/issues/${key}/comments?per_page=100`).map((c) => ({ author: c.user?.login || "", body: c.body || "", created: c.created_at }));
     },
-    /** Create or update the one comment with this marker (the story card, the build plan). The comment found is
-     *  remembered, so refreshing it again in the same process costs one call. */
+    /** Create or update the one comment with this marker (the story card, the build plan); returns its URL. The
+     *  comment found is remembered, so refreshing it again in the same process costs one call. */
     async card(key, body, mark) {
       const k = `${key}|${mark}`;
       if (!cards.has(k)) cards.set(k, list(`repos/${repo}/issues/${key}/comments?per_page=100`).find((c) => String(c.body || "").includes(mark))?.id || null);
-      if (cards.get(k)) gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${cards.get(k)}`, "-f", `body=${body}`]);
-      else { gh(["issue", "comment", String(key), "--body", body]); cards.delete(k); }
+      if (cards.get(k)) return gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${cards.get(k)}`, "-f", `body=${body}`])?.html_url || null;
+      const url = gh(["issue", "comment", String(key), "--body", body]);
+      cards.delete(k);
+      return typeof url === "string" ? url : null;
     },
     async done(key, text) {
       if (text) gh(["issue", "comment", String(key), "--body", text]);
@@ -95,6 +97,7 @@ export function jiraTracker({ fetch = globalThis.fetch, base = process.env.JIRA_
       const mine = all.find((c) => adfToText(c.body).includes(title));
       if (mine) await call("PUT", `/rest/api/3/issue/${key}/comment/${mine.id}`, { body: adfDoc(text) });
       else await this.comment(key, text);
+      return `${base.replace(/\/$/, "")}/browse/${key}`;
     },
     async done(key, text) {
       if (text) await this.comment(key, text);
