@@ -5,11 +5,15 @@
 // The spec runs untrusted (no token); this module runs in the trusted report job, so it checks every file before
 // publishing: WebP only, small, at most MAX_SHOTS, safe names, captions escaped, a Lightning path and never a URL.
 // Storage: the `evidence` branch, one folder per story holding only its latest passing head (each publish replaces
-// the folder in one commit); squash() rewrites the branch to one commit of open stories' folders, so it never grows.
+// the folder in one commit); squash() rewrites the branch to one commit of open stories' folders, so it never grows
+// (GitHub reclaims the dropped objects in its own time).
 import { setting } from "./conventions.mjs";
 
 export const BRANCH = "evidence";
 export const EVIDENCE_MARK = "<!-- pipeline:evidence -->";
+// The heading, and what Jira (which shows no HTML marker) finds the comment by: distinctive, so a person's comment that
+// merely mentions "UI evidence" is never taken for it and overwritten.
+export const EVIDENCE_TITLE = "📸 UI evidence (posted by the pipeline)";
 export const MAX_SHOTS = 6;
 export const MAX_BYTES = 120 * 1024;
 const NAME = /^(\d\d)-([a-z0-9-]{1,60})\.(webp|json)$/;
@@ -18,7 +22,11 @@ const NAME = /^(\d\d)-([a-z0-9-]{1,60})\.(webp|json)$/;
 export const evidenceOn = (env = process.env) => String(setting("UI_EVIDENCE", env) || "").trim().toLowerCase() === "true";
 
 const isWebp = (buf) => buf.length > 12 && buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP";
-const escapeMd = (s) => String(s).replace(/[\\`*_[\]<>|!#]/g, (c) => `\\${c}`).replace(/\s+/g, " ").trim();
+// A caption comes from the spec (untrusted) and is posted by the pipeline's bot: plain words only. No markdown, no
+// @mentions (they would ping people), no #references, and no links (`://` and `www.` are broken up).
+const ZWSP = "\u200b";
+export const safeCaption = (s) => String(s).normalize("NFKC").replace(/[^\p{L}\p{N} .,:;'"()%&+=?/-]/gu, "").replace(/:\/\//g, `:${ZWSP}//`)
+  .replace(/www\./gi, (m) => `${m.slice(0, 3)}${ZWSP}.`).replace(/\s+/g, " ").trim().slice(0, 140);
 
 /**
  * Check what the spec wrote. files: [{ name, data: Buffer }]. Returns { shots: [{ n, name, data, caption, path }], rejected: [why] }.
@@ -40,7 +48,7 @@ export function check(files) {
       if (f.data.length > 2048) { rejected.push(`${f.name}: over 2 KB`); continue; }
       try {
         const j = JSON.parse(f.data.toString("utf8"));
-        e.caption = escapeMd(String(j.caption || "").slice(0, 140));
+        e.caption = safeCaption(j.caption || "");
         e.path = /^\/lightning\/[A-Za-z0-9_\-/]{1,200}$/.test(String(j.path || "")) ? j.path : null;   // a path, never a URL or a query
       } catch { rejected.push(`${f.name}: not JSON`); continue; }
     }
@@ -62,16 +70,19 @@ export const imagePath = (key, sha, name) => `${folder(key)}/${String(sha).slice
 /** The evidence comment. orgUrl: the story org's instance URL (not a secret), or null. Pure. */
 export function evidenceComment({ key, pr, sha, shots, orgUrl = null, repoUrl, when = new Date() }) {
   const base = orgUrl && /^https:\/\/[a-z0-9.-]+\.(force|salesforce)\.com\/?$/i.test(orgUrl) ? orgUrl.replace(/\/$/, "") : null;
-  const lines = [EVIDENCE_MARK, `### UI evidence (${shots.length} ${shots.length === 1 ? "screenshot" : "screenshots"})`, "",
+  const lines = [EVIDENCE_MARK, `### ${EVIDENCE_TITLE}: ${shots.length} ${shots.length === 1 ? "screenshot" : "screenshots"}`, "",
     `The UI test passed on [\`${String(sha).slice(0, 7)}\`](${repoUrl}/commit/${sha}) of [#${pr}](${repoUrl}/pull/${pr}), ${when.toISOString().slice(0, 16).replace("T", " ")} UTC. Each screenshot is one acceptance criterion, as the test saw it in the story's scratch org.`];
   if (base && shots.some((s) => s.path)) lines.push("", `To look yourself: tick **Send me a login to this story's scratch org** on [#${pr}](${repoUrl}/pull/${pr}), set your password, then the links below open the records shown.`);
   for (const s of shots) {
     const img = `${repoUrl}/blob/${BRANCH}/${imagePath(key, sha, s.name)}?raw=true`;
     lines.push("", `**${s.caption}**${base && s.path ? ` · [open in the scratch org](${base}${s.path})` : ""}`, "", `![${s.caption}](${img})`);
   }
-  lines.push("", "_Replaced each time the UI test passes on a newer commit. Removed when the story is closed._");
+  lines.push("", "_Replaced each time the UI test passes on a newer commit. When the story is closed, the screenshots are deleted and this comment says so._");
   return lines.join("\n");
 }
+
+/** What the evidence comment becomes once the story is closed and its screenshots are deleted. Pure. */
+export const removedComment = () => [EVIDENCE_MARK, `### ${EVIDENCE_TITLE}: removed`, "", "The story is closed, so its screenshots were deleted from the `evidence` branch. The UI test's own verdict and report are unchanged."].join("\n");
 
 /**
  * Put the screenshots on the evidence branch, replacing the story's folder, in one commit (Git Data API: one blob per
@@ -108,8 +119,10 @@ export function store({ api, repo, key, sha, shots, sleep = () => {} }) {
 }
 
 /**
- * Rewrite the evidence branch as one parentless commit holding only the folders of stories still open, so deleted
- * screenshots stop costing storage. isOpen(key) -> boolean (unknown = keep). Returns { kept, removed } or null.
+ * Rewrite the evidence branch as one parentless commit holding only the folders of stories still open, so the branch
+ * never grows. isOpen(key) -> boolean (unknown = keep). The ref moves only if it still points where it was read
+ * (GraphQL updateRefs with beforeOid: one atomic compare-and-swap), so a publish landing meanwhile is never lost; the
+ * next sweep squashes it. Returns { kept, removed } or null (nothing there, or it moved).
  */
 export async function squash({ api, repo, isOpen }) {
   const ref = api("GET", `repos/${repo}/git/ref/heads/${BRANCH}`);
@@ -125,8 +138,15 @@ export async function squash({ api, repo, isOpen }) {
   const tree = api("POST", `repos/${repo}/git/trees`, { tree: kept.length ? kept.map((e) => ({ path: e.path, mode: e.mode, type: "blob", sha: e.sha }))
     : [{ path: "README.md", mode: "100644", type: "blob", content: "UI evidence: screenshots of open stories (pipeline/src/evidence.mjs).\n" }] });
   const commit = api("POST", `repos/${repo}/git/commits`, { message: `evidence: open stories only (${open.size})`, tree: tree.sha, parents: [] });
-  if (api("GET", `repos/${repo}/git/ref/heads/${BRANCH}`)?.object?.sha !== ref.object.sha) return null;   // a publish just landed: next sweep
-  const r = api("PATCH", `repos/${repo}/git/refs/heads/${BRANCH}`, { sha: commit.sha, force: true });
-  if (r?.status) throw new Error(`could not squash ${BRANCH}: ${r.message}`);
+  const repoId = api("GET", `repos/${repo}`)?.node_id;
+  const r = api("POST", "graphql", {
+    query: "mutation($id: ID!, $u: [RefUpdate!]!) { updateRefs(input: { repositoryId: $id, refUpdates: $u }) { clientMutationId } }",
+    variables: { id: repoId, u: [{ name: `refs/heads/${BRANCH}`, beforeOid: ref.object.sha, afterOid: commit.sha, force: true }] },
+  });
+  if (r?.status || r?.errors?.length) {
+    // GitHub answers a stale beforeOid with a generic error and leaves the ref alone: tell that apart by re-reading
+    if (api("GET", `repos/${repo}/git/ref/heads/${BRANCH}`)?.object?.sha !== ref.object.sha) return null;   // a publish just landed: next sweep
+    throw new Error(`could not squash ${BRANCH}: ${r.message || r.errors.map((e) => e.message).join("; ")}`);
+  }
   return { kept: open.size, removed };
 }

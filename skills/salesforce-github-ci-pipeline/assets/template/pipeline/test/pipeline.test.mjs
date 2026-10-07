@@ -1607,7 +1607,7 @@ test("UI evidence is behind UI_EVIDENCE: off unless exactly true, and the workfl
 
 test("UI evidence: only small WebP shots with safe names are published, at most 6, never a URL", () => {
   const files = [
-    { name: "01-ac1-customer-since.webp", data: webp() }, { name: "01-ac1-customer-since.json", data: meta({ caption: "AC1: *Customer* [Since]", path: "/lightning/r/Account/001xx/view" }) },
+    { name: "01-ac1-customer-since.webp", data: webp() }, { name: "01-ac1-customer-since.json", data: meta({ caption: "AC1: *Customer* [Since] @org/everyone see https://evil.example/x #12", path: "/lightning/r/Account/001xx/view" }) },
     { name: "02-png.webp", data: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(100)]) },
     { name: "03-big.webp", data: webp(130) },
     { name: "../x.webp", data: webp() },
@@ -1625,26 +1625,35 @@ test("UI evidence: only small WebP shots with safe names are published, at most 
 
   const body = evidence.evidenceComment({ key: "84", pr: 90, sha: "abcdef1234", shots, orgUrl: "https://x-dev-ed.scratch.my.salesforce.com", repoUrl: "https://github.com/o/r" });
   assert.ok(body.startsWith(evidence.EVIDENCE_MARK));
-  assert.match(body, /\*\*AC1: \\\*Customer\\\* \\\[Since\\\]\*\* · \[open in the scratch org\]\(https:\/\/x-dev-ed\.scratch\.my\.salesforce\.com\/lightning\/r\/Account\/001xx\/view\)/);
+  // the caption is plain words: no markdown, no @mention, no #reference, no live link (the spec that wrote it is untrusted)
+  assert.equal(shots[0].caption, "AC1: Customer Since org/everyone see https:\u200b//evil.example/x 12");
+  assert.equal(evidence.safeCaption("go to www.evil.example"), "go to www\u200b.evil.example");
+  assert.match(body, /\*\*AC1: Customer Since org\/everyone see https:\u200b\/\/evil\.example\/x 12\*\* · \[open in the scratch org\]\(https:\/\/x-dev-ed\.scratch\.my\.salesforce\.com\/lightning\/r\/Account\/001xx\/view\)/);
   assert.match(body, /!\[.*\]\(https:\/\/github\.com\/o\/r\/blob\/evidence\/story-84\/abcdef1\/01-ac1-customer-since\.webp\?raw=true\)/);
   assert.match(body, /Send me a login to this story's scratch org/);
-  assert.doesNotMatch(body, /sid=|frontdoor|evil/);
-  assert.doesNotMatch(evidence.evidenceComment({ key: "84", pr: 90, sha: "abc", shots, orgUrl: "https://evil.example", repoUrl: "https://github.com/o/r" }), /open in the scratch org|evil/);
+  assert.doesNotMatch(body, /sid=|frontdoor|@org|https:\/\/evil|#12/);
+  assert.ok(body.includes(`### ${evidence.EVIDENCE_TITLE}: 6 screenshots`), "Jira finds the comment by this distinctive title, never by plain \"UI evidence\"");
+  assert.ok(evidence.removedComment().includes(evidence.EVIDENCE_TITLE) && /screenshots were deleted/.test(evidence.removedComment()));
+  assert.doesNotMatch(evidence.evidenceComment({ key: "84", pr: 90, sha: "abc", shots, orgUrl: "https://evil.example", repoUrl: "https://github.com/o/r" }), /open in the scratch org|\]\(https:\/\/evil/);
   assert.throws(() => evidence.folder("../84"), /not a story key/);
 });
 
-test("UI evidence storage: one commit replaces the story's folder (retrying a moved branch); squash keeps open stories only", async () => {
+test("UI evidence storage: one commit replaces the story's folder (retrying a moved branch); squash keeps open stories only, atomically", async () => {
   const calls = [];
   let patches = 0;
+  let graphql = {};
+  let moved = false;
   const api = (m, path, body) => {
     calls.push([m, path, body]);
     if (m === "POST" && path.endsWith("/git/blobs")) return { sha: `blob${calls.length}` };
-    if (m === "GET" && path.endsWith("/git/ref/heads/evidence")) return { object: { sha: "head1" } };
+    if (m === "GET" && path.endsWith("/git/ref/heads/evidence")) return { object: { sha: moved ? "head2" : "head1" } };
     if (m === "GET" && path.includes("/git/commits/")) return { tree: { sha: "tree1" }, parents: [{ sha: "p" }] };
     if (m === "GET" && path.includes("/git/trees/")) return { tree: [{ type: "blob", path: "story-84/old0000/01-a.webp", sha: "o1", mode: "100644" }, { type: "blob", path: "story-7/aaa/01-b.webp", sha: "o2", mode: "100644" }] };
     if (m === "POST" && path.endsWith("/git/trees")) return { sha: "newtree" };
     if (m === "POST" && path.endsWith("/git/commits")) return { sha: "newcommit" };
     if (m === "PATCH") return ++patches === 1 && !body.force ? { status: 422, message: "not a fast forward" } : {};
+    if (m === "GET" && path === "repos/o/r") return { node_id: "R_1" };
+    if (m === "POST" && path === "graphql") return graphql;
     return {};
   };
   const shots = [{ name: "01-a.webp", data: webp(1) }];
@@ -1658,8 +1667,19 @@ test("UI evidence storage: one commit replaces the story's folder (retrying a mo
   assert.deepEqual(r, { kept: 1, removed: ["7"] });
   const squashTree = calls.find(([m, p]) => m === "POST" && p.endsWith("/git/trees"))[2];
   assert.deepEqual(squashTree.tree.map((e) => e.path), ["story-84/old0000/01-a.webp"]);
-  assert.deepEqual(calls.find(([m, p]) => m === "POST" && p.endsWith("/git/commits"))[2].parents, [], "one parentless commit: old screenshots stop costing storage");
-  assert.equal(calls.find(([m]) => m === "PATCH")[2].force, true);
+  assert.deepEqual(calls.find(([m, p]) => m === "POST" && p.endsWith("/git/commits"))[2].parents, [], "one parentless commit: the branch never grows");
+  assert.equal(calls.some(([m]) => m === "PATCH"), false, "never a blind forced PATCH");
+  const swap = calls.find(([m, p]) => m === "POST" && p === "graphql")[2];
+  assert.match(swap.query, /updateRefs/);
+  assert.deepEqual(swap.variables, { id: "R_1", u: [{ name: "refs/heads/evidence", beforeOid: "head1", afterOid: "newcommit", force: true }] }, "moves only if the branch is still where it was read");
+  // GitHub answers a stale beforeOid with a generic error (seen live), and gh exits non-zero: the api seam's { status }
+  graphql = { status: 500, message: "Something went wrong while executing your query" };
+  const realApi = api;
+  let reads = 0;
+  const racing = (m, path, body) => { if (m === "GET" && path.endsWith("/git/ref/heads/evidence") && ++reads > 1) moved = true; return realApi(m, path, body); };
+  assert.equal(await evidence.squash({ api: racing, repo: "o/r", isOpen: async (k) => k === "84" }), null, "a publish landed meanwhile: nothing lost, the next sweep squashes");
+  moved = false;
+  await assert.rejects(evidence.squash({ api, repo: "o/r", isOpen: async (k) => k === "84" }), /could not squash evidence/, "an error with the branch unmoved is reported");
 });
 
 test("the card's UI test row links the evidence comment when the verdict carries it", () => {
@@ -1670,4 +1690,32 @@ test("the card's UI test row links the evidence comment when the verdict carries
   assert.match(shown, /UI test \| passed in the scratch org: \*\*\[see the screenshots\]\(https:\/\/github\.com\/o\/r\/issues\/2#issuecomment-9\)\*\*/);
   const plain = storyCard({ ...base, pr: f.pr, facts: withUrl("https://github.com/o/r/actions/runs/1"), decision: gate.evaluate(withUrl(null)) });
   assert.match(plain, /UI test \| passed in the scratch org \|/, "a run link is not evidence: the row stays as it was");
+});
+
+test("evidence() in a real browser: boxed small WebP the trusted check accepts; no-match skips fast; retries and shared captions", async (t) => {
+  const { chromium } = await import("@playwright/test");
+  if (!existsSync(chromium.executablePath())) return t.skip("no Playwright Chromium here (CI installs it in static checks)");
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "evidence-"));
+  try {
+    execFileSync("npx", ["playwright", "test", "-c", "pipeline/test/evidence/playwright.config.ts"], { env: { ...process.env, EVIDENCE_DIR: dir }, stdio: "pipe", cwd: new URL("../../", import.meta.url).pathname });
+    const files = readdirSync(dir).map((name) => ({ name, data: readFileSync(join(dir, name)) }));
+    const { shots, rejected } = evidence.check(files);
+    assert.deepEqual(rejected, [], "everything the helper writes passes the trusted check");
+    const captions = shots.map((s) => s.caption).sort();
+    assert.deepEqual(captions, ["AC1: Customer Since is set", "AC3: many values", "AC4: same caption", "AC4: same caption", "AC5: the passing retry"]);
+    for (const s of shots) assert.ok(s.data.length <= 100 * 1024, `${s.name} is ${s.data.length} bytes`);
+    assert.ok(!files.some((f) => /only-in-the-failed-attempt/.test(f.name)), "a failed attempt's shot is not evidence");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("UI evidence is in the event log and the weekly metrics", () => {
+  const at = "2026-10-07T09:30:00Z";
+  const s = events.summarize([{ kind: "evidence", at, story: "134", shots: 2, rejected: 0, kb: 28 }, { kind: "evidence", at, story: "135", shots: 0, rejected: 3, kb: 0 }], { days: 7 });
+  assert.deepEqual(s.stages.evidence, { posts: 1, shots: 2, rejected: 3, medianKbPerShot: 14, totalKb: 28 });
+  assert.match(events.toMarkdown(s), /\| UI evidence \| 1 posts, 2 screenshots \(3 refused\); median 14 KB each, 28 KB in all \|/);
+  assert.doesNotThrow(() => events.event("evidence", { story: "1", shots: 1 }));
 });

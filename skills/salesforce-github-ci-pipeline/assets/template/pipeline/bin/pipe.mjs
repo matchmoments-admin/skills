@@ -243,10 +243,12 @@ const commands = {
     const files = dir && existsSync(dir) ? readdirSync(dir).map((name) => ({ name, data: readFileSync(join(dir, name)) })) : [];
     const { shots, rejected } = evidence.check(files);
     for (const r of rejected) log(`::warning::UI evidence not published: ${r}`);
-    if (!shots.length) return say("no UI evidence: the spec took no screenshots");
     const [key, sha, pr] = [flag("key"), flag("sha"), flag("pr")];
+    const kb = Math.round(shots.reduce((a, s) => a + s.data.length, 0) / 1024);
+    record("evidence", { story: key, pr: pr ? Number(pr) : undefined, shots: shots.length, rejected: rejected.length, kb });
+    if (!shots.length) return say("no UI evidence: the spec took no screenshots");
     evidence.store({ api: host.api, repo: host.repo, key, sha, shots, sleep });
-    const url = await tracker.card(key, evidence.evidenceComment({ key, pr, sha, shots, orgUrl: flag("org-url"), repoUrl: host.repoUrl }), evidence.EVIDENCE_MARK, "UI evidence");
+    const url = await tracker.card(key, evidence.evidenceComment({ key, pr, sha, shots, orgUrl: flag("org-url"), repoUrl: host.repoUrl }), evidence.EVIDENCE_MARK, evidence.EVIDENCE_TITLE);
     output({ url: url || "", shots: shots.length });
     return say(url || `posted ${shots.length} screenshot(s) on ${key}`);
   },
@@ -254,6 +256,10 @@ const commands = {
     // runs whatever the switch says, so turning UI_EVIDENCE off still clears what was stored
     const isOpen = async (k) => { try { return (await tracker.story(k)).state !== "CLOSED"; } catch { return true; } };
     const r = await evidence.squash({ api: host.api, repo: host.repo, isOpen });
+    for (const k of r?.removed || []) {   // the closed story's comment says the screenshots are gone (only where one exists)
+      const has = (await tracker.comments(k).catch(() => [])).some((c) => String(c.body).includes(evidence.EVIDENCE_TITLE));
+      if (has) await tracker.card(k, evidence.removedComment(), evidence.EVIDENCE_MARK, evidence.EVIDENCE_TITLE).catch((e) => log(`::warning::${k}: ${e.message}`));
+    }
     return say(r ? `evidence branch: ${r.kept} open stories kept${r.removed.length ? `, removed ${r.removed.join(", ")}` : ""}` : "no evidence branch");
   },
   "triage review": async () => {

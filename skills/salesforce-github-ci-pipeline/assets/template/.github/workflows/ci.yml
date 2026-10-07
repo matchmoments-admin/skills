@@ -56,6 +56,13 @@ jobs:
       - run: npm run format:check
       - run: npm run lint
       - run: npm run test:unit
+      - name: Does the evidence() browser test need Chromium? (only when the helper or its tests changed)
+        id: evidence
+        run: |
+          BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
+          if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(e2e/support/evidence\.ts|pipeline/src/evidence\.mjs|pipeline/test/evidence/)'; then echo "need=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: ./.pipeline/.github/actions/playwright
+        if: steps.evidence.outputs.need == 'true'
       - run: npm run test:pipeline
       - name: The salesforce-github-ci-pipeline skill matches this pipeline
         run: scripts/skills-sync.sh --check

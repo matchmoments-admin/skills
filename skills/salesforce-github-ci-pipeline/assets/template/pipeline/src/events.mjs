@@ -7,7 +7,7 @@
 // path each time, so writers never conflict on a file. Readers fetch the branch once.
 
 export const BRANCH = "metrics";
-const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane"];
+const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence"];
 
 /** The event as stored: what happened plus where (run, workflow, job). Pure. */
 export function event(kind, data = {}, env = process.env, now = new Date()) {
@@ -89,7 +89,7 @@ export function summarize(events, { days = 28 } = {}) {
   }
   const hotfixReleases = releases.filter((r) => !r.sprint && (r.hotfixes || []).length);
 
-  const tests = of("tests"), vals = of("validation"), lanes = of("lane"), agents = of("agent");
+  const tests = of("tests"), vals = of("validation"), lanes = of("lane"), agents = of("agent"), shots = of("evidence");
   const gateWaits = {};
   for (const g of of("gate").filter((x) => !x.mergeable)) for (const k of new Set((g.reasons || []).map(reasonKind))) (gateWaits[k] ||= new Set()).add(g.pr);
   const failedStages = {};
@@ -126,6 +126,8 @@ export function summarize(events, { days = 28 } = {}) {
       tests: { runs: tests.length, passRate: pct(tests.filter((t) => t.ok).length, tests.length), medianMinutesRelevant: r1(median(tests.filter((t) => t.mode === "relevant").map((t) => t.seconds / 60))), medianMinutesAll: r1(median(tests.filter((t) => t.mode === "all").map((t) => t.seconds / 60))) },
       validation: { runs: vals.length, passRate: pct(vals.filter((v) => v.ok).length, vals.length), medianMinutes: r1(median(vals.map((v) => v.seconds / 60))) },
       lanes: { waits: lanes.length, medianMinutes: r1(median(lanes.map((l) => l.waitedSeconds / 60))), totalMinutes: r1(lanes.reduce((a, l) => a + l.waitedSeconds / 60, 0)) },
+      evidence: { posts: shots.filter((e) => e.shots > 0).length, shots: shots.reduce((a, e) => a + (Number(e.shots) || 0), 0), rejected: shots.reduce((a, e) => a + (Number(e.rejected) || 0), 0),
+        medianKbPerShot: r1(median(shots.filter((e) => e.shots > 0).map((e) => e.kb / e.shots))), totalKb: shots.reduce((a, e) => a + (Number(e.kb) || 0), 0) },
       orgs: { created: orgs.filter((o) => o.action === "created").length, completed: orgs.filter((o) => o.action === "completed").length, deleted: orgs.filter((o) => o.action === "deleted").length, orgHours: r1(orgHours) },
     },
     gateWaits: Object.entries(gateWaits).map(([reason, prs]) => ({ reason, prs: prs.size })).sort((a, b) => b.prs - a.prs).slice(0, 5),
@@ -153,6 +155,7 @@ export function toMarkdown(s) {
     `| Scratch-org tests | ${runs(s.stages.tests.runs)}, ${v(s.stages.tests.passRate, "%")} pass; median ${v(s.stages.tests.medianMinutesRelevant, " min")} (story) / ${v(s.stages.tests.medianMinutesAll, " min")} (all) |`,
     `| Production validation | ${runs(s.stages.validation.runs)}, ${v(s.stages.validation.passRate, "%")} pass; median ${v(s.stages.validation.medianMinutes, " min")} |`,
     `| Waiting for an org's lane | ${s.stages.lanes.waits} waits, median ${v(s.stages.lanes.medianMinutes, " min")}, ${v(s.stages.lanes.totalMinutes, " runner-min")} in all |`,
+    `| UI evidence | ${s.stages.evidence.posts} posts, ${s.stages.evidence.shots} screenshots (${s.stages.evidence.rejected} refused); median ${v(s.stages.evidence.medianKbPerShot, " KB")} each, ${s.stages.evidence.totalKb} KB in all |`,
     `| Scratch orgs | ${s.stages.orgs.created} created, ${s.stages.orgs.completed} finished after a failure, ${s.stages.orgs.deleted} deleted; ${v(s.stages.orgs.orgHours, " org-hours")} |`, "",
     "| What PRs waited on most (gate) | PRs |", "|---|---|",
     ...(s.gateWaits.length ? s.gateWaits.map((g) => `| ${g.reason} | ${g.prs} |`) : ["| nothing recorded | |"]), "",
