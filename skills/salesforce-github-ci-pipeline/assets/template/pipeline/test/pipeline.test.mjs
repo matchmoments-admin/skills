@@ -2174,6 +2174,13 @@ test("enterprise A: a CLI warning never hides the real error; a refused snapshot
   const { failureDetail } = await import("../src/io.mjs");
   assert.equal(failureDetail('{"status":1,"name":"SnapshotNotActive","message":"The snapshot is not active"}', " ›   Warning: @salesforce/cli update available from 2.152 to 2.153"), "SnapshotNotActive: The snapshot is not active");
   assert.equal(failureDetail("", " ›   Warning: @salesforce/cli update available\nERROR: boom"), "ERROR: boom");
+  // gh api: the JSON body says "Not Found"; the status codeHost.api reads is on stderr and must survive (a 404 read as
+  // a 500 broke every lane on story #166's start)
+  const gh404 = failureDetail('{"message":"Not Found","documentation_url":"https://docs.github.com","status":"404"}', "gh: Not Found (HTTP 404)");
+  assert.match(gh404, /^Not Found \| gh: Not Found \(HTTP 404\)$/);
+  const { codeHost } = await import("../src/github.mjs");
+  const fail = () => { const e = new Error(`gh api -X GET failed: ${gh404}`); throw e; };
+  assert.equal(codeHost({ io: { run: fail }, env: { GH_REPO: "o/r" } }).api("GET", "repos/o/r/git/ref/locks/x").status, 404);
   const list = [{ SnapshotName: "LCB2610081953", Status: "Active", CreatedDate: "2026-10-08T19:53:51.000+0000" }, { SnapshotName: "LCB2610081922", Status: "Active", CreatedDate: "2026-10-08T19:22:19.000+0000" }];
   const sf = (a) => (a[0] === "org" && a[2] === "snapshot" ? list : {});
   const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" }, snapshotRefused: (n) => n === "LCB2610081953" });

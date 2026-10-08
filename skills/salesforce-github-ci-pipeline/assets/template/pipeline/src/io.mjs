@@ -22,14 +22,16 @@ export function run(cmd, args, { input, quiet = false, allowFail = false, env, e
 }
 
 /** Why a command failed: a --json reply's own name and message first (stderr often holds only a CLI "update
- *  available" warning, which hid the real reason on story #166), else the last lines of stderr, else stdout. Pure. */
+ *  available" warning, which hid the real reason on story #166), then the last lines of stderr, which keep what
+ *  callers parse (gh's "(HTTP 404)": codeHost.api reads the status from it); else stdout. Pure. */
 export function failureDetail(stdout, stderr) {
   const out = String(stdout || ""), i = out.indexOf("{");
+  let json = "";
   if (i >= 0) {
-    try { const j = JSON.parse(out.slice(i)); if (j && (j.message || j.name)) return [j.name, j.message].filter(Boolean).join(": ").replace(/\s+/g, " ").slice(0, 500); } catch { /* not JSON */ }
+    try { const j = JSON.parse(out.slice(i)); if (j && (j.message || j.name)) json = [j.name, j.message].filter(Boolean).join(": ").replace(/\s+/g, " ").slice(0, 500); } catch { /* not JSON */ }
   }
   const lines = (s) => String(s || "").trim().split("\n").filter((l) => !/update available|›\s+Warning/i.test(l)).slice(-5).join("\n");
-  return lines(stderr) || lines(stdout);
+  return [json, lines(stderr)].filter(Boolean).join(" | ") || lines(stdout);
 }
 
 /** Parse the JSON object out of CLI output (warning lines can precede it). */
