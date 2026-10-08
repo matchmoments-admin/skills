@@ -111,8 +111,15 @@ export function runForCheckout(io, { host, alias, base, sha, all = false, min = 
   };
   // a story's Apex tests: Salesforce's own choice (RunRelevantTests) when the org offers it and it ran some; else ours
   const relevant = plan.mode === "relevant" && level === "RunRelevantTests" ? runRelevant(io, { alias, changed: src.changed.filter((p) => src.files.includes(p)), sleep, onProgress: progress, log }) : null;
-  if (relevant) Object.assign(plan, { apex: relevant.chosen, why: `${plan.why}; Apex tests chosen by Salesforce (RunRelevantTests)`, chosenBy: "salesforce" });
-  const state = runTests(io, { alias, plan, sleep, outDir, onProgress: progress, apexDone: relevant?.state });
+  // Salesforce picks tests by the code that changed, never a changed test class (live, story #166: 7 of 9 changed
+  // tests not run): those run as well, and the results are merged
+  const changedTests = relevant ? plan.apex.filter((t) => src.changed.some((p) => p.endsWith(`/${t}.cls`)) && !relevant.chosen.includes(t)) : [];
+  if (relevant) Object.assign(plan, { apex: [...relevant.chosen, ...changedTests], why: `${plan.why}; Apex tests chosen by Salesforce (RunRelevantTests)${changedTests.length ? `, plus the changed test classes ${changedTests.join(", ")}` : ""}`, chosenBy: "salesforce" });
+  let state = runTests(io, { alias, plan, sleep, outDir, onProgress: progress, apexDone: relevant?.state });
+  if (changedTests.length) {
+    const more = runTests(io, { alias, plan: { mode: "relevant", apex: changedTests, flows: [] }, sleep, outDir, onProgress: (st) => progress(merged(state, st)) });
+    state = merged(state, more);
+  }
   const result = verdict(state, { plan, changedCode: changedCode(src.changed, src.files, src.read), min });
   check.update(checkOutput(state, { plan, result, classPath }), result.ok ? "success" : "failure");
   for (const f of [...state.apex.failures, ...state.flows.failures]) log(`  FAIL ${f.test}: ${f.message}`);
@@ -157,6 +164,13 @@ export function runRelevant(io, { alias, changed, sleep, onProgress = () => {}, 
   }
   log(`RunRelevantTests: Salesforce chose ${chosen.join(", ") || "no classes"} (${ran} tests)`);
   return { chosen, state };
+}
+
+/** Two runs' results as one (RunRelevantTests' and the changed test classes'). Pure. */
+export function merged(a, b) {
+  const n = (k) => (a.apex[k] || 0) + (b.apex[k] || 0);
+  return { ...a, apex: { ...a.apex, classes: n("classes"), classesDone: n("classesDone"), ran: n("ran"), passed: n("passed"), failed: n("failed"),
+    failures: [...a.apex.failures, ...b.apex.failures], finished: a.apex.finished && b.apex.finished }, coverage: { ...a.coverage, ...Object.fromEntries(Object.entries(b.coverage).map(([k, v]) => [k, Math.max(v, a.coverage[k] ?? 0)])) } };
 }
 
 export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs = 15000, maxPolls = plan.mode === "all" ? 240 : 80, outDir, apexDone = null }) {

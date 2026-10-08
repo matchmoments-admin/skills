@@ -2403,3 +2403,13 @@ test("full runs in a scratch org (story #166): this repo's tests and coverage, n
   assert.equal(st.orgWide, 80, "16 of 20 repo lines, not 10% of the org");
   assert.equal(tests.verdict(st, { plan: all }).ok, true);
 });
+
+test("RunRelevantTests never skips a changed test class (live, story #166: Salesforce chose 2 of 9 changed tests)", () => {
+  const a = { phase: "done", apex: { classes: 2, classesDone: 2, ran: 12, passed: 12, failed: 0, failures: [], finished: true }, flows: {}, coverage: { AccountSelector: 60 } };
+  const b = { phase: "done", apex: { classes: 1, classesDone: 1, ran: 3, passed: 2, failed: 1, failures: [{ test: "AccountSelectorTest.m" }], finished: true }, flows: {}, coverage: { AccountSelector: 100, CaseTriggerHandler: 90 } };
+  const m = tests.merged(a, b);
+  assert.deepEqual([m.apex.ran, m.apex.passed, m.apex.failed, m.apex.classes], [15, 14, 1, 3]);
+  assert.deepEqual(m.coverage, { AccountSelector: 100, CaseTriggerHandler: 90 });
+  const src = readFileSync(new URL("../src/tests.mjs", import.meta.url), "utf8");
+  assert.match(src, /changedTests = relevant \? plan\.apex\.filter/);
+});
