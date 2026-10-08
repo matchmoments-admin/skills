@@ -2436,3 +2436,12 @@ test("agents read main's docs/agents, hidden from git (story #166: the branch's 
   }
   assert.match(readFileSync(new URL("../../docs/agents/salesforce.md", import.meta.url), "utf8"), /frameLocator\("iframe"\)/);
 });
+
+test("every workflow file parses as YAML (an unquoted ': ' in a step name broke three workflows on main)", async () => {
+  const { createRequire } = await import("node:module");
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml"))) {
+    const doc = yaml.load(readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8"));
+    assert.ok(doc && doc.jobs, `${f} parses and has jobs`);
+  }
+});
