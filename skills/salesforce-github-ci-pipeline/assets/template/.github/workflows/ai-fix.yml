@@ -53,6 +53,7 @@ jobs:
       id-token: write
       checks: read
       statuses: read
+      actions: read         # the round limit lists earlier fix runs, and the failed UI test's log is downloaded (read only)
     outputs:
       is-app: ${{ steps.id.outputs.is-app }}
       branch: ${{ steps.pr.outputs.branch }}

@@ -1756,3 +1756,18 @@ test("an agent run that finished successfully past its turn cap counts as succes
   const plan = plans.storyFile({ key: "143", title: "Story: Regional reporting", url: "u", body: "b" }, { plan: null, answers: [] });
   assert.match(plan, /^# Story 143: Regional reporting\n/, "no doubled 'Story:'");
 });
+
+test("ai-fix's job can read Actions runs (the round limit and the UI log need actions: read; job permissions replace the workflow's)", () => {
+  const wf = readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8");
+  const fixJob = wf.slice(wf.indexOf("\n  fix:"), wf.indexOf("\n  follow-up:"));
+  assert.match(fixJob, /permissions:[\s\S]*?actions: read/);
+  assert.doesNotMatch(fixJob, /actions: write/, "the agent's job never gets to start workflows");
+});
+
+test("a fix round counts only when Claude ran in it (PR #144's runs that failed on a permission were not rounds)", () => {
+  const runs = [1, 2, 3].map((id) => ({ id, display_title: "ai-fix PR #144", status: "completed", conclusion: "failure" }));
+  const ran = { 1: false, 2: false, 3: true };
+  assert.equal(verdict.fixRunsFor(runs, 144, 9, (id) => ran[id]), 1);
+  assert.equal(verdict.ranAgent([{ steps: [{ name: "Enforce the round limit", conclusion: "failure" }, { name: "Run ./.pipeline/.github/actions/claude-agent", conclusion: "skipped" }] }]), false);
+  assert.equal(verdict.ranAgent([{ steps: [{ name: "Run ./.pipeline/.github/actions/claude-agent", conclusion: "failure" }] }]), true);
+});

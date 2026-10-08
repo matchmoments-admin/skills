@@ -79,10 +79,14 @@ export function reviewVerdict(commentBodies) {
   return v;
 }
 
-/** How many AI fix rounds a PR has had: its earlier completed ai-fix runs (run-name "ai-fix PR #N"). Robust to what
- *  the agent called its commits; a run that stopped at the limit counts too, which only keeps it over the limit. */
-export const fixRunsFor = (runs, pr, currentRunId) =>
-  runs.filter((r) => r.display_title === `ai-fix PR #${pr}` && r.status === "completed" && ["success", "failure"].includes(r.conclusion) && String(r.id) !== String(currentRunId)).length;
+/** How many AI fix rounds a PR has had: its earlier completed ai-fix runs (run-name "ai-fix PR #N") in which Claude
+ *  actually ran (agentRan(runId); a run that failed before the agent, e.g. on a permission, is not a round: PR #144's
+ *  first two were not). Robust to what the agent called its commits. */
+export const fixRunsFor = (runs, pr, currentRunId, agentRan = () => true) =>
+  runs.filter((r) => r.display_title === `ai-fix PR #${pr}` && r.status === "completed" && ["success", "failure"].includes(r.conclusion) && String(r.id) !== String(currentRunId) && agentRan(r.id)).length;
+
+/** Did this run's jobs run the agent step? jobs: the run's jobs API list. Pure. */
+export const ranAgent = (jobs) => (jobs || []).some((j) => (j.steps || []).some((s) => /claude-agent/.test(s.name || "") && ["success", "failure"].includes(s.conclusion)));
 
 /** How many AI fix rounds a branch has had, from the commit subjects since its base (the older count). */
 export const fixRounds = (subjects) => subjects.filter((s) => String(s).startsWith(FIX_PREFIX)).length;

@@ -225,7 +225,7 @@ const commands = {
   },
   "verdict rounds": () => {
     // earlier completed ai-fix runs for the PR (run-name "ai-fix PR #N"), from the newest page of ai-fix runs
-    const n = verdict.fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), flag("pr"), process.env.GITHUB_RUN_ID);
+    const n = verdict.fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), flag("pr"), process.env.GITHUB_RUN_ID, (id) => verdict.ranAgent(host.api("GET", `repos/${host.repo}/actions/runs/${id}/jobs`)?.jobs));
     output({ rounds: n, limit: verdict.MAX_FIX_ROUNDS, over: n >= verdict.MAX_FIX_ROUNDS });
     return say(String(n));
   },
