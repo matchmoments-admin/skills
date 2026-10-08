@@ -67,6 +67,9 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   **public group's members**. Design around them: share a report folder (`folderShares`), a sharing rule or a queue with
   **Roles** (`Role`, not `RoleAndSubordinates`, when subordinates must not get it) instead of a group whose members
   would arrive empty (PR #144).
+- **Report folder sharing cannot be asserted in an Apex test.** As a user who cannot see the folder, a query on its
+  reports fails with `Data Not Available`, which the test cannot catch. Verify folder shares by the deploy (every
+  `folderShares` role or group must exist) and in the UI test, never with a `System.runAs` Apex test (PR #144).
 - **Reports in Apex tests** need `@IsTest(SeeAllData=true)` to find the org's report definitions; suppress
   `PMD.ApexUnitTestShouldNotUseSeeAllDataTrue` on exactly those methods and keep the data assertions in SOQL tests
   without SeeAllData.
