@@ -89,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "story:$KEY"
       - name: The story's scratch org (production's shape + the branch's code; a half-made one is finished)
-        run: node .pipeline/pipeline/bin/pipe.mjs org ensure "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}
+        run: node .pipeline/pipeline/bin/pipe.mjs org ready "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}
       - name: Let the next job into the org's lane
         if: always()
         env:

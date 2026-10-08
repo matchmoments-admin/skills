@@ -125,7 +125,7 @@ jobs:
         env:
           READ_TOKEN: ${{ github.token }}   # reading run logs needs actions: read, which the Actions token has
         run: |
-          node .pipeline/pipeline/bin/pipe.mjs org ensure "$BRANCH"   # attaches, or rebuilds an expired org
+          node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH"   # attaches or rebuilds; deploys this head unless the org already holds it
           {
             echo "# Feedback on PR #$PR"
             gh pr view "$PR" --json comments --jq '.comments[] | select(.body | startswith("/") | not) | "\n## Comment by \(.author.login)\n\(.body)"'

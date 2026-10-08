@@ -8,7 +8,7 @@ import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
-import { orgRegistry, packageList, findOrphans } from "../src/org.mjs";
+import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
 import * as plans from "../src/plan.mjs";
@@ -1561,7 +1561,7 @@ test("UAT access from GitHub: the card links UAT; a stand-in offers 'Send me a U
     return {};
   };
   const r = orgRegistry({ sf, log: () => {}, packages: [] }).tester("uat", { login: "Tester-1", email: "t@example.com" }, dir);
-  assert.deepEqual(r, { username: "tester1.uat@00drt00000yw6bx.pipeline", created: true });
+  assert.deepEqual(r, { username: "tester1.uat@00drt00000yw6bx.pipeline", created: true, persona: { role: null, permsets: ["Sales_Region_Access"] } });
   assert.ok(calls.some((c) => /org create user .*profileName=Standard User permsets=Sales_Region_Access/.test(c)));
   assert.ok(calls.some((c) => c.startsWith("apex run -o uat --file")), "Salesforce emails the password link");
   const wf = readFileSync(new URL("../../.github/workflows/uat-login.yml", import.meta.url), "utf8");
@@ -1916,4 +1916,62 @@ test("round 1: spec revisions reach the story; Where keeps the whole Solution; A
   const notes = await closeout.releaseNotes({ gh: () => [] }, { sprintStories: async () => [{ key: "143", title: "Story: x", state: "OPEN" }] }, "2026-w46");
   assert.match(notes, /- #143 Story: x\n/);
   assert.doesNotMatch(notes, /\[OPEN\]/);
+});
+
+// ---------------------------------------------------------------- Org provisioning (round 2)
+function provisionSf({ live = [], title = null, snapshotWorks = true } = {}) {
+  const calls = [];
+  const sf = (args, opts) => {
+    const c = args.join(" ");
+    calls.push(c);
+    if (args[0] === "limits") return [{ name: "ActiveScratchOrgs", remaining: 2, max: 3 }, { name: "DailyScratchOrgs", remaining: 5, max: 6 }];
+    if (args[0] === "data" && args[1] === "query" && /FROM User WHERE Username/.test(c)) return { records: [{ Title: title }] };
+    if (args[0] === "data" && args[1] === "query" && /FROM UserRole/.test(c)) return { records: [{ Id: "00E1" }] };
+    if (args[0] === "data" && args[1] === "query") return { records: live };
+    if (args[0] === "org" && args[1] === "display") return { clientId: "CID", username: "u@x", id: "00Dxx0000000001" };
+    if (args[0] === "org" && args[1] === "create" && args[2] === "scratch" && c.includes("snapshot-")) return snapshotWorks ? {} : null;
+    if (args[0] === "org" && args[1] === "create" && args[2] === "user") return { fields: { id: "005u" } };
+    return {};
+  };
+  return { sf, calls };
+}
+
+test("Org provisioning: ready() holds the commit once; creates from the snapshot, else shape; personas set the tester's role", () => {
+  // a live org already marked for this commit: nothing deployed again (ui-test used to deploy and prepare twice)
+  let { sf, calls } = provisionSf({ live: [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }], title: "pipeline: ready abc123456789" });
+  let o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] }).ready("issue-12", { commit: "abc123456789ffff" });
+  assert.equal(o.fresh, true);
+  assert.ok(!calls.some((c) => c.startsWith("project deploy")));
+  // marked for an older commit: deploy, prepare, mark with the new one
+  ({ sf, calls } = provisionSf({ live: [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }], title: "pipeline: ready 000000000000" }));
+  o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] }).ready("issue-12", { commit: "abc123456789ffff" });
+  assert.ok(calls.some((c) => c.startsWith("project deploy start")));
+  assert.ok(calls.some((c) => /Title='pipeline: ready abc123456789'/.test(c)));
+  // none live, a snapshot set: created from it
+  ({ sf, calls } = provisionSf());
+  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912" } }).ready("story:12", { commit: "abc" });
+  assert.ok(calls.some((c) => c.startsWith("org create scratch") && c.includes("snapshot-")));
+  assert.ok(!calls.some((c) => c.includes("config/scratch-dev.json")), "the snapshot worked: no shape create");
+  // the snapshot fails (expired): falls back to shape, after removing the half-made attempt
+  ({ sf, calls } = provisionSf({ snapshotWorks: false }));
+  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912" } }).ready("story:12", { commit: "abc" });
+  assert.ok(calls.some((c) => c.includes("config/scratch-dev.json")));
+  // a throwaway CI org skips source tracking
+  ({ sf, calls } = provisionSf());
+  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] }).temporary("ci-1");
+  assert.ok(calls.some((c) => c.startsWith("org create scratch") && c.includes("--no-track-source")));
+  // personas
+  assert.deepEqual(orgPersonaOf("### Access\n\n- Persona: DirectorDirectSales role, Regional_Reporting_Access\n"), { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] });
+  assert.equal(orgPersonaOf("### Access\n\nNo change"), null);
+  ({ sf, calls } = provisionSf());
+  const t = orgRegistry({ sf, log: () => {}, packages: [] }).tester("uat", { login: "pm", email: "p@x.com", persona: { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] } });
+  assert.deepEqual(t.persona, { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] });
+  assert.ok(calls.some((c) => /org create user .*permsets=Regional_Reporting_Access$/.test(c)));
+  assert.ok(calls.some((c) => /UserRoleId=00E1/.test(c)), "the tester gets the persona's role");
+  // every workflow readies orgs one way; ui-test no longer deploys and prepares a second time
+  for (const f of ["issue-start", "ai-implement", "ai-fix", "ui-test", "staging-deploy", "sprint-start", "uat-deploy"]) {
+    const y = readFileSync(new URL(`../../.github/workflows/${f}.yml`, import.meta.url), "utf8");
+    assert.match(y, /pipe\.mjs" org ready |pipe\.mjs org ready /, f);
+    assert.doesNotMatch(y, /org ensure|org deploy|org prepare/, f);
+  }
 });

@@ -43,7 +43,7 @@ export function storyFromSpec({ spec, text, title }) {
   const bullets = (t) => String(t || "").split("\n").map((l) => l.match(/^\s*(?:\d+[.)]|[-*])\s+(.*\S)/)?.[1]).filter(Boolean);
   const criteria = bullets(s["User stories"]);
   if (!criteria.length) throw new Error(`spec #${spec} has no user stories to make acceptance criteria from: revise it with /spec`);
-  const access = bullets(s.Decisions).filter((l) => /permission set|sharing|share|org-wide|OWD|access|profile/i.test(l));
+  const access = bullets(s.Decisions).filter((l) => /persona|permission set|sharing|share|org-wide|OWD|access|profile/i.test(l));
   return {
     title: String(title).replace(/^Spec:\s*/i, "").trim(),
     summary: firstPara(s.Problem) || `See spec #${spec}.`,

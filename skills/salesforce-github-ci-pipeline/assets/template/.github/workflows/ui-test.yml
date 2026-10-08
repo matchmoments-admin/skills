@@ -106,9 +106,7 @@ jobs:
       - name: Attach, deploy this head and prepare the story's org; fetch the story
         id: org
         run: |
-          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ensure "$BRANCH")   # attaches, or rebuilds an expired org
-          node .pipeline/pipeline/bin/pipe.mjs org deploy "$ALIAS"
-          node .pipeline/pipeline/bin/pipe.mjs org prepare "$ALIAS"
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH")   # this head, deployed and prepared (once)
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           echo "SCRATCH_ALIAS=$ALIAS" >> "$GITHUB_ENV"
@@ -215,9 +213,7 @@ jobs:
         id: deploy
         if: steps.spec.outputs.exists == 'true'
         run: |
-          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ensure "$BRANCH")   # attaches, or rebuilds an expired org
-          node .pipeline/pipeline/bin/pipe.mjs org deploy "$ALIAS"
-          node .pipeline/pipeline/bin/pipe.mjs org prepare "$ALIAS"
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH")   # this head, deployed and prepared (once)
           echo "SCRATCH_ALIAS=$ALIAS" >> "$GITHUB_ENV"
           # the org's address for the evidence links (not a secret: it needs a login); never a front-door URL
           echo "org-url=$(sf org display -o "$ALIAS" --json 2>/dev/null | jq -r '.result.instanceUrl // empty')" >> "$GITHUB_OUTPUT"

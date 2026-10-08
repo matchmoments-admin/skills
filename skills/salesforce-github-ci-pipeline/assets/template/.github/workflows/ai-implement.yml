@@ -109,7 +109,7 @@ jobs:
         env:
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
         run: |
-          node .pipeline/pipeline/bin/pipe.mjs org ensure "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}   # attaches, or rebuilds an expired org
+          node .pipeline/pipeline/bin/pipe.mjs org ready "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}   # attaches, or rebuilds an expired org
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --base "origin/$BASE" --out "$RUNNER_TEMP/story.md"
       - run: npm install --no-audit --no-fund --ignore-scripts   # the production key is still on disk here: no install scripts
       - uses: ./.pipeline/.github/actions/claude-agent

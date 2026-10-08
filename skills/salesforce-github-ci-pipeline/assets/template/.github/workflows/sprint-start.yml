@@ -51,5 +51,5 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Staging org (adopts the sprint's live one on a re-run)
         run: |
-          node pipeline/bin/pipe.mjs org ensure "sprint:$SPRINT"
+          node pipeline/bin/pipe.mjs org ready "sprint:$SPRINT"
           node pipeline/bin/pipe.mjs org limits

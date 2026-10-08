@@ -40,8 +40,20 @@ export function packageList(file = join(PIPELINE_ROOT, "config/packages.json")) 
 }
 
 const DEVHUB = "devhub";
-/** Written to the scratch org admin user's Title when ensure() has finished every step. */
+/** Written to the scratch org admin user's Title when ready() has finished every step, with the commit it holds. */
 export const READY = "pipeline: ready";
+export const readyMarker = (commit) => (commit ? `${READY} ${String(commit).slice(0, 12)}` : READY);
+
+/** Who a story is for, from its "Persona:" line (Access section): "Persona: DirectorDirectSales role, Regional_Reporting_Access".
+ *  { role, permsets } or null. Pure. */
+export function personaOf(body) {
+  const line = String(body || "").match(/^\s*[-*]?\s*\**Persona:?\**:?\s*(.+)$/im)?.[1];
+  if (!line) return null;
+  const items = line.split(/[,;+]|\band\b/).map((s) => s.replace(/[`*.]/g, "").trim()).filter(Boolean);
+  const role = items.find((i) => /\s+role$/i.test(i))?.replace(/\s+role$/i, "").trim() || null;
+  const permsets = items.filter((i) => !/\s+role$/i.test(i) && /^[A-Za-z][A-Za-z0-9_]*$/.test(i));
+  return role || permsets.length ? { role, permsets } : null;
+}
 
 function resolve(target, opts) {
   const org = typeof target === "object" ? target : orgFor(target, opts);
@@ -90,35 +102,63 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       throw new Error(`Could not log in to ${org.username}`);
     },
 
-    /** Attach the target's org, or create it; either way finish it (packages, source, prepare) unless it is marked
-     *  ready, so a run that died half way (packages, deploy) is completed by the next one instead of trusted. */
-    ensure(target, opts = {}) {
+    /**
+     * The one way an org becomes usable (Org provisioning): find or create the target's org, then make it hold
+     * `commit` (packages, the source, prepared users and permission sets, seed data) and mark it so. An org already
+     * marked for this commit is returned as it is; a half-made one (a run that died) is finished, never trusted.
+     * Creation tries the current snapshot (SCRATCH_SNAPSHOT) first and falls back to production's shape.
+     * opts: { commit, manifest (deploy only these), hotfix }. Returns the org with { created, completed, fresh }.
+     */
+    ready(target, { commit = null, manifest = null, ...opts } = {}) {
       const existing = self.find(target, opts);
       const org = existing ? self.attach(existing) : resolve(target, opts);
-      if (existing && self.isReady(org.alias)) return { ...org, created: false };
-      if (existing) log(`${org.alias} exists but was never finished: completing it`);
+      const want = readyMarker(commit);
+      if (existing && self.isReady(org.alias, want)) { log(`${org.alias} already holds ${commit ? String(commit).slice(0, 7) : "its source"}`); return { ...org, created: false, fresh: true }; }
+      if (existing) log(`${org.alias} exists: bringing it to ${commit ? String(commit).slice(0, 7) : "its source"}`);
       else {
         self.assertCapacity(org.kind === "story" ? Number(env.ORG_RESERVE || 0) : 0);
-        log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
-        sf(["org", "create", "scratch", "--definition-file", definitionPath(org.definition), "--alias", org.alias, "--description", org.description,
-          "--duration-days", String(org.days), "--target-dev-hub", DEVHUB, "--wait", "25"]);
+        self.create(org);
       }
       self.installPackages(org.alias);
-      self.deploy(org.alias);
+      self.deploy(org.alias, { manifest });
       self.prepare(org.alias);
-      self.markReady(org.alias);
+      self.markReady(org.alias, want);
       return { ...org, created: !existing, completed: Boolean(existing) };
     },
+    /** Kept for callers that do not know a commit: ready() for the source in the working directory. */
+    ensure(target, opts = {}) { return self.ready(target, opts); },
 
-    /** The ready marker: the org's admin user's Title, set only when ensure() finished every step. */
-    isReady(alias) {
+    /**
+     * Create the org: from the current snapshot (SCRATCH_SNAPSHOT: packages, the production baseline, seed data
+     * already in it) when one is set, else from production's shape. A missing or expired snapshot falls back, loudly.
+     * Throwaway CI orgs skip source tracking (it only slows a deploy nobody retrieves from).
+     */
+    create(org) {
+      const base = ["org", "create", "scratch", "--alias", org.alias, "--description", org.description, "--duration-days", String(org.days), "--target-dev-hub", DEVHUB,
+        ...(org.kind === "temp" ? ["--no-track-source"] : [])];
+      const snapshot = String(env.SCRATCH_SNAPSHOT || "").trim();
+      if (snapshot && /^[A-Za-z0-9]{1,15}$/.test(snapshot) && org.kind !== "snapshot") {
+        const def = join(tmpdir(), `snapshot-${process.pid}.json`);
+        writeFileSync(def, JSON.stringify({ orgName: `Lifecycle ${org.description}`, snapshot }));
+        log(`creating ${org.alias} (${org.description}) from snapshot ${snapshot}, ${org.days} days`);
+        if (sf([...base, "--definition-file", def, "--wait", "45"], { allowFail: true })) return { fromSnapshot: true };
+        log(`::warning::snapshot ${snapshot} could not be used (expired or not active yet?): creating ${org.alias} from production's shape instead`);
+        self.removeTagged(org.description);   // a half-made attempt must not hold a slot
+      }
+      log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
+      sf([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]);
+      return { fromSnapshot: false };
+    },
+
+    /** The ready marker: the org's admin user's Title, set only when ready() finished every step for a commit. */
+    isReady(alias, want = READY) {
       const username = sf(["org", "display", "-o", alias], { allowFail: true })?.username;
       const r = username && sf(["data", "query", "-o", alias, "-q", `SELECT Title FROM User WHERE Username = '${username}'`], { allowFail: true });
-      return r?.records?.[0]?.Title === READY;
+      return r?.records?.[0]?.Title === want;
     },
-    markReady(alias) {
+    markReady(alias, want = READY) {
       const username = sf(["org", "display", "-o", alias]).username;
-      sf(["data", "update", "record", "-o", alias, "-s", "User", "-w", `Username='${username}'`, "-v", `Title='${READY}'`]);
+      sf(["data", "update", "record", "-o", alias, "-s", "User", "-w", `Username='${username}'`, "-v", `Title='${want}'`]);
     },
 
     /** Install production's managed packages, in order, before the source that depends on them (skipping any the org
@@ -142,13 +182,13 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       if (daily.remaining === 0) throw new Error(`The Dev Hub has created its ${daily.max} scratch orgs for today; the count resets at 00:00 UTC.`);
     },
 
-    /** A throwaway org for one CI run, deleted by the caller. */
+    /** A throwaway org for one CI run, deleted by the caller (from the snapshot when there is one, untracked). */
     temporary(name) {
       self.assertCapacity();
       const org = { kind: "temp", alias: name, description: name, definition: "config/scratch-dev.json", days: 1 };
-      sf(["org", "create", "scratch", "--definition-file", definitionPath(org.definition), "--alias", name, "--description", name, "--duration-days", "1", "--target-dev-hub", DEVHUB, "--wait", "25"]);
+      const how = self.create(org);
       self.installPackages(name);
-      return { ...org, created: true };
+      return { ...org, created: true, ...how };
     },
 
     deploy(alias, { manifest } = {}) {
@@ -183,25 +223,30 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     },
 
     /**
-     * A UAT tester for a person (UAT stand-in scratch org only): a Standard User with every permission set in the
-     * source, made once per login, and a password-reset email from Salesforce to their address. No password or session
-     * ever leaves the org. Returns { username, created }.
+     * A tester for a person (a story's org or the UAT stand-in): a Standard User made once per login, and a
+     * password-reset email from Salesforce to their address. No password or session ever leaves the org. With a
+     * persona ({ role, permsets }: the story's "Persona:" line, or UAT_TESTER_ROLE) they get that role and those
+     * permission sets, so they see what that user sees; without one, every permission set in the source.
+     * Returns { username, created, persona }.
      */
-    tester(alias, { login, email }, dir = "force-app") {
+    tester(alias, { login, email, persona = null }, dir = "force-app") {
+      const sets = persona?.permsets?.length ? persona.permsets : permissionSets(dir);
       const orgId = sf(["org", "display", "-o", alias]).id;
       const username = `${String(login).toLowerCase().replace(/[^a-z0-9]/g, "")}.uat@${String(orgId).slice(0, 15).toLowerCase()}.pipeline`;
       const found = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM User WHERE Username = '${username}'`], { allowFail: true })?.records?.[0];
       let id = found?.Id;
       if (!id) {
-        const made = sf(["org", "create", "user", "-o", alias, `username=${username}`, `email=${email}`, `lastName=${login}`, "profileName=Standard User", `permsets=${permissionSets(dir).join(",")}`]);
+        const made = sf(["org", "create", "user", "-o", alias, `username=${username}`, `email=${email}`, `lastName=${login}`, "profileName=Standard User", `permsets=${sets.join(",")}`]);
         id = made?.fields?.id || sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM User WHERE Username = '${username}'`]).records[0].Id;
-      } else for (const p of permissionSets(dir)) sf(["org", "assign", "permset", "--name", p, "-o", alias, "--on-behalf-of", username], { allowFail: true });
-      sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", id, "-v", `Email=${email} CountryCode=AU UserPreferencesLightningExperiencePreferred=true`], { allowFail: true });
+      } else for (const p of sets) sf(["org", "assign", "permset", "--name", p, "-o", alias, "--on-behalf-of", username], { allowFail: true });
+      const roleId = persona?.role ? sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM UserRole WHERE DeveloperName = '${String(persona.role).replace(/[^A-Za-z0-9_]/g, "")}'`], { allowFail: true })?.records?.[0]?.Id : null;
+      if (persona?.role && !roleId) log(`::warning::role ${persona.role} not found in ${alias}: the tester has no role`);
+      sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", id, "-v", `Email=${email} CountryCode=AU UserPreferencesLightningExperiencePreferred=true${roleId ? ` UserRoleId=${roleId}` : ""}`], { allowFail: true });
       const apex = join(tmpdir(), `reset-${process.pid}.apex`);
       writeFileSync(apex, `System.resetPassword('${id}', true);\n`);
       sf(["apex", "run", "-o", alias, "--file", apex]);
-      log(`UAT tester ${username}: password email sent`);
-      return { username, created: !found };
+      log(`tester ${username}${roleId ? ` (role ${persona.role})` : ""}: password email sent`);
+      return { username, created: !found, persona: { role: roleId ? persona.role : null, permsets: sets } };
     },
 
     /** Delete the target's org if it is alive. Returns true if one was deleted. */

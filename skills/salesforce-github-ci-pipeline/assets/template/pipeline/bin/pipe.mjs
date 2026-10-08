@@ -3,8 +3,7 @@
 // arguments, calls the module that owns the command, and writes step outputs; the work lives in pipeline/src/.
 //   context   [--key K] [--branch B] [--labels a,b]     names for a story / the open sprint, as KEY=value lines
 //   labels    sync                                       create or update every label the pipeline uses
-//   org       ensure|attach|remove <target> [--hotfix] · prepare <alias> · deploy <alias> [--manifest f]
-//             temp <name> · remove-tagged <description> · sweep · limits   (target: story:<key> | sprint:<name> | <branch>)
+//   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits
 //   lane      acquire|release <org target> [--minutes M]  one job at a time per org, a queue that drops nobody
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
@@ -43,7 +42,7 @@ import * as plans from "../src/plan.mjs";
 import { storyCards } from "../src/card.mjs";
 import * as tests from "../src/tests.mjs";
 import * as production from "../src/production.mjs";
-import { orgRegistry } from "../src/org.mjs";
+import { orgRegistry, personaOf as orgPersona } from "../src/org.mjs";
 import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
@@ -86,7 +85,7 @@ const summary = (md) => { if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(pr
 const host = codeHost({ io, sleep, log });
 const tracker = makeTracker(io);
 const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, ghPages: io.ghPages }), log });
-const orgs = () => orgRegistry({ sf: io.sf, log, env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE") } });
+const orgs = () => orgRegistry({ sf: io.sf, log, env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT") } });
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 
@@ -110,12 +109,12 @@ const commands = {
   },
 
   // ---- orgs and lanes
-  "org ensure": () => {
-    const o = orgs().ensure(arg(0), { hotfix: has("hotfix") });
+  "org ready": () => {   // Org provisioning: the target's org, holding the code in the working directory (org.mjs ready)
+    const o = orgs().ready(arg(0), { hotfix: has("hotfix"), commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), manifest: flag("manifest") });
     if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
-    output({ alias: o.alias, created: o.created });
-    return say(o.alias);
+    output({ alias: o.alias, created: o.created }); return say(o.alias);
   },
+  "org ensure": () => commands["org ready"](),   // the older name
   "org attach": () => { const o = orgs().attach(arg(0)); output({ alias: o.alias }); return say(o.alias); },
   "org remove": () => { const o = names.orgFor(arg(0)); if (orgs().remove(arg(0))) record("org", { action: "deleted", org: o?.description, story: o?.key }); },
   "org remove-tagged": () => { if (orgs().removeTagged(arg(0))) record("org", { action: "deleted", org: arg(0) }); },
@@ -134,11 +133,12 @@ const commands = {
     for (const g of gone) record("org", { action: "deleted", org: g.description, why: g.why });
     return say(`deleted ${gone.length} orphan org(s)${gone.length ? `: ${gone.map((o) => `${o.description} (${o.why})`).join(", ")}` : ""}`);
   },
-  "uat tester": () => {
-    // a person's UAT login, emailed by Salesforce (the UAT stand-in scratch org); says where it went, never a secret
-    const r = orgs().tester(flag("alias", "uat"), { login: flag("login"), email: flag("email") });
+  "uat tester": async () => {   // a person's login, emailed by Salesforce, as the story's persona (or UAT_TESTER_ROLE); never a secret
+    const story = names.storyOf(flag("alias", "")); const body = story ? (await tracker.story(story).catch(() => ({}))).body : "";
+    const persona = orgPersona(body) || (names.setting("UAT_TESTER_ROLE") ? { role: names.setting("UAT_TESTER_ROLE"), permsets: [] } : null);
+    const r = orgs().tester(flag("alias", "uat"), { login: flag("login"), email: flag("email"), persona });
     const masked = flag("email").replace(/^(.).*?(@.*)$/, "$1***$2");
-    io.gh(["pr", "comment", flag("pr"), "--body", `🔑 @${flag("login")}: Salesforce has emailed **${masked}** a link to set a password for **${flag("alias", "uat") === "uat" ? "UAT" : `the story's scratch org (${flag("alias")})`}**. Username: \`${r.username}\`. It has the permission sets in the code (Standard User profile), so you see what users will see.`]);
+    io.gh(["pr", "comment", flag("pr"), "--body", `🔑 @${flag("login")}: Salesforce has emailed **${masked}** a link to set a password for **${flag("alias", "uat") === "uat" ? "UAT" : `the story's scratch org (${flag("alias")})`}**. Username: \`${r.username}\`. ${r.persona.role ? `Role **${r.persona.role}**, permission sets ${r.persona.permsets.join(", ")}: you see what that user sees.` : `Every permission set in the code, no role (Standard User). If the feature is shared by role, set the story's \`Persona:\` line or UAT_TESTER_ROLE.`}`]);
     return say(r.username);
   },
   "lane acquire": () => {

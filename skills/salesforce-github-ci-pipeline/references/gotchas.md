@@ -61,6 +61,9 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Every push by a person needed "Run the AI review again", and the fix-round limit was a dead end** → review on `synchronize` (people only, not spec-only pushes); rounds count since the last commit by a person (a Claude co-author is not a person); CI's auto-fix respects `blocked`; the limit posts what to do once (push a fix, or `/review-ok <why>`).
 - **The spec stayed open after its story shipped, and its card said "work on it"** → close-out closes a spec when none of its stories are open, and the spec card says where it shipped.
 
+- **Eight workflows each assembled "make the org ready" themselves, in four orders** (ui-test deployed and prepared twice) → one deep module, `org.mjs ready(target, { commit })`: create from `SCRATCH_SNAPSHOT` (fallback: shape, after removing the half-made attempt), packages, deploy, prepare, mark the admin's Title with the commit. A second call for the same commit does nothing. Workflows call `pipe org ready <target>` only; the baseline and seed plug in behind it.
+- **The UAT tester could not see a role-shared feature** → a story names its user in Access (`Persona: DirectorDirectSales role, Regional_Reporting_Access`); the tester is made with that role and those permission sets (or `UAT_TESTER_ROLE`), and the login comment says which.
+
 ## Playwright against Lightning
 
 - **`JSON.parse` fails on `sf org open --json` inside Playwright** → Playwright sets `FORCE_COLOR`, so the CLI colours its JSON. → `login.ts` sets `FORCE_COLOR=0` for the CLI call.

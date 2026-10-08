@@ -61,9 +61,7 @@ jobs:
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
         run: |
-          node ../.pipeline/pipeline/bin/pipe.mjs org attach "sprint:${{ steps.ctx.outputs.SPRINT }}"
-          node ../.pipeline/pipeline/bin/pipe.mjs org deploy staging
-          node ../.pipeline/pipeline/bin/pipe.mjs org prepare staging
+          node ../.pipeline/pipeline/bin/pipe.mjs org ready "sprint:${{ steps.ctx.outputs.SPRINT }}"   # this candidate, deployed and prepared
       - name: Full regression (every Apex and Flow test), live on the release head as "Salesforce tests"
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         working-directory: candidate

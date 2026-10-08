@@ -78,16 +78,15 @@ jobs:
             echo "kind=sandbox" >> "$GITHUB_OUTPUT"
             echo "url=$(sf org display -o uat --json | jq -r .result.instanceUrl)" >> "$GITHUB_OUTPUT"
           else
-            node pipeline/bin/pipe.mjs org ensure "uat:$SPRINT"
+            # Org provisioning, from the release candidate itself: create or attach, deploy, prepare, seed, marked ready
+            (cd candidate && node "$GITHUB_WORKSPACE/pipeline/bin/pipe.mjs" org ready "uat:$SPRINT" >/dev/null)
             echo "kind=scratch org standing in for a UAT sandbox" >> "$GITHUB_OUTPUT"
             echo "url=$(sf org display -o uat --json | jq -r .result.instanceUrl)" >> "$GITHUB_OUTPUT"   # its login page (no session)
           fi
-      - name: Deploy the release candidate to UAT
-        if: steps.seen.outputs.skip != 'true'
+      - name: Deploy the release candidate to the UAT sandbox
+        if: steps.seen.outputs.skip != 'true' && steps.org.outputs.kind == 'sandbox'   # a scratch org was readied above
         working-directory: candidate
-        run: |
-          sf project deploy start -o uat -d force-app --ignore-conflicts --wait 40
-          [ "${{ steps.org.outputs.kind }}" = sandbox ] || node "$GITHUB_WORKSPACE/pipeline/bin/pipe.mjs" org prepare uat
+        run: sf project deploy start -o uat -d force-app --ignore-conflicts --wait 40
       - name: Ask for the sign-off
         if: steps.seen.outputs.skip != 'true'
         env:
