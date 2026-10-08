@@ -20,6 +20,7 @@ export const ACTIONS = {
   fix: { label: "🛠 Fix the review findings and failed checks with Claude", on: "pr", adds: ["ai:fix"], flag: "fix" },
   "ai-test": { label: "🧪 Have Claude write and run the UI test", on: "pr", adds: ["ai:test"], flag: "uiTest" },
   test: { label: "🧪 Run the committed UI test", on: "pr", adds: ["test"] },
+  "review-ok": { label: "✋ Accept the change anyway: the AI review is wrong (comment /review-ok <why>, so the reason is on record)", on: "pr" },
   ship: { label: "🚀 Sign off: merge it into the sprint when everything is green", on: "pr" },
   "uat-pass": { label: "✅ UAT passed: tested in UAT, ready for production", on: "pr" },
   "uat-login": { label: "🔑 Send me a UAT login (Salesforce emails you a link to set a password)", on: "pr" },
@@ -34,7 +35,7 @@ export const ACTIONS = {
 };
 // the comment commands, and the action each one is
 const COMMANDS = { "/spec": "spec", "/story": "story", "/tickets": "story", "/plan": "plan", "/start": "start", "/build": "build", "/hotfix": "hotfix", "/review": "review", "/fix": "fix",
-  "/test": "test", "/ui-test": "ai-test", "/ship": "ship", "/uat-pass": "uat-pass", "/uat-fail": "uat-fail", "/gate": "gate", "/ci": "ci",
+  "/test": "test", "/ui-test": "ai-test", "/ship": "ship", "/review-ok": "review-ok", "/uat-pass": "uat-pass", "/uat-fail": "uat-fail", "/gate": "gate", "/ci": "ci",
   "/staging": "staging", "/uat": "uat", "/fix-story": "fix-story", "/login": "org-login", "/sprint-start": "sprint", "/release-cut": "release-cut", "/help": "help" };
 
 const MARK = (id) => `<!-- act:${id} -->`;
@@ -95,6 +96,12 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
     host.dispatch("gate.yml", { pr: where.number });
     return { done: `signed off by @${who} on ${pr.headRefOid.slice(0, 7)}` };
   }
+  if (id === "review-ok") {   // a person overrules the AI review on this exact commit; the reason goes on the status and the PR
+    const pr = where.pr;
+    host.status(pr.headRefOid, STATUS.review, "success", `AI review overruled by @${who}${arg ? `: ${arg}` : ""}`.slice(0, 139));
+    host.dispatch("gate.yml", { pr: where.number });
+    return { done: `AI review overruled by @${who} on ${pr.headRefOid.slice(0, 7)}`, said: `✋ @${who} accepted this change over the AI review on \`${pr.headRefOid.slice(0, 7)}\`${arg ? `: ${arg}` : " (no reason given: comment `/review-ok <why>` next time)"}. A new push needs a review again.` };
+  }
   if (id === "gate") { host.dispatch("gate.yml", { pr: where.number }); return { done: "re-running the gate" }; }
   if (id === "ci") { host.dispatch("ci.yml", { ref: where.pr.headRefName }, where.pr.headRefName); return { done: "re-running CI" }; }
   if (id === "staging") { host.dispatch("staging-deploy.yml", {}, where.pr.headRefName); return { done: "re-running the staging regression" }; }
@@ -123,7 +130,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
 /** The /help reply. */
 export function help(isPr) {
   return isPr
-    ? "**On a pull request:** `/review` AI review · `/fix` AI fixes the findings · `/test` runs the UI test (`/ui-test`: Claude writes it) · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/gate` checks again · `/ci` re-runs CI · on a release PR `/uat-pass`, `/uat-fail <why>`, `/uat`, `/staging`. Or tick the boxes on the card."
+    ? "**On a pull request:** `/review` AI review · `/fix` AI fixes the findings · `/test` runs the UI test (`/ui-test`: Claude writes it) · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/review-ok <why>` accepts the change over a wrong AI review · `/gate` checks again · `/ci` re-runs CI · on a release PR `/uat-pass`, `/uat-fail <why>`, `/uat`, `/staging`. Or tick the boxes on the card."
     : "**On a story:** `/plan` Claude proposes the build and asks its questions · `/start` creates its branch and scratch org · `/build` has Claude build it · `/hotfix` starts it as an urgent production fix. **On a spec (bigger work):** `/spec` Claude writes (or revises) the spec · `/story` makes it a story. Or tick the boxes on the card.";
 }
 

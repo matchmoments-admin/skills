@@ -28,7 +28,7 @@ export const MODELS = {
   fix: "claude-sonnet-5-5",
   plan: "claude-sonnet-5-5",
   spec: "claude-sonnet-5-5",
-  review: "claude-haiku-4-5-20251001",
+  review: "claude-sonnet-5-5",   // Haiku made confident false Salesforce blockers on PR #144, each costing a round
   "ui-test": "claude-haiku-4-5-20251001",
 };
 export function modelFor(role, override = setting("AI_MODEL")) {

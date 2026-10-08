@@ -84,7 +84,7 @@ function storyActions(rows, { ai, base, ci }) {
   const at = (stage) => rows.find((r) => r[1] === stage)?.[0];
   const ids = [];
   if (ci === "failed") ids.push("fix", "ci");
-  if (at("AI review") === "failed") ids.push("fix", "review");
+  if (at("AI review") === "failed") ids.push("fix", "review", "review-ok");
   else if (["waiting", "running"].includes(at("AI review"))) ids.push("review");
   if (["failed", "waiting"].includes(at("UI test"))) ids.push(ai.uiTest ? "ai-test" : "test");
   if (at("UI test") === "failed") ids.push("fix");   // the fixer reads the Playwright error

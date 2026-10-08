@@ -414,7 +414,7 @@ test("AI flags are off unless set to true; models are the cheapest per role, AI_
   assert.deepEqual(names.aiFeatures({}), { plan: false, implement: false, review: false, fix: false, uiTest: false, autoChain: false, triage: false });
   assert.equal(names.aiFeatures({ AI_REVIEW: "true", AI_FIX: "yes" }).review, true);
   assert.equal(names.aiFeatures({ AI_REVIEW: "true", AI_FIX: "yes" }).fix, false);
-  assert.match(verdict.modelFor("review", ""), /haiku/);
+  assert.match(verdict.modelFor("review", ""), /sonnet/);   // Haiku made false blockers (PR #144)
   assert.match(verdict.modelFor("implement", ""), /sonnet/);
   assert.equal(verdict.modelFor("review", "claude-opus-5-5"), "claude-opus-5-5");
 });
@@ -1834,4 +1834,19 @@ test("the reviewer's rules come from main (a PR cannot soften its own review)", 
   const wf = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
   assert.match(wf, /sparse-checkout: "pipeline\\nscripts\\nconfig\\n\.github\/actions\\nREVIEW\.md\\nCLAUDE\.md\\ndocs\/agents"/);
   assert.match(wf, /following \.pipeline\/REVIEW\.md, \.pipeline\/CLAUDE\.md and \.pipeline\/docs\/agents\/salesforce\.md/);
+});
+
+test("a person can overrule a wrong AI review on the exact commit, with the reason on record; the reviewer sees CI (PR #144)", () => {
+  const did = [];
+  const host = { status: (...a) => did.push(["status", ...a]), dispatch: (w, i) => did.push(["dispatch", w, i]) };
+  const pr = { headRefName: "issue-143", headRefOid: "abc1234def", baseRefName: "release/2026-w46" };
+  const r = actions.perform("review-ok", "THIS_YEAR is valid SOQL; CI passed", { number: 144, isPr: true, pr }, "pm", { host });
+  assert.deepEqual(did[0], ["status", "abc1234def", gate.STATUS.review, "success", "AI review overruled by @pm: THIS_YEAR is valid SOQL; CI passed"]);
+  assert.deepEqual(did[1], ["dispatch", "gate.yml", { pr: 144 }]);
+  assert.match(r.said, /accepted this change over the AI review on `abc1234`: THIS_YEAR/);
+  assert.deepEqual(actions.command("/review-ok because"), { id: "review-ok", arg: "because" });
+  assert.equal(verdict.modelFor("review", ""), "claude-sonnet-5-5");
+  const wf = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
+  assert.match(wf, /> "\$RUNNER_TEMP\/ci\.md"/);
+  assert.match(wf, /never report it as a syntax or compile error/);
 });
