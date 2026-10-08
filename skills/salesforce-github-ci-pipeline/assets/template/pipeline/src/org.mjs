@@ -434,18 +434,22 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     },
 
     /**
-     * What people changed in Setup in this source-tracked org (a story org an admin logged into): SourceMember rows
-     * changed by anyone but the org's own admin user, which every pipeline deploy runs as. Profiles never (permission
-     * sets carry access), nor what config/baseline.json excludes. Deletions are not included. [{ type, name }].
+     * What people changed in Setup in this source-tracked org: SourceMember rows changed by the logins the pipeline
+     * gave people (Send me a login: <login>.admin@ / <login>.uat@ ... .pipeline; never the UI tests' persona.* users).
+     * Not the org's admin user (every pipeline deploy), nor the system users and the snapshot's own rows (live
+     * story #166: 327 rows, none by a person). Profiles never (permission sets carry access), nor what
+     * config/baseline.json excludes, nor sub-parts whose bundle is listed too. Deletions are not included. [{ type, name }].
      */
     setupChanges(alias, { exclude = [] } = {}) {
-      const admin = sf(["org", "display", "-o", alias]).username;
-      const adminId = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM User WHERE Username = '${admin}'`]).records?.[0]?.Id;
+      const id15 = (x) => String(x || "").slice(0, 15);   // ChangedBy holds 15-character ids
+      const people = new Set((sf(["data", "query", "-o", alias, "-q", "SELECT Id FROM User WHERE Username LIKE '%.pipeline' AND (NOT Username LIKE 'persona.%')"], { allowFail: true })?.records || []).map((u) => id15(u.Id)));
+      if (!people.size) return [];
       const rows = (by) => sf(["data", "query", "-o", alias, "--use-tooling-api", "-q", `SELECT MemberType, MemberName, IsNameObsolete, ${by} FROM SourceMember`], { allowFail: true })?.records;
       let by = "ChangedBy", list = rows(by);   // ChangedBy is API 60+; LastModifiedById otherwise
       if (!list) { by = "LastModifiedById"; list = rows(by) || []; }
       const seen = new Set();
-      return list.filter((r) => r[by] && r[by] !== adminId && !r.IsNameObsolete && !excluded(r.MemberType, r.MemberName, ["Profile", ...exclude]))
+      return list.filter((r) => people.has(id15(r[by])) && !r.IsNameObsolete && !/^(LightningComponentResource|AuraDefinition)$/.test(r.MemberType)
+        && !excluded(r.MemberType, r.MemberName, ["Profile", ...exclude]))
         .map((r) => ({ type: r.MemberType, name: r.MemberName })).filter((c) => !seen.has(`${c.type}:${c.name}`) && seen.add(`${c.type}:${c.name}`));
     },
 

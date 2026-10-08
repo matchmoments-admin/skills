@@ -25,7 +25,7 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   const prUrl = pr ? `${repoUrl}/pull/${pr.number}` : null;
   const branchLink = pr?.state === "MERGED" ? `\`${branch}\`` : `[\`${branch}\`](${repoUrl}/tree/${encodeURIComponent(branch)})`;   // merged branches are deleted
   if (planned) rows.push(["done", "Plan agreed", "the **Build plan** comment on this story, with the answers to it, is part of the spec"]);
-  rows.push(["done", "Branch and scratch org", `${branchLink} from \`${base}\`; org \`${branch}\` (production's shape)`]);
+  rows.push(["done", "Branch and scratch org", `${branchLink} from \`${base}\`; org \`${branch}\` (production's shape, its customisations and test data)`]);
 
   let next;
   if (!pr) {

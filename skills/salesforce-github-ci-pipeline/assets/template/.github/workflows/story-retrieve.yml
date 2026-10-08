@@ -58,6 +58,7 @@ jobs:
         env:
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
         run: |
+          set -o pipefail   # a failed retrieve fails here, not as "nothing new" later
           node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "bringing @$WHO's Setup changes into the story" || true
           ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH")
           node .pipeline/pipeline/bin/pipe.mjs org changes "$ALIAS" | tee "$RUNNER_TEMP/changes.txt"

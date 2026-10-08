@@ -2341,21 +2341,22 @@ test("admins' path (enterprise D): a login to the story's org from the story its
   assert.match(card, /act:org-login-admin/);
   assert.match(card, /act:retrieve/);
 
-  // what people changed: not the org's own admin user (the pipeline's deploys), not profiles, not exclusions
+  // what people changed: only the logins the pipeline gave people (ChangedBy holds 15-character ids), never the org's
+  // admin user (the pipeline's deploys), system users, profiles, exclusions, deletions or a bundle's sub-parts
   const calls = [];
   const sf = (a) => {
     const c = a.join(" "); calls.push(c);
-    if (a[1] === "display") return { username: "test-abc@example.com", id: "00D1" };
-    if (/FROM User/.test(c)) return { records: [{ Id: "005ADMIN" }] };
+    if (/FROM User/.test(c)) return { records: [{ Id: "005ALICE00000AAQA3" }] };
     if (/ChangedBy/.test(c)) return null;   // an older API: LastModifiedById instead
     if (/FROM SourceMember/.test(c)) return { records: [
-      { MemberType: "CustomField", MemberName: "Account.Tier__c", LastModifiedById: "005ALICE" },
-      { MemberType: "CustomField", MemberName: "Account.Tier__c", LastModifiedById: "005ALICE" },
-      { MemberType: "Profile", MemberName: "Admin", LastModifiedById: "005ALICE" },
-      { MemberType: "ApexClass", MemberName: "RegionService", LastModifiedById: "005ADMIN" },
-      { MemberType: "Layout", MemberName: "Account-Old", IsNameObsolete: true, LastModifiedById: "005ALICE" },
-      { MemberType: "PermissionSet", MemberName: "Lifecycle_CI", LastModifiedById: "005ALICE" },
-      { MemberType: "FlexiPage", MemberName: "Account_Record_Page", LastModifiedById: "005ALICE" }] };
+      { MemberType: "CustomField", MemberName: "Account.Tier__c", LastModifiedById: "005ALICE00000AA" },
+      { MemberType: "CustomField", MemberName: "Account.Tier__c", LastModifiedById: "005ALICE00000AA" },
+      { MemberType: "Profile", MemberName: "Admin", LastModifiedById: "005ALICE00000AA" },
+      { MemberType: "ApexClass", MemberName: "RegionService", LastModifiedById: "005ADMIN00000AA" },
+      { MemberType: "Layout", MemberName: "Account-Old", IsNameObsolete: true, LastModifiedById: "005ALICE00000AA" },
+      { MemberType: "PermissionSet", MemberName: "Lifecycle_CI", LastModifiedById: "005ALICE00000AA" },
+      { MemberType: "LightningComponentResource", MemberName: "regionCard/regionCard.js", LastModifiedById: "005ALICE00000AA" },
+      { MemberType: "FlexiPage", MemberName: "Account_Record_Page", LastModifiedById: "005ALICE00000AA" }] };
     return {};
   };
   const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } });
@@ -2366,4 +2367,6 @@ test("admins' path (enterprise D): a login to the story's org from the story its
   const wf = readFileSync(new URL("../../.github/workflows/story-retrieve.yml", import.meta.url), "utf8");
   assert.match(wf, /Co-authored-by: \$WHO/, "the person is the change's author: someone else approves it");
   assert.match(wf, /path: \.pipeline/, "main's pipeline code, never the branch's");
+  assert.match(wf, /set -o pipefail/, "a failed retrieve is a failure, not \"nothing new\"");
+  assert.ok(calls.some((c) => /Username LIKE '%\.pipeline' AND \(NOT Username LIKE 'persona\.%'\)/.test(c)));
 });
