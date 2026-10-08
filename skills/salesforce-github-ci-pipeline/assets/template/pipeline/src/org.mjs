@@ -178,8 +178,10 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         const def = join(tmpdir(), `snapshot-${process.pid}.json`);
         writeFileSync(def, JSON.stringify({ orgName: `Lifecycle ${org.description}`, snapshot }));
         log(`creating ${org.alias} (${org.description}) from snapshot ${snapshot}, ${org.days} days`);
-        if (sf([...base, "--definition-file", def, "--wait", "45"], { allowFail: true })) return { fromSnapshot: true };
-        log(`::warning::snapshot ${snapshot} could not be used (expired or not active yet?): creating ${org.alias} from production's shape instead`);
+        let why = "";
+        try { sf([...base, "--definition-file", def, "--wait", "45"]); return { fromSnapshot: true, snapshot }; } catch (e) { why = String(e.message).split("\n").slice(-2).join(" ").slice(0, 300); }
+        log(`::warning::snapshot ${snapshot} could not be used (${why || "no reason given"}): creating ${org.alias} from production's shape instead`);
+        record("snapshot", { action: "fallback", name: snapshot, org: org.description, why });
         self.removeTagged(org.description);   // a half-made attempt must not hold a slot
       }
       log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);

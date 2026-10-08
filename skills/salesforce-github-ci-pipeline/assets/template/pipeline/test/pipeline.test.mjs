@@ -1934,7 +1934,7 @@ function provisionSf({ live = [], title = null, snapshotWorks = true } = {}) {
     if (args[0] === "data" && args[1] === "query" && /FROM UserRole/.test(c)) return { records: [{ Id: "00E1" }] };
     if (args[0] === "data" && args[1] === "query") return { records: live };
     if (args[0] === "org" && args[1] === "display") return { clientId: "CID", username: "u@x", id: "00Dxx0000000001" };
-    if (args[0] === "org" && args[1] === "create" && args[2] === "scratch" && c.includes("snapshot-")) return snapshotWorks ? {} : null;
+    if (args[0] === "org" && args[1] === "create" && args[2] === "scratch" && c.includes("snapshot-")) { if (!snapshotWorks) throw new Error("sf org failed: SN-0001 The snapshot has expired"); return {}; }
     if (args[0] === "org" && args[1] === "create" && args[2] === "user") return { fields: { id: "005u" } };
     return {};
   };
