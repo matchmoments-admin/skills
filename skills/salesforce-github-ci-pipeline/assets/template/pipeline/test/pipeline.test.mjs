@@ -8,7 +8,7 @@ import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
-import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf } from "../src/org.mjs";
+import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
 import * as plans from "../src/plan.mjs";
@@ -28,6 +28,7 @@ import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
 import * as evidence from "../src/evidence.mjs";
 import * as baselineMod from "../src/baseline.mjs";
+import * as orgMod from "../src/org.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -313,7 +314,7 @@ function fakeSf(records, { ready = true, installed = [] } = {}) {
 
 test("org registry: attaches the live org found by Description; never creates when one exists", () => {
   const { sf, calls } = fakeSf([{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s", ExpirationDate: "2026-10-07" }, { Description: "staging-w", SignupUsername: "s@x", LoginUrl: "https://t" }]);
-  const r = orgRegistry({ sf, log: () => {}, sleep: () => {} });
+  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, env: { BASELINE: "off", SEED: "off" } });
   assert.equal(r.find("story:99"), null);
   const o = r.ensure("issue-12");
   assert.equal(o.created, false);
@@ -323,7 +324,7 @@ test("org registry: attaches the live org found by Description; never creates wh
 
 test("org registry: creates, deploys and prepares when none is live; remove is a no-op when none", () => {
   const { sf, calls } = fakeSf([]);
-  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } });
+  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } });
   const o = r.ensure("story:12", { hotfix: true });
   assert.equal(o.created, true);
   assert.equal(o.definition, "config/scratch-hotfix.json");
@@ -347,7 +348,7 @@ test("org registry refuses to create when the Dev Hub has no room, with the reas
     if (args[0] === "data") return { records: [] };
     return {};
   };
-  assert.throws(() => orgRegistry({ sf, log: () => {}, sleep: () => {} }).ensure("story:9"), /No free scratch org slot/);
+  assert.throws(() => orgRegistry({ sf, log: () => {}, sleep: () => {}, env: { BASELINE: "off", SEED: "off" } }).ensure("story:9"), /No free scratch org slot/);
 });
 
 test("the review verdict comes only from the pipeline's comments posted during this run", () => {
@@ -517,10 +518,13 @@ test("managed packages: installed before the source, with an install key from th
   const { sf, calls } = fakeSf([]);
   const seen = [];
   const spy = (args, o) => { seen.push(args); return sf(args, o); };
-  const r = orgRegistry({ sf: spy, log: () => {}, sleep: () => {}, packages: [{ name: "DocuSign", id: "04t000000000001AAA", keyEnv: "DS_KEY" }], env: { DS_KEY: "k" } });
+  const r = orgRegistry({ sf: spy, log: () => {}, sleep: () => {}, packages: [{ name: "DocuSign", id: "04t000000000001AAA", keyEnv: "DS_KEY" }], env: { DS_KEY: "k", BASELINE: "off", SEED: "off" } });
   r.ensure("story:12");
   const order = calls.filter((c) => /^(org create|package install|project deploy)/.test(c));
-  assert.deepEqual(order, ["org create scratch", "package installed list", "package install --package", "project deploy start"]);
+  // a shape org gets "log in as" and its roles rebuilt (settings and role deploys), then the packages BEFORE the source
+  assert.equal(order[0], "org create scratch");
+  assert.ok(order.indexOf("package install --package") < order.lastIndexOf("project deploy start"), order.join(" > "));
+  assert.equal(order.at(-1), "project deploy start");
   assert.ok(seen.find((a) => a[1] === "install").includes("--installation-key"));
   const { writeFileSync, mkdtempSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -653,7 +657,7 @@ test("removing an org goes through the Dev Hub record, never a login to the org;
     if (args[1] === "query") return { records: [{ Description: "issue-12", SignupUsername: "u12@x" }, { Description: "ci-9", SignupUsername: "c9@x" }] };
     return {};
   };
-  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } });
+  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } });
   assert.equal(r.remove("story:12"), true);
   assert.equal(r.removeTagged("ci-9"), 1);
   assert.ok(calls.some((c) => c.includes("data delete record -o devhub -s ActiveScratchOrg -w SignupUsername='u12@x'")));
@@ -950,13 +954,13 @@ test("org registry: a live org that never finished is completed, not trusted; a 
   const live = [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }];
   const half = fakeSf(live, { ready: false, installed: ["04t000000000001AAA"] });
   const pkgs = [{ name: "A", id: "04t000000000001AAA" }, { name: "B", id: "04t000000000002AAA" }];
-  const o = orgRegistry({ sf: half.sf, log: () => {}, sleep: () => {}, packages: pkgs }).ensure("story:12");
+  const o = orgRegistry({ sf: half.sf, log: () => {}, sleep: () => {}, packages: pkgs, env: { BASELINE: "off", SEED: "off" } }).ensure("story:12");
   assert.deepEqual([o.created, o.completed], [false, true]);
   assert.ok(!half.calls.includes("org create scratch"));
   assert.equal(half.calls.filter((c) => c === "package install --package").length, 1, "only the missing package");
   assert.ok(half.calls.includes("project deploy start") && half.calls.includes("data update record"));
   const done = fakeSf(live, { ready: true });
-  orgRegistry({ sf: done.sf, log: () => {}, sleep: () => {}, packages: pkgs }).ensure("story:12");
+  orgRegistry({ sf: done.sf, log: () => {}, sleep: () => {}, packages: pkgs, env: { BASELINE: "off", SEED: "off" } }).ensure("story:12");
   assert.ok(!done.calls.includes("project deploy start") && !done.calls.includes("package install --package"));
 });
 
@@ -1392,9 +1396,9 @@ test("check runs are updated when their title changes, at most once a minute; th
 test("story orgs leave ORG_RESERVE slots for staging, UAT and CI; an expired org says how to rebuild it", () => {
   const { sf } = fakeSf([]);
   const limited = (remaining) => (args, o) => (args[0] === "limits" ? [{ name: "ActiveScratchOrgs", remaining, max: 40 }, { name: "DailyScratchOrgs", remaining: 50, max: 80 }] : sf(args, o));
-  assert.throws(() => orgRegistry({ sf: limited(2), log: () => {}, packages: [], env: { ORG_RESERVE: "2" } }).ensure("story:9"), /2 kept for staging, UAT and CI/);
-  assert.doesNotThrow(() => orgRegistry({ sf: limited(3), log: () => {}, packages: [], env: { ORG_RESERVE: "2" } }).ensure("story:9"));
-  assert.throws(() => orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off" } }).attach("story:9"), /expired \(story orgs live 7 days\)\. Comment \/start/);
+  assert.throws(() => orgRegistry({ sf: limited(2), log: () => {}, packages: [], env: { ORG_RESERVE: "2", BASELINE: "off", SEED: "off" } }).ensure("story:9"), /2 kept for staging, UAT and CI/);
+  assert.doesNotThrow(() => orgRegistry({ sf: limited(3), log: () => {}, packages: [], env: { ORG_RESERVE: "2", BASELINE: "off", SEED: "off" } }).ensure("story:9"));
+  assert.throws(() => orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).attach("story:9"), /expired \(story orgs live 7 days\)\. Comment \/start/);
 });
 
 test("cost wiring: no duplicate full run on release PRs, the fixer only for code failures, renudge only on the main lock", () => {
@@ -1431,7 +1435,7 @@ test("Apex tests run as production's CI user would: the story permission sets ar
     if (args[0] === "data" && args[1] === "query") return { records: [{ Id: "0PaX1" }] };
     return {};
   };
-  const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off" } });
+  const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } });
   const seen = r.asProductionUser("issue-1", () => { calls.push("RUN TESTS"); return 42; }, dir);
   assert.equal(seen, 42);
   const at = (c) => calls.indexOf(c);
@@ -1561,7 +1565,7 @@ test("UAT access from GitHub: the card links UAT; a stand-in offers 'Send me a U
     if (args[0] === "data" && args[1] === "query") return { records: calls.filter((c) => c.startsWith("org create user")).length ? [{ Id: "005X" }] : [] };
     return {};
   };
-  const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off" } }).tester("uat", { login: "Tester-1", email: "t@example.com" }, dir);
+  const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).tester("uat", { login: "Tester-1", email: "t@example.com" }, dir);
   assert.deepEqual(r, { username: "tester1.uat@00drt00000yw6bx.pipeline", created: true, persona: { role: null, permsets: ["Sales_Region_Access"] } });
   assert.ok(calls.some((c) => /org create user .*profileName=Standard User permsets=Sales_Region_Access/.test(c)));
   assert.ok(calls.some((c) => c.startsWith("apex run -o uat --file")), "Salesforce emails the password link");
@@ -1833,7 +1837,7 @@ test("the review rubric: the UI test spec comes after the review; answers win ov
 
 test("the reviewer's rules come from main (a PR cannot soften its own review)", () => {
   const wf = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
-  assert.match(wf, /sparse-checkout: "pipeline\\nscripts\\nconfig\\n\.github\/actions\\nbaseline\\nREVIEW\.md\\nCLAUDE\.md\\ndocs\/agents"/);
+  assert.match(wf, /sparse-checkout: "pipeline\\nscripts\\nconfig\\n\.github\/actions\\nbaseline\\ndata\/seed\\nREVIEW\.md\\nCLAUDE\.md\\ndocs\/agents"/);
   assert.match(wf, /following \.pipeline\/REVIEW\.md, \.pipeline\/CLAUDE\.md and \.pipeline\/docs\/agents\/salesforce\.md/);
 });
 
@@ -1940,32 +1944,32 @@ function provisionSf({ live = [], title = null, snapshotWorks = true } = {}) {
 test("Org provisioning: ready() holds the commit once; creates from the snapshot, else shape; personas set the tester's role", () => {
   // a live org already marked for this commit: nothing deployed again (ui-test used to deploy and prepare twice)
   let { sf, calls } = provisionSf({ live: [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }], title: "pipeline: ready abc123456789" });
-  let o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } }).ready("issue-12", { commit: "abc123456789ffff" });
+  let o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).ready("issue-12", { commit: "abc123456789ffff" });
   assert.equal(o.fresh, true);
   assert.ok(!calls.some((c) => c.startsWith("project deploy")));
   // marked for an older commit: deploy, prepare, mark with the new one
   ({ sf, calls } = provisionSf({ live: [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }], title: "pipeline: ready 000000000000" }));
-  o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } }).ready("issue-12", { commit: "abc123456789ffff" });
+  o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).ready("issue-12", { commit: "abc123456789ffff" });
   assert.ok(calls.some((c) => c.startsWith("project deploy start")));
   assert.ok(calls.some((c) => /Title='pipeline: ready abc123456789'/.test(c)));
   // none live, a snapshot set: created from it
   ({ sf, calls } = provisionSf());
-  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912", BASELINE: "off" } }).ready("story:12", { commit: "abc" });
+  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912", BASELINE: "off", SEED: "off" } }).ready("story:12", { commit: "abc" });
   assert.ok(calls.some((c) => c.startsWith("org create scratch") && c.includes("snapshot-")));
   assert.ok(!calls.some((c) => c.includes("config/scratch-dev.json")), "the snapshot worked: no shape create");
   // the snapshot fails (expired): falls back to shape, after removing the half-made attempt
   ({ sf, calls } = provisionSf({ snapshotWorks: false }));
-  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912", BASELINE: "off" } }).ready("story:12", { commit: "abc" });
+  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912", BASELINE: "off", SEED: "off" } }).ready("story:12", { commit: "abc" });
   assert.ok(calls.some((c) => c.includes("config/scratch-dev.json")));
   // a throwaway CI org skips source tracking
   ({ sf, calls } = provisionSf());
-  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } }).temporary("ci-1");
+  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).temporary("ci-1");
   assert.ok(calls.some((c) => c.startsWith("org create scratch") && c.includes("--no-track-source")));
   // personas
   assert.deepEqual(orgPersonaOf("### Access\n\n- Persona: DirectorDirectSales role, Regional_Reporting_Access\n"), { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] });
   assert.equal(orgPersonaOf("### Access\n\nNo change"), null);
   ({ sf, calls } = provisionSf());
-  const t = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off" } }).tester("uat", { login: "pm", email: "p@x.com", persona: { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] } });
+  const t = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).tester("uat", { login: "pm", email: "p@x.com", persona: { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] } });
   assert.deepEqual(t.persona, { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] });
   assert.ok(calls.some((c) => /org create user .*permsets=Regional_Reporting_Access$/.test(c)));
   assert.ok(calls.some((c) => /UserRoleId=00E1/.test(c)), "the tester gets the persona's role");
@@ -2040,7 +2044,7 @@ test("baseline in orgs: one combined deploy; soft falls back to force-app alone;
       return {};
     };
     const events = [];
-    const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], baselineDir: b, env: { BASELINE: "soft" }, record: (k, d) => events.push([k, d]) });
+    const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], baselineDir: b, env: { BASELINE: "soft", SEED: "off" }, record: (k, d) => events.push([k, d]) });
     return { r, calls, events };
   };
   let { r, calls, events } = run(true);
@@ -2066,4 +2070,68 @@ test("prod-baseline checks out main before the identity action re-clones it (a .
   const wf = readFileSync(new URL("../../.github/workflows/prod-baseline.yml", import.meta.url), "utf8");
   assert.match(wf, /uses: actions\/checkout@v4\n\s+with: \{ ref: main \}[^\n]*\n\s+- id: id\n\s+uses: \.\/\.github\/actions\/pipeline-identity/);
   assert.doesNotMatch(wf, /\.pipeline\//);
+});
+
+// ---------------------------------------------------------------- test data (round 4)
+test("seed: dates never go stale; loaded once per org (markers); a story's own data too; never production", async () => {
+  const out = expandSeed({ "a.json": '{"CloseDate":"${THIS_YEAR}-03-15","Name":"${SEED_MARKER}","Next":"${NEXT_YEAR}-01-01"}' }, { today: new Date("2026-10-09T00:00:00Z"), marker: "[seed abc]" });
+  assert.equal(out["a.json"], '{"CloseDate":"2026-03-15","Name":"[seed abc]","Next":"2027-01-01"}');
+  const real = JSON.parse(readFileSync(new URL("../../data/seed/Opportunity.json", import.meta.url), "utf8")).records;
+  assert.ok(real.every((r) => /^\$\{(THIS|NEXT|LAST)_YEAR\}-\d\d-\d\d$/.test(r.CloseDate)), "seed dates are tokens");
+  assert.ok(readFileSync(new URL("../../data/seed/Account.json", import.meta.url), "utf8").includes("${SEED_MARKER}"));
+  const plan = JSON.parse(readFileSync(new URL("../../data/seed/plan.json", import.meta.url), "utf8"));
+  assert.deepEqual(plan.map((p) => p.sobject), ["Account", "Contact", "Opportunity", "Case", "Lead"]);
+
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const seedDir = mkdtempSync(join(tmpdir(), "seed-"));
+  writeFileSync(join(seedDir, "plan.json"), JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
+  writeFileSync(join(seedDir, "Account.json"), JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "M" }, Name: "${SEED_MARKER}" }] }));
+  const story = mkdtempSync(join(tmpdir(), "story-"));
+  mkdirSync(join(story, "data/seed/stories/150"), { recursive: true });
+  writeFileSync(join(story, "data/seed/stories/150/plan.json"), JSON.stringify([{ sobject: "Lead", files: ["Lead.json"] }]));
+  writeFileSync(join(story, "data/seed/stories/150/Lead.json"), JSON.stringify({ records: [] }));
+  const mk = ({ have = false, prodId = "00D000000000001" } = {}) => {
+    const calls = [];
+    const sf = (args) => {
+      calls.push(args.join(" "));
+      if (args[0] === "org" && args[1] === "display") return { id: args.includes("devhub") ? prodId : "00D000000000002", username: "a@b" };
+      if (args[0] === "data" && args[1] === "query") return { records: have ? [{ Id: "001" }] : [] };
+      return {};
+    };
+    return { calls, r: orgRegistry({ sf, log: () => {}, packages: [], seedDir, env: { BASELINE: "off" } }) };
+  };
+  const cwd = process.cwd();
+  process.chdir(story);
+  try {
+    let { r, calls } = mk();
+    const loaded = r.seed("issue-150", { story: "150" });
+    assert.equal(loaded.length, 2, "the core seed, then the story's own");
+    assert.match(loaded[1], /^\[seed story 150 /);
+    assert.equal(calls.filter((c) => c.startsWith("data import tree")).length, 2);
+    ({ r, calls } = mk({ have: true }));
+    assert.deepEqual(r.seed("issue-150", { story: "150" }), [], "markers present (e.g. from the snapshot): nothing loaded again");
+    ({ r } = mk({ prodId: "00D000000000002" }));
+    assert.throws(() => r.seed("devhub"), /refusing to load test data into devhub: it is production/);
+  } finally { process.chdir(cwd); }
+});
+
+test("Org Shape roles are rebuilt so they can be assigned; personas log in through Log in as (no password)", () => {
+  const { roleRebuild } = orgMod;
+  const roles = [{ Id: "1", Name: "CEO", DeveloperName: "CEO", ParentRoleId: null, CaseAccessForAccountOwner: "Edit", ContactAccessForAccountOwner: "Edit", OpportunityAccessForAccountOwner: "Read" },
+    { Id: "2", Name: "Director", DeveloperName: "DirectorDirectSales", ParentRoleId: "1", RollupDescription: "Direct & Sales" },
+    { Id: "3", Name: "Western", DeveloperName: "WesternSalesTeam", ParentRoleId: "2" }];
+  const { levels, files } = roleRebuild(roles);
+  assert.deepEqual(levels, [["3"], ["2"], ["1"]], "leaves are deleted first");
+  assert.match(files.WesternSalesTeam, /<parentRole>DirectorDirectSales<\/parentRole>/);
+  assert.match(files.DirectorDirectSales, /<description>Direct &amp; Sales<\/description>/);
+  assert.match(files.CEO, /<opportunityAccessLevel>Read<\/opportunityAccessLevel>/);
+  assert.doesNotMatch(files.CEO, /parentRole/);
+  const login = readFileSync(new URL("../../e2e/support/login.ts", import.meta.url), "utf8");
+  assert.match(login, /servlet\/servlet\.su\?oid=/);
+  assert.match(login, /LICENSE_LIMIT_EXCEEDED/);
+  assert.doesNotMatch(login, /"generate", "password"|"org", "create", "user"/, "no password, and no create user (JWT on Hyperforce refuses it)");
+  assert.match(readFileSync(new URL("../../pipeline/src/org.mjs", import.meta.url), "utf8"), /enableAdminLoginAsAnyUser>true/);
+  assert.match(readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8"), /loginAs\(page, \{ role, permsets \}\)/);
 });

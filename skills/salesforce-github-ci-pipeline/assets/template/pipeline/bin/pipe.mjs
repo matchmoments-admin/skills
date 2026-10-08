@@ -245,7 +245,7 @@ const commands = {
   "evidence squash": async () => say(await evidence.sweep({ host, tracker, log })),   // whatever UI_EVIDENCE says: off still clears what was stored
   "baseline capture": () => {   // production's customisations into baseline/ (pipeline/src/baseline.mjs); the workflow opens the drift PR
     const r = baseline.capture({ sf: io.sf, config: JSON.parse(readFileSync("config/baseline.json", "utf8")), log });
-    const changes = (io.git(["status", "--porcelain", "--", baseline.DIR], { allowFail: true }) || "").split("\n").filter(Boolean);
+    const changes = (io.git(["status", "--porcelain", "--untracked-files=all", "--", baseline.DIR], { allowFail: true }) || "").split("\n").filter(Boolean);
     writeFileSync(flag("out", "drift.md"), baseline.driftSummary(changes, r.listings)); output({ changed: changes.length, id: baseline.baselineId(baseline.DIR) || "" });
     record("baseline", { action: changes.length ? "drift" : "refreshed", changed: changes.length }); return say(`${changes.length} file(s) differ from git`);
   },

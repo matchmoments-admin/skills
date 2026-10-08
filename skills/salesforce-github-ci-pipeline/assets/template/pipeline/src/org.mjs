@@ -1,7 +1,7 @@
 // The org registry: find, create, prepare and delete scratch orgs (see GLOSSARY.md: Issue org, Staging org,
 // Org registry). The Dev Hub's ScratchOrgInfo records are the registry, matched on Description, so a deleted
 // org can never look alive. Logins use the CI certificate (JWT) with the Dev Hub's connected app.
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { orgFor } from "./conventions.mjs";
@@ -43,7 +43,35 @@ export function packageList(file = join(PIPELINE_ROOT, "config/packages.json")) 
 const DEVHUB = "devhub";
 /** Written to the scratch org admin user's Title when ready() has finished every step, with the commit it holds. */
 export const READY = "pipeline: ready";
-export const readyMarker = (commit, baseline = null) => (commit ? `${READY} ${String(commit).slice(0, 12)}${baseline ? ` b${baseline}` : ""}` : READY);
+export const readyMarker = (commit, baseline = null, seed = null) => (commit ? `${READY} ${String(commit).slice(0, 12)}${baseline ? ` b${baseline}` : ""}${seed ? ` s${seed}` : ""}` : READY);
+
+/**
+ * The roles an Org Shape scratch org arrives with cannot be given to a user ("invalid cross reference id"; a role made
+ * in the org can). Rebuilding them (delete, leaves first; recreate as Role metadata from what was read) makes them
+ * usable, so personas, testers and role-shared folders work. Pure: queried UserRoles -> { levels (ids to delete, the
+ * deepest first), files ({ DeveloperName: role-meta xml }) }.
+ */
+export function roleRebuild(roles) {
+  const byId = new Map(roles.map((r) => [r.Id, r]));
+  const depth = (r, seen = 0) => (r.ParentRoleId && byId.has(r.ParentRoleId) && seen < 50 ? 1 + depth(byId.get(r.ParentRoleId), seen + 1) : 0);
+  const levels = [];
+  for (const r of roles) (levels[depth(r)] ||= []).push(r.Id);
+  const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const access = (v, d) => (["Edit", "Read", "None"].includes(v) ? v : d);
+  const files = Object.fromEntries(roles.map((r) => [r.DeveloperName, ['<?xml version="1.0" encoding="UTF-8"?>', '<Role xmlns="http://soap.sforce.com/2006/04/metadata">',
+    `    <caseAccessLevel>${access(r.CaseAccessForAccountOwner, "Edit")}</caseAccessLevel>`, `    <contactAccessLevel>${access(r.ContactAccessForAccountOwner, "Edit")}</contactAccessLevel>`,
+    ...(r.RollupDescription ? [`    <description>${esc(r.RollupDescription)}</description>`] : []), `    <mayForecastManagerShare>${Boolean(r.MayForecastManagerShare)}</mayForecastManagerShare>`,
+    `    <name>${esc(r.Name)}</name>`, `    <opportunityAccessLevel>${access(r.OpportunityAccessForAccountOwner, "Edit")}</opportunityAccessLevel>`,
+    ...(r.ParentRoleId && byId.has(r.ParentRoleId) ? [`    <parentRole>${byId.get(r.ParentRoleId).DeveloperName}</parentRole>`] : []), "</Role>", ""].join("\n")]));
+  return { levels: levels.filter(Boolean).reverse(), files };
+}
+
+/** The seed's files with their date tokens filled in (data/seed/README.md). Pure: { name: text } -> { name: text }. */
+export function expandSeed(files, { today = new Date(), marker }) {
+  const y = today.getUTCFullYear();
+  const tokens = { TODAY: today.toISOString().slice(0, 10), THIS_YEAR: String(y), LAST_YEAR: String(y - 1), NEXT_YEAR: String(y + 1), SEED_MARKER: marker };
+  return Object.fromEntries(Object.entries(files).map(([n, t]) => [n, String(t).replace(/\$\{(TODAY|THIS_YEAR|LAST_YEAR|NEXT_YEAR|SEED_MARKER)\}/g, (_, k) => tokens[k])]));
+}
 
 /** Who a story is for, from its "Persona:" line (Access section): "Persona: DirectorDirectSales role, Regional_Reporting_Access".
  *  { role, permsets } or null. Pure. */
@@ -77,10 +105,12 @@ export function permissionSets(dir = "force-app") {
 }
 
 export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key`, packages = packageList(), env = process.env,
-  baselineDir = join(PIPELINE_ROOT, BASELINE_DIR), record = () => {} }) {
+  baselineDir = join(PIPELINE_ROOT, BASELINE_DIR), seedDir = join(PIPELINE_ROOT, "data/seed"), record = () => {} }) {
   // the production baseline (BASELINE: off | soft (default) | strict), from main's trusted checkout, never the branch's
   const baselineMode = String(env.BASELINE || "soft").toLowerCase();
   const baseline = () => (baselineMode !== "off" && existsSync(baselineDir) ? idOf(baselineDir) : null);
+  // test data (data/seed: synthetic, for people and UI tests; Apex tests never see it), from main's trusted checkout
+  const seedId = () => (String(env.SEED || "on").toLowerCase() !== "off" && existsSync(join(seedDir, "plan.json")) ? idOf(seedDir) : null);
   const active = () =>
     (sf(["data", "query", "-o", DEVHUB, "-q", "SELECT SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate FROM ScratchOrgInfo WHERE Status = 'Active' ORDER BY CreatedDate DESC"]).records || []);
   /** Delete through the Dev Hub's ActiveScratchOrg record: no login to the org itself, so it works on any org. */
@@ -117,16 +147,18 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     ready(target, { commit = null, manifest = null, ...opts } = {}) {
       const existing = self.find(target, opts);
       const org = existing ? self.attach(existing) : resolve(target, opts);
-      const want = readyMarker(commit, baseline());
+      const want = readyMarker(commit, baseline(), seedId());
       if (existing && self.isReady(org.alias, want)) { log(`${org.alias} already holds ${commit ? String(commit).slice(0, 7) : "its source"}`); return { ...org, created: false, fresh: true }; }
       if (existing) log(`${org.alias} exists: bringing it to ${commit ? String(commit).slice(0, 7) : "its source"}`);
       else {
         self.assertCapacity(org.kind === "story" ? Number(env.ORG_RESERVE || 0) : 0);
-        self.create(org);
+        const how = self.create(org);
+        if (!how.fromSnapshot) { self.enableLoginAs(org.alias); self.rebuildRoles(org.alias); }   // roles before the deploy: shares attach to them
       }
       self.installPackages(org.alias);
       self.deploy(org.alias, { manifest });
       self.prepare(org.alias);
+      self.seed(org.alias, { story: org.key || null });
       self.markReady(org.alias, want);
       return { ...org, created: !existing, completed: Boolean(existing) };
     },
@@ -187,6 +219,75 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         for (const old of ours.slice(keep)) { sf(["org", "delete", "snapshot", "--snapshot", old.SnapshotName, "-v", DEVHUB, "--no-prompt"], { allowFail: true }); log(`deleted old snapshot ${old.SnapshotName}`); }
       }
       return { name, active: status === "Active", status };
+    },
+
+    /**
+     * Load the test data once per org: the core seed (data/seed, from main) unless its marker Account is already there
+     * (a snapshot holds it), then the story's own (data/seed/stories/<key>/plan.json in the working directory) once.
+     * sf data import tree only inserts, so the markers are what make it safe to repeat. Scratch orgs only.
+     */
+    seed(alias, { story = null } = {}) {
+      const loads = [];
+      const id = seedId();
+      if (id) loads.push({ dir: seedDir, marker: `[seed ${id}]` });
+      const own = story ? join(process.cwd(), "data/seed/stories", String(story)) : null;
+      if (id && own && existsSync(join(own, "plan.json"))) loads.push({ dir: own, marker: `[seed story ${story} ${idOf(own)}]` });
+      if (!loads.length) return [];
+      // never production: the Dev Hub is production here (and a production org is never a target of org ready anyway)
+      const [target, prod] = [sf(["org", "display", "-o", alias], { allowFail: true })?.id, sf(["org", "display", "-o", DEVHUB], { allowFail: true })?.id];
+      if (!target || (prod && String(target).slice(0, 15) === String(prod).slice(0, 15))) throw new Error(`refusing to load test data into ${alias}: it is production (or unknown)`);
+      const loaded = [];
+      for (const { dir, marker } of loads) {
+        const have = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${marker}'`], { allowFail: true })?.records?.length;
+        if (have) { log(`${alias} already has ${marker}`); continue; }
+        const files = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => [f, readFileSync(join(dir, f), "utf8")]));
+        if (!files["plan.json"].includes("SEED_MARKER") && !Object.values(files).some((t) => t.includes("${SEED_MARKER}"))) {
+          // a story's plan without its own marker: add one, so it too loads once
+          files["SeedMarker.json"] = JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "SeedMarker" }, Name: "${SEED_MARKER}" }] });
+          files["plan.json"] = JSON.stringify([...JSON.parse(files["plan.json"]), { sobject: "Account", files: ["SeedMarker.json"] }]);
+        }
+        const out = join(tmpdir(), `seed-${process.pid}-${loaded.length}`);
+        mkdirSync(out, { recursive: true });
+        for (const [n, t] of Object.entries(expandSeed(files, { marker }))) writeFileSync(join(out, n), t);
+        sf(["data", "import", "tree", "--plan", join(out, "plan.json"), "-o", alias]);
+        log(`loaded test data ${marker} into ${alias}`);
+        loaded.push(marker);
+      }
+      return loaded;
+    },
+
+    /** "Administrators Can Log in as Any User" (off in scratch orgs): UI tests log in AS a persona through it, so no
+     *  password ever exists (e2e/support/login.ts loginAs). Scratch orgs only; best effort. */
+    enableLoginAs(alias) {
+      const dir = join(tmpdir(), `security-${process.pid}`);
+      mkdirSync(join(dir, "force-app/main/default/settings"), { recursive: true });
+      writeFileSync(join(dir, "sfdx-project.json"), JSON.stringify({ packageDirectories: [{ path: "force-app", default: true }], sourceApiVersion: "67.0" }));
+      writeFileSync(join(dir, "force-app/main/default/settings/Security.settings-meta.xml"), '<?xml version="1.0" encoding="UTF-8"?>\n<SecuritySettings xmlns="http://soap.sforce.com/2006/04/metadata">\n    <enableAdminLoginAsAnyUser>true</enableAdminLoginAsAnyUser>\n</SecuritySettings>\n');
+      const ok = sf(["project", "deploy", "start", "-o", alias, "-d", "force-app", "--wait", "20"], { cwd: dir, allowFail: true });
+      if (!ok) log(`::warning::could not turn on "log in as" in ${alias}: UI tests cannot log in as a persona`);
+      return Boolean(ok);
+    },
+
+    /** Make a shape org's roles assignable (see roleRebuild). Safe on an org with no roles. Returns how many. */
+    rebuildRoles(alias) {
+      const roles = sf(["data", "query", "-o", alias, "-q", "SELECT Id, Name, DeveloperName, ParentRoleId, RollupDescription, CaseAccessForAccountOwner, ContactAccessForAccountOwner, OpportunityAccessForAccountOwner, MayForecastManagerShare FROM UserRole WHERE PortalType = 'None'"], { allowFail: true })?.records || [];
+      if (!roles.length) return 0;
+      const { levels, files } = roleRebuild(roles);
+      const apex = join(tmpdir(), `roles-${process.pid}.apex`);
+      const all = roles.map((r) => `'${r.Id}'`).join(",");
+      writeFileSync(apex, [   // users holding these roles keep their role DeveloperName in mind: they get it back below
+        `Map<Id, String> held = new Map<Id, String>(); for (User u : [SELECT Id, UserRole.DeveloperName FROM User WHERE UserRoleId IN (${all})]) held.put(u.Id, u.UserRole.DeveloperName);`,
+        "List<User> clear = new List<User>(); for (Id u : held.keySet()) clear.add(new User(Id = u, UserRoleId = null)); update clear;",
+        ...levels.map((ids) => `delete [SELECT Id FROM UserRole WHERE Id IN ('${ids.join("','")}')];`),
+        "System.debug('HELD ' + JSON.serialize(held));"].join("\n") + "\n");
+      if (!sf(["apex", "run", "-o", alias, "--file", apex], { allowFail: true })) { log(`::warning::could not rebuild the roles in ${alias}: personas with a role may fail`); return 0; }
+      const dir = join(tmpdir(), `roles-${process.pid}`);
+      mkdirSync(join(dir, "force-app/main/default/roles"), { recursive: true });
+      writeFileSync(join(dir, "sfdx-project.json"), JSON.stringify({ packageDirectories: [{ path: "force-app", default: true }], sourceApiVersion: "67.0" }));
+      for (const [name, xml] of Object.entries(files)) writeFileSync(join(dir, "force-app/main/default/roles", `${name}.role-meta.xml`), xml);
+      sf(["project", "deploy", "start", "-o", alias, "-d", "force-app", "--wait", "20"], { cwd: dir });   // the roles must come back: fail loudly
+      log(`rebuilt ${roles.length} role(s) in ${alias} so they can be assigned (shape roles cannot)`);
+      return roles.length;
     },
 
     /** The ready marker: the org's admin user's Title, set only when ready() finished every step for a commit. */

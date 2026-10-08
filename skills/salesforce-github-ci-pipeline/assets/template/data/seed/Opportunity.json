@@ -1,0 +1,664 @@
+{
+  "records": [
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW01"
+      },
+      "Name": "Seed Won 01",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-02-15",
+      "Amount": 2000,
+      "AccountId": "@Acc01"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO01"
+      },
+      "Name": "Seed Open 01",
+      "StageName": "Qualification",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1000,
+      "AccountId": "@Acc01"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW02"
+      },
+      "Name": "Seed Won 02",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-03-15",
+      "Amount": 3000,
+      "AccountId": "@Acc02"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO02"
+      },
+      "Name": "Seed Open 02",
+      "StageName": "Needs Analysis",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1500,
+      "AccountId": "@Acc02"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW03"
+      },
+      "Name": "Seed Won 03",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-04-15",
+      "Amount": 4000,
+      "AccountId": "@Acc03"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO03"
+      },
+      "Name": "Seed Open 03",
+      "StageName": "Proposal/Price Quote",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2000,
+      "AccountId": "@Acc03"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW04"
+      },
+      "Name": "Seed Won 04",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-05-15",
+      "Amount": 5000,
+      "AccountId": "@Acc04"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO04"
+      },
+      "Name": "Seed Open 04",
+      "StageName": "Prospecting",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2500,
+      "AccountId": "@Acc04"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW05"
+      },
+      "Name": "Seed Won 05",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-06-15",
+      "Amount": 6000,
+      "AccountId": "@Acc05"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO05"
+      },
+      "Name": "Seed Open 05",
+      "StageName": "Qualification",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 500,
+      "AccountId": "@Acc05"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW06"
+      },
+      "Name": "Seed Won 06",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-01-15",
+      "Amount": 7000,
+      "AccountId": "@Acc06"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO06"
+      },
+      "Name": "Seed Open 06",
+      "StageName": "Needs Analysis",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1000,
+      "AccountId": "@Acc06"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW07"
+      },
+      "Name": "Seed Won 07",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-02-15",
+      "Amount": 1000,
+      "AccountId": "@Acc07"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO07"
+      },
+      "Name": "Seed Open 07",
+      "StageName": "Proposal/Price Quote",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1500,
+      "AccountId": "@Acc07"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW08"
+      },
+      "Name": "Seed Won 08",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-03-15",
+      "Amount": 2000,
+      "AccountId": "@Acc08"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO08"
+      },
+      "Name": "Seed Open 08",
+      "StageName": "Prospecting",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2000,
+      "AccountId": "@Acc08"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW09"
+      },
+      "Name": "Seed Won 09",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-04-15",
+      "Amount": 3000,
+      "AccountId": "@Acc09"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO09"
+      },
+      "Name": "Seed Open 09",
+      "StageName": "Qualification",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2500,
+      "AccountId": "@Acc09"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW10"
+      },
+      "Name": "Seed Won 10",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-05-15",
+      "Amount": 4000,
+      "AccountId": "@Acc10"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO10"
+      },
+      "Name": "Seed Open 10",
+      "StageName": "Needs Analysis",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 500,
+      "AccountId": "@Acc10"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW11"
+      },
+      "Name": "Seed Won 11",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-06-15",
+      "Amount": 5000,
+      "AccountId": "@Acc11"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO11"
+      },
+      "Name": "Seed Open 11",
+      "StageName": "Proposal/Price Quote",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1000,
+      "AccountId": "@Acc11"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW12"
+      },
+      "Name": "Seed Won 12",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-01-15",
+      "Amount": 6000,
+      "AccountId": "@Acc12"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO12"
+      },
+      "Name": "Seed Open 12",
+      "StageName": "Prospecting",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1500,
+      "AccountId": "@Acc12"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW13"
+      },
+      "Name": "Seed Won 13",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-02-15",
+      "Amount": 7000,
+      "AccountId": "@Acc13"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO13"
+      },
+      "Name": "Seed Open 13",
+      "StageName": "Qualification",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2000,
+      "AccountId": "@Acc13"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW14"
+      },
+      "Name": "Seed Won 14",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-03-15",
+      "Amount": 1000,
+      "AccountId": "@Acc14"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO14"
+      },
+      "Name": "Seed Open 14",
+      "StageName": "Needs Analysis",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2500,
+      "AccountId": "@Acc14"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW15"
+      },
+      "Name": "Seed Won 15",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-04-15",
+      "Amount": 2000,
+      "AccountId": "@Acc15"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO15"
+      },
+      "Name": "Seed Open 15",
+      "StageName": "Proposal/Price Quote",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 500,
+      "AccountId": "@Acc15"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW16"
+      },
+      "Name": "Seed Won 16",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-05-15",
+      "Amount": 3000,
+      "AccountId": "@Acc16"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO16"
+      },
+      "Name": "Seed Open 16",
+      "StageName": "Prospecting",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1000,
+      "AccountId": "@Acc16"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW17"
+      },
+      "Name": "Seed Won 17",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-06-15",
+      "Amount": 4000,
+      "AccountId": "@Acc17"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO17"
+      },
+      "Name": "Seed Open 17",
+      "StageName": "Qualification",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1500,
+      "AccountId": "@Acc17"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW18"
+      },
+      "Name": "Seed Won 18",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-01-15",
+      "Amount": 5000,
+      "AccountId": "@Acc18"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO18"
+      },
+      "Name": "Seed Open 18",
+      "StageName": "Needs Analysis",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2000,
+      "AccountId": "@Acc18"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW19"
+      },
+      "Name": "Seed Won 19",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-02-15",
+      "Amount": 6000,
+      "AccountId": "@Acc19"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO19"
+      },
+      "Name": "Seed Open 19",
+      "StageName": "Proposal/Price Quote",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2500,
+      "AccountId": "@Acc19"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW20"
+      },
+      "Name": "Seed Won 20",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-03-15",
+      "Amount": 7000,
+      "AccountId": "@Acc20"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO20"
+      },
+      "Name": "Seed Open 20",
+      "StageName": "Prospecting",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 500,
+      "AccountId": "@Acc20"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW21"
+      },
+      "Name": "Seed Won 21",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-04-15",
+      "Amount": 1000,
+      "AccountId": "@Acc21"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO21"
+      },
+      "Name": "Seed Open 21",
+      "StageName": "Qualification",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1000,
+      "AccountId": "@Acc21"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW22"
+      },
+      "Name": "Seed Won 22",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-05-15",
+      "Amount": 2000,
+      "AccountId": "@Acc22"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO22"
+      },
+      "Name": "Seed Open 22",
+      "StageName": "Needs Analysis",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1500,
+      "AccountId": "@Acc22"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW23"
+      },
+      "Name": "Seed Won 23",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-06-15",
+      "Amount": 3000,
+      "AccountId": "@Acc23"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO23"
+      },
+      "Name": "Seed Open 23",
+      "StageName": "Proposal/Price Quote",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2000,
+      "AccountId": "@Acc23"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW24"
+      },
+      "Name": "Seed Won 24",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-01-15",
+      "Amount": 4000,
+      "AccountId": "@Acc24"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO24"
+      },
+      "Name": "Seed Open 24",
+      "StageName": "Prospecting",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2500,
+      "AccountId": "@Acc24"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW25"
+      },
+      "Name": "Seed Won 25",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-02-15",
+      "Amount": 5000,
+      "AccountId": "@Acc25"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO25"
+      },
+      "Name": "Seed Open 25",
+      "StageName": "Qualification",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 500,
+      "AccountId": "@Acc25"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW26"
+      },
+      "Name": "Seed Won 26",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-03-15",
+      "Amount": 6000,
+      "AccountId": "@Acc26"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO26"
+      },
+      "Name": "Seed Open 26",
+      "StageName": "Needs Analysis",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1000,
+      "AccountId": "@Acc26"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW27"
+      },
+      "Name": "Seed Won 27",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-04-15",
+      "Amount": 7000,
+      "AccountId": "@Acc27"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO27"
+      },
+      "Name": "Seed Open 27",
+      "StageName": "Proposal/Price Quote",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 1500,
+      "AccountId": "@Acc27"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW28"
+      },
+      "Name": "Seed Won 28",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-05-15",
+      "Amount": 1000,
+      "AccountId": "@Acc28"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO28"
+      },
+      "Name": "Seed Open 28",
+      "StageName": "Prospecting",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2000,
+      "AccountId": "@Acc28"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW29"
+      },
+      "Name": "Seed Won 29",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-06-15",
+      "Amount": 2000,
+      "AccountId": "@Acc29"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO29"
+      },
+      "Name": "Seed Open 29",
+      "StageName": "Qualification",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 2500,
+      "AccountId": "@Acc29"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppW30"
+      },
+      "Name": "Seed Won 30",
+      "StageName": "Closed Won",
+      "CloseDate": "${THIS_YEAR}-01-15",
+      "Amount": 3000,
+      "AccountId": "@Acc30"
+    },
+    {
+      "attributes": {
+        "type": "Opportunity",
+        "referenceId": "OppO30"
+      },
+      "Name": "Seed Open 30",
+      "StageName": "Needs Analysis",
+      "CloseDate": "${NEXT_YEAR}-03-31",
+      "Amount": 500,
+      "AccountId": "@Acc30"
+    }
+  ]
+}

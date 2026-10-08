@@ -1,0 +1,114 @@
+{
+  "records": [
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas03"
+      },
+      "Subject": "Seed case 03: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc03"
+    },
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas06"
+      },
+      "Subject": "Seed case 06: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc06"
+    },
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas09"
+      },
+      "Subject": "Seed case 09: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc09"
+    },
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas12"
+      },
+      "Subject": "Seed case 12: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc12"
+    },
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas15"
+      },
+      "Subject": "Seed case 15: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc15"
+    },
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas18"
+      },
+      "Subject": "Seed case 18: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc18"
+    },
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas21"
+      },
+      "Subject": "Seed case 21: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc21"
+    },
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas24"
+      },
+      "Subject": "Seed case 24: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc24"
+    },
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas27"
+      },
+      "Subject": "Seed case 27: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc27"
+    },
+    {
+      "attributes": {
+        "type": "Case",
+        "referenceId": "Cas30"
+      },
+      "Subject": "Seed case 30: cannot log in",
+      "Status": "New",
+      "Origin": "Email",
+      "Priority": "Low",
+      "AccountId": "@Acc30"
+    }
+  ]
+}

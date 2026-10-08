@@ -83,3 +83,10 @@ all. `select-tests.sh` runs [`scripts/engine/select.mjs`](scripts/engine/select.
 - [`references/gotchas.md`](references/gotchas.md): every failure this hit, and the fix.
 - Production deploys are a separate decision: `RunRelevantTests` (Salesforce beta, Spring '26) lets the platform
   pick relevant tests for production; `RunLocalTests` is the safe default.
+
+## Test data and personas (with the delivery pipeline)
+
+- Apex tests make their own data (a test data factory with central defaults and persona users created inside the
+  test); they never rely on org data or `SeeAllData` (report definitions are the one exception).
+- Pipeline scratch orgs also hold a synthetic seed (`data/seed`) for UI tests and people, and Org Shape roles are
+  rebuilt so personas can be given a role. UI tests log in as a persona with `loginAs` (no password).

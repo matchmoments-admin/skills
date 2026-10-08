@@ -13,6 +13,13 @@ copy pipeline .github scripts/ci scripts/skills-sync.sh config e2e/support playw
      devhub-setup/main/default/settings \
      CLAUDE.md REVIEW.md GLOSSARY.md package.json .prettierrc .eslintrc.json jest.config.js .forceignore \
      sfdx-project.json code-analyzer.yml .gitignore docs/agents GLOSSARY-MAP.md .github/ISSUE_TEMPLATE
+# the test data: the template ships it with standard fields only (custom fields are the business's own) and no story data
+if [ -d "$SRC/data/seed" ]; then
+  mkdir -p "$T/data" && cp -R "$SRC/data/seed" "$T/data/seed" && rm -rf "$T/data/seed/stories"
+  for f in "$T"/data/seed/*.json; do
+    node -e 'const fs=require("fs"),f=process.argv[1],j=JSON.parse(fs.readFileSync(f,"utf8"));if(j.records){for(const r of j.records)for(const k of Object.keys(r))if(/__c$/.test(k))delete r[k];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")}' "$f"
+  done
+fi
 # the org's business glossary is the project's own: the template starts it empty
 mkdir -p "$T/docs/org" && printf '# The Salesforce org: domain glossary\n\nThe business words specs and stories use, and what each one is in the org.\n\n| Term | Meaning | In the org |\n| --- | --- | --- |\n' > "$T/docs/org/GLOSSARY.md"
 rm -rf "$T/pipeline/test/fixtures/"*.json.tmp "$T/node_modules"

@@ -70,6 +70,18 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
 - **Report folder sharing cannot be asserted in an Apex test.** As a user who cannot see the folder, a query on its
   reports fails with `Data Not Available`, which the test cannot catch. Verify folder shares by the deploy (every
   `folderShares` role or group must exist) and in the UI test, never with a `System.runAs` Apex test (PR #144).
+- **Org Shape scratch orgs: their roles cannot be given to a user** ("invalid cross reference id"). Org provisioning
+  rebuilds them (delete, leaves first; recreate as Role metadata) before the deploy, so personas and role-shared
+  folders work. A role you create in the org is fine.
+- **Scratch orgs have very few user licences** (`LICENSE_LIMIT_EXCEEDED` after a handful of users). `loginAs` frees
+  licences by deactivating other persona users; never create users per test run.
+- **`sf org create user` refuses JWT-authorised orgs on Hyperforce.** Create users as records (`sf data create record -s
+  User`) with permission set assignments as records.
+- **UI tests log in as a persona with `loginAs(page, { role, permsets })`** (Salesforce's "Log in as", turned on in
+  scratch orgs by org provisioning): no password exists. A report or record hidden from the user shows "The requested
+  resource does not exist".
+- **Test data:** Apex tests make their own (they cannot see org data). The org's seed (`data/seed`, synthetic) is for
+  UI tests, Flow checks and people: read seed records by name, create only what a test changes.
 - **Reports in Apex tests** need `@IsTest(SeeAllData=true)` to find the org's report definitions; suppress
   `PMD.ApexUnitTestShouldNotUseSeeAllDataTrue` on exactly those methods and keep the data assertions in SOQL tests
   without SeeAllData.

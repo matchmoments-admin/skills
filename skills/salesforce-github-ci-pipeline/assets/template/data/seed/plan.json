@@ -1,0 +1,42 @@
+[
+  {
+    "sobject": "Account",
+    "saveRefs": true,
+    "resolveRefs": true,
+    "files": [
+      "Account.json"
+    ]
+  },
+  {
+    "sobject": "Contact",
+    "saveRefs": true,
+    "resolveRefs": true,
+    "files": [
+      "Contact.json"
+    ]
+  },
+  {
+    "sobject": "Opportunity",
+    "saveRefs": true,
+    "resolveRefs": true,
+    "files": [
+      "Opportunity.json"
+    ]
+  },
+  {
+    "sobject": "Case",
+    "saveRefs": true,
+    "resolveRefs": true,
+    "files": [
+      "Case.json"
+    ]
+  },
+  {
+    "sobject": "Lead",
+    "saveRefs": true,
+    "resolveRefs": true,
+    "files": [
+      "Lead.json"
+    ]
+  }
+]

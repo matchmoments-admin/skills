@@ -70,3 +70,173 @@ export async function openPath(page: Page, path: string): Promise<void> {
     await page.goto(url);
   }
 }
+
+/** The user a story is for (its "Persona:" line): a role developer name and permission set names. */
+export interface Persona {
+  role?: string;
+  permsets?: string[];
+}
+
+function sfJson(args: string[]): any {
+  const out = execFileSync("sf", [...args, "--json"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      FORCE_COLOR: "0",
+      NO_COLOR: "1",
+      SF_AUTOUPDATE_DISABLE: "true",
+      NODE_NO_WARNINGS: "1"
+    }
+  });
+  const start = out.indexOf("{");
+  return JSON.parse(out.slice(start)).result;
+}
+
+/**
+ * Logs in as the persona instead of the admin, so a test sees what that user sees (role-shared folders, records the
+ * permission sets open or hide). A user for the persona is made once per org (Standard User, the role, the permission
+ * sets) as plain records (`sf org create user` refuses JWT-authorised orgs on Hyperforce); then the admin uses
+ * Salesforce's own "Log in as" on the classic domain, so no password ever exists. Scratch orgs have very few user
+ * licences: when they run out, the OTHER persona users are deactivated (never the admin or a person's tester login).
+ * Needs SCRATCH_ALIAS. The org's roles must be assignable (org provisioning rebuilds an Org Shape org's roles).
+ */
+export async function loginAs(
+  page: Page,
+  persona: Persona
+): Promise<{ username: string }> {
+  const alias = process.env.SCRATCH_ALIAS;
+  if (!alias) throw new Error("loginAs needs SCRATCH_ALIAS");
+  const org = sfJson(["org", "display", "-o", alias]);
+  const orgId = String(org.id).slice(0, 15).toLowerCase();
+  const sets = (persona.permsets || [])
+    .filter((p) => /^[A-Za-z][A-Za-z0-9_]*$/.test(p))
+    .sort();
+  const tag =
+    `${persona.role || "norole"}${sets.length ? `.${sets.join(".")}` : ""}`
+      .toLowerCase()
+      .replace(/[^a-z0-9.]/g, "")
+      .slice(0, 40);
+  const username = `persona.${tag}@${orgId}.pipeline`;
+  const q = (soql: string) =>
+    sfJson(["data", "query", "-o", alias, "-q", soql]).records;
+  const freeLicences = () => {
+    for (const u of q(
+      `SELECT Id FROM User WHERE IsActive = true AND Username LIKE 'persona.%' AND Username != '${username}'`
+    ))
+      sfJson([
+        "data",
+        "update",
+        "record",
+        "-o",
+        alias,
+        "-s",
+        "User",
+        "-i",
+        u.Id,
+        "-v",
+        "IsActive=false"
+      ]);
+  };
+  const withLicence = <T>(fn: () => T): T => {
+    try {
+      return fn();
+    } catch (e) {
+      if (
+        !/LICENSE_LIMIT_EXCEEDED|License Limit Exceeded/i.test(
+          String((e as { stdout?: string }).stdout || e)
+        )
+      )
+        throw e;
+      freeLicences();
+      return fn();
+    }
+  };
+  const found = q(
+    `SELECT Id, IsActive FROM User WHERE Username = '${username}'`
+  )[0];
+  let id: string | undefined = found?.Id;
+  if (found && !found.IsActive)
+    withLicence(() =>
+      sfJson([
+        "data",
+        "update",
+        "record",
+        "-o",
+        alias,
+        "-s",
+        "User",
+        "-i",
+        found.Id,
+        "-v",
+        "IsActive=true"
+      ])
+    );
+  if (!id) {
+    const profile = q("SELECT Id FROM Profile WHERE Name = 'Standard User'")[0]
+      .Id;
+    const role = persona.role
+      ? q(
+          `SELECT Id FROM UserRole WHERE DeveloperName = '${persona.role.replace(/[^A-Za-z0-9_]/g, "")}'`
+        )[0]
+      : null;
+    if (persona.role && !role)
+      throw new Error(`role ${persona.role} does not exist in ${alias}`);
+    const values = [
+      `Username='${username}'`,
+      "Email='persona@example.invalid'",
+      `LastName='${`Persona ${tag}`.slice(0, 70)}'`,
+      `Alias='p${Date.now() % 1e6}'`,
+      `ProfileId=${profile}`,
+      "TimeZoneSidKey='Australia/Sydney'",
+      "LocaleSidKey='en_AU'",
+      "EmailEncodingKey='UTF-8'",
+      "LanguageLocaleKey='en_US'",
+      "CountryCode='AU'",
+      "UserPreferencesLightningExperiencePreferred=true",
+      ...(role ? [`UserRoleId=${role.Id}`] : [])
+    ];
+    id = withLicence(
+      () =>
+        sfJson([
+          "data",
+          "create",
+          "record",
+          "-o",
+          alias,
+          "-s",
+          "User",
+          "-v",
+          values.join(" ")
+        ]).id
+    ) as string;
+    for (const ps of sets.length
+      ? q(
+          `SELECT Id FROM PermissionSet WHERE Name IN (${sets.map((n) => `'${n}'`).join(",")})`
+        )
+      : [])
+      sfJson([
+        "data",
+        "create",
+        "record",
+        "-o",
+        alias,
+        "-s",
+        "PermissionSetAssignment",
+        "-v",
+        `AssigneeId=${id} PermissionSetId=${ps.Id}`
+      ]);
+  }
+  await login(page);
+  // "Log in as" lives on the classic domain (the org's instance URL), not the Lightning one; it redirects a few times
+  const su = `${String(org.instanceUrl).replace(/\/$/, "")}/servlet/servlet.su?oid=${org.id}&suorgadminid=${id}&retURL=%2F&targetURL=%2Flightning%2Fpage%2Fhome`;
+  try {
+    await page.goto(su);
+  } catch (e) {
+    if (!String(e).includes("ERR_ABORTED")) throw e;
+    await page.waitForLoadState("load");
+  }
+  await expect(page.getByRole("navigation").first()).toBeVisible({
+    timeout: 60_000
+  });
+  return { username };
+}

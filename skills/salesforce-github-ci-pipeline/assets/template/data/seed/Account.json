@@ -1,0 +1,372 @@
+{
+  "records": [
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc01"
+      },
+      "Name": "Seed Account 01 Pty Ltd",
+      "Industry": "Finance",
+      "BillingCity": "London",
+      "BillingCountryCode": "GB",
+      "Phone": "+61 2 9000 0001",
+      "NumberOfEmployees": 10
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc02"
+      },
+      "Name": "Seed Account 02 Pty Ltd",
+      "Industry": "Healthcare",
+      "BillingCity": "Chicago",
+      "BillingCountryCode": "US",
+      "Phone": "+61 2 9000 0002",
+      "NumberOfEmployees": 20
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc03"
+      },
+      "Name": "Seed Account 03 Pty Ltd",
+      "Industry": "Retail",
+      "BillingCity": "Auckland",
+      "BillingCountryCode": "NZ",
+      "Phone": "+61 2 9000 0003",
+      "NumberOfEmployees": 30
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc04"
+      },
+      "Name": "Seed Account 04 Pty Ltd",
+      "Industry": "Manufacturing",
+      "BillingCity": "Sydney",
+      "BillingCountryCode": "AU",
+      "Phone": "+61 2 9000 0004",
+      "NumberOfEmployees": 40
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc05"
+      },
+      "Name": "Seed Account 05 Pty Ltd",
+      "Industry": "Education",
+      "BillingCity": "London",
+      "BillingCountryCode": "GB",
+      "Phone": "+61 2 9000 0005",
+      "NumberOfEmployees": 50
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc06"
+      },
+      "Name": "Seed Account 06 Pty Ltd",
+      "Industry": "Technology",
+      "BillingCity": "Chicago",
+      "BillingCountryCode": "US",
+      "Phone": "+61 2 9000 0006",
+      "NumberOfEmployees": 60
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc07"
+      },
+      "Name": "Seed Account 07 Pty Ltd",
+      "Industry": "Finance",
+      "BillingCity": "Auckland",
+      "BillingCountryCode": "NZ",
+      "Phone": "+61 2 9000 0007",
+      "NumberOfEmployees": 70
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc08"
+      },
+      "Name": "Seed Account 08 Pty Ltd",
+      "Industry": "Healthcare",
+      "BillingCity": "Sydney",
+      "BillingCountryCode": "AU",
+      "Phone": "+61 2 9000 0008",
+      "NumberOfEmployees": 80
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc09"
+      },
+      "Name": "Seed Account 09 Pty Ltd",
+      "Industry": "Retail",
+      "BillingCity": "London",
+      "BillingCountryCode": "GB",
+      "Phone": "+61 2 9000 0009",
+      "NumberOfEmployees": 90
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc10"
+      },
+      "Name": "Seed Account 10 Pty Ltd",
+      "Industry": "Manufacturing",
+      "BillingCity": "Chicago",
+      "BillingCountryCode": "US",
+      "Phone": "+61 2 9000 0010",
+      "NumberOfEmployees": 100
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc11"
+      },
+      "Name": "Seed Account 11 Pty Ltd",
+      "Industry": "Education",
+      "BillingCity": "Auckland",
+      "BillingCountryCode": "NZ",
+      "Phone": "+61 2 9000 0011",
+      "NumberOfEmployees": 110
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc12"
+      },
+      "Name": "Seed Account 12 Pty Ltd",
+      "Industry": "Technology",
+      "BillingCity": "Sydney",
+      "BillingCountryCode": "AU",
+      "Phone": "+61 2 9000 0012",
+      "NumberOfEmployees": 120
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc13"
+      },
+      "Name": "Seed Account 13 Pty Ltd",
+      "Industry": "Finance",
+      "BillingCity": "London",
+      "BillingCountryCode": "GB",
+      "Phone": "+61 2 9000 0013",
+      "NumberOfEmployees": 130
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc14"
+      },
+      "Name": "Seed Account 14 Pty Ltd",
+      "Industry": "Healthcare",
+      "BillingCity": "Chicago",
+      "BillingCountryCode": "US",
+      "Phone": "+61 2 9000 0014",
+      "NumberOfEmployees": 140
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc15"
+      },
+      "Name": "Seed Account 15 Pty Ltd",
+      "Industry": "Retail",
+      "BillingCity": "Auckland",
+      "BillingCountryCode": "NZ",
+      "Phone": "+61 2 9000 0015",
+      "NumberOfEmployees": 150
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc16"
+      },
+      "Name": "Seed Account 16 Pty Ltd",
+      "Industry": "Manufacturing",
+      "BillingCity": "Sydney",
+      "BillingCountryCode": "AU",
+      "Phone": "+61 2 9000 0016",
+      "NumberOfEmployees": 160
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc17"
+      },
+      "Name": "Seed Account 17 Pty Ltd",
+      "Industry": "Education",
+      "BillingCity": "London",
+      "BillingCountryCode": "GB",
+      "Phone": "+61 2 9000 0017",
+      "NumberOfEmployees": 170
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc18"
+      },
+      "Name": "Seed Account 18 Pty Ltd",
+      "Industry": "Technology",
+      "BillingCity": "Chicago",
+      "BillingCountryCode": "US",
+      "Phone": "+61 2 9000 0018",
+      "NumberOfEmployees": 180
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc19"
+      },
+      "Name": "Seed Account 19 Pty Ltd",
+      "Industry": "Finance",
+      "BillingCity": "Auckland",
+      "BillingCountryCode": "NZ",
+      "Phone": "+61 2 9000 0019",
+      "NumberOfEmployees": 190
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc20"
+      },
+      "Name": "Seed Account 20 Pty Ltd",
+      "Industry": "Healthcare",
+      "BillingCity": "Sydney",
+      "BillingCountryCode": "AU",
+      "Phone": "+61 2 9000 0020",
+      "NumberOfEmployees": 200
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc21"
+      },
+      "Name": "Seed Account 21 Pty Ltd",
+      "Industry": "Retail",
+      "BillingCity": "London",
+      "BillingCountryCode": "GB",
+      "Phone": "+61 2 9000 0021",
+      "NumberOfEmployees": 210
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc22"
+      },
+      "Name": "Seed Account 22 Pty Ltd",
+      "Industry": "Manufacturing",
+      "BillingCity": "Chicago",
+      "BillingCountryCode": "US",
+      "Phone": "+61 2 9000 0022",
+      "NumberOfEmployees": 220
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc23"
+      },
+      "Name": "Seed Account 23 Pty Ltd",
+      "Industry": "Education",
+      "BillingCity": "Auckland",
+      "BillingCountryCode": "NZ",
+      "Phone": "+61 2 9000 0023",
+      "NumberOfEmployees": 230
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc24"
+      },
+      "Name": "Seed Account 24 Pty Ltd",
+      "Industry": "Technology",
+      "BillingCity": "Sydney",
+      "BillingCountryCode": "AU",
+      "Phone": "+61 2 9000 0024",
+      "NumberOfEmployees": 240
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc25"
+      },
+      "Name": "Seed Account 25 Pty Ltd",
+      "Industry": "Finance",
+      "BillingCity": "London",
+      "BillingCountryCode": "GB",
+      "Phone": "+61 2 9000 0025",
+      "NumberOfEmployees": 250
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc26"
+      },
+      "Name": "Seed Account 26 Pty Ltd",
+      "Industry": "Healthcare",
+      "BillingCity": "Chicago",
+      "BillingCountryCode": "US",
+      "Phone": "+61 2 9000 0026",
+      "NumberOfEmployees": 260
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc27"
+      },
+      "Name": "Seed Account 27 Pty Ltd",
+      "Industry": "Retail",
+      "BillingCity": "Auckland",
+      "BillingCountryCode": "NZ",
+      "Phone": "+61 2 9000 0027",
+      "NumberOfEmployees": 270
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc28"
+      },
+      "Name": "Seed Account 28 Pty Ltd",
+      "Industry": "Manufacturing",
+      "BillingCity": "Sydney",
+      "BillingCountryCode": "AU",
+      "Phone": "+61 2 9000 0028",
+      "NumberOfEmployees": 280
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc29"
+      },
+      "Name": "Seed Account 29 Pty Ltd",
+      "Industry": "Education",
+      "BillingCity": "London",
+      "BillingCountryCode": "GB",
+      "Phone": "+61 2 9000 0029",
+      "NumberOfEmployees": 290
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "Acc30"
+      },
+      "Name": "Seed Account 30 Pty Ltd",
+      "Industry": "Technology",
+      "BillingCity": "Chicago",
+      "BillingCountryCode": "US",
+      "Phone": "+61 2 9000 0030",
+      "NumberOfEmployees": 300
+    },
+    {
+      "attributes": {
+        "type": "Account",
+        "referenceId": "SeedMarker"
+      },
+      "Name": "${SEED_MARKER}",
+      "Description": "Synthetic test data loaded by the pipeline (data/seed). Never production data."
+    }
+  ]
+}

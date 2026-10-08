@@ -68,6 +68,10 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Baseline and force-app reference each other both ways** → one combined deploy from a temporary project holding both (`-d baseline -d force-app`); `BASELINE=soft` deploys `force-app` alone on failure and records why.
 - **Snapshots** → enable in the Dev Hub (Setup → Dev Hub → Scratch Org Snapshots; allocation then shows as `ActiveOrgSnapshots`). Org records: `SnapshotName`, `Status` (`InProgress` → `Active`), `CreatedDate`. Don't keep the snapshot name in a repo variable (writing variables needs more token scope): pick the newest Active `LCB…` from `sf org list snapshot` at create time. Never delete the source org while its snapshot is InProgress.
 
+- **Test data: two mechanisms, never mixed** → Apex tests make their own (a builder/persona factory; they cannot see org data). Org data for people and UI tests is a committed synthetic seed (`data/seed`, `sf data import tree`: native, fails loudly on a missing field; SFDMU silently skips one and needs a plugin). Tree import only inserts, so a marker Account (`[seed <hash>]`) makes it load once; date tokens (`${THIS_YEAR}`) keep "this year" true. The template ships the seed with standard fields only.
+- **Shape orgs' roles cannot be assigned** ("invalid cross reference id", even from Apex; deploying the Role metadata over them does not help) → delete them leaves-first and recreate them as metadata, before the deploy (folder shares and sharing rules attach to roles at deploy time).
+- **Logging in as a persona without a password** → turn on `SecuritySettings.enableAdminLoginAsAnyUser` in scratch orgs and use `/servlet/servlet.su?oid=..&suorgadminid=..` on the classic (instance URL) domain after the admin's front-door login; the Lightning domain aborts. Users as records (`sf org create user` refuses JWT on Hyperforce); licences are few: deactivate other persona users when `LICENSE_LIMIT_EXCEEDED`.
+
 ## Playwright against Lightning
 
 - **`JSON.parse` fails on `sf org open --json` inside Playwright** → Playwright sets `FORCE_COLOR`, so the CLI colours its JSON. → `login.ts` sets `FORCE_COLOR=0` for the CLI call.

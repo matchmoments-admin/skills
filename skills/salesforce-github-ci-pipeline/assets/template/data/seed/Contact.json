@@ -1,0 +1,604 @@
+{
+  "records": [
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con010"
+      },
+      "FirstName": "Liam",
+      "LastName": "Brown (seed)",
+      "Email": "liam.brown10@example.invalid",
+      "AccountId": "@Acc01"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con011"
+      },
+      "FirstName": "Mia",
+      "LastName": "Wilson (seed)",
+      "Email": "mia.wilson11@example.invalid",
+      "AccountId": "@Acc01"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con020"
+      },
+      "FirstName": "Mia",
+      "LastName": "Chen (seed)",
+      "Email": "mia.chen20@example.invalid",
+      "AccountId": "@Acc02"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con021"
+      },
+      "FirstName": "Noah",
+      "LastName": "Martin (seed)",
+      "Email": "noah.martin21@example.invalid",
+      "AccountId": "@Acc02"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con030"
+      },
+      "FirstName": "Noah",
+      "LastName": "Walker (seed)",
+      "Email": "noah.walker30@example.invalid",
+      "AccountId": "@Acc03"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con031"
+      },
+      "FirstName": "Isla",
+      "LastName": "Hall (seed)",
+      "Email": "isla.hall31@example.invalid",
+      "AccountId": "@Acc03"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con040"
+      },
+      "FirstName": "Isla",
+      "LastName": "Nguyen (seed)",
+      "Email": "isla.nguyen40@example.invalid",
+      "AccountId": "@Acc04"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con041"
+      },
+      "FirstName": "Leo",
+      "LastName": "Smith (seed)",
+      "Email": "leo.smith41@example.invalid",
+      "AccountId": "@Acc04"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con050"
+      },
+      "FirstName": "Leo",
+      "LastName": "Brown (seed)",
+      "Email": "leo.brown50@example.invalid",
+      "AccountId": "@Acc05"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con051"
+      },
+      "FirstName": "Zoe",
+      "LastName": "Wilson (seed)",
+      "Email": "zoe.wilson51@example.invalid",
+      "AccountId": "@Acc05"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con060"
+      },
+      "FirstName": "Zoe",
+      "LastName": "Chen (seed)",
+      "Email": "zoe.chen60@example.invalid",
+      "AccountId": "@Acc06"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con061"
+      },
+      "FirstName": "Max",
+      "LastName": "Martin (seed)",
+      "Email": "max.martin61@example.invalid",
+      "AccountId": "@Acc06"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con070"
+      },
+      "FirstName": "Max",
+      "LastName": "Walker (seed)",
+      "Email": "max.walker70@example.invalid",
+      "AccountId": "@Acc07"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con071"
+      },
+      "FirstName": "Ruby",
+      "LastName": "Hall (seed)",
+      "Email": "ruby.hall71@example.invalid",
+      "AccountId": "@Acc07"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con080"
+      },
+      "FirstName": "Ruby",
+      "LastName": "Nguyen (seed)",
+      "Email": "ruby.nguyen80@example.invalid",
+      "AccountId": "@Acc08"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con081"
+      },
+      "FirstName": "Jack",
+      "LastName": "Smith (seed)",
+      "Email": "jack.smith81@example.invalid",
+      "AccountId": "@Acc08"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con090"
+      },
+      "FirstName": "Jack",
+      "LastName": "Brown (seed)",
+      "Email": "jack.brown90@example.invalid",
+      "AccountId": "@Acc09"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con091"
+      },
+      "FirstName": "Emma",
+      "LastName": "Wilson (seed)",
+      "Email": "emma.wilson91@example.invalid",
+      "AccountId": "@Acc09"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con100"
+      },
+      "FirstName": "Emma",
+      "LastName": "Chen (seed)",
+      "Email": "emma.chen100@example.invalid",
+      "AccountId": "@Acc10"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con101"
+      },
+      "FirstName": "Oscar",
+      "LastName": "Martin (seed)",
+      "Email": "oscar.martin101@example.invalid",
+      "AccountId": "@Acc10"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con110"
+      },
+      "FirstName": "Oscar",
+      "LastName": "Walker (seed)",
+      "Email": "oscar.walker110@example.invalid",
+      "AccountId": "@Acc11"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con111"
+      },
+      "FirstName": "Ava",
+      "LastName": "Hall (seed)",
+      "Email": "ava.hall111@example.invalid",
+      "AccountId": "@Acc11"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con120"
+      },
+      "FirstName": "Ava",
+      "LastName": "Nguyen (seed)",
+      "Email": "ava.nguyen120@example.invalid",
+      "AccountId": "@Acc12"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con121"
+      },
+      "FirstName": "Liam",
+      "LastName": "Smith (seed)",
+      "Email": "liam.smith121@example.invalid",
+      "AccountId": "@Acc12"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con130"
+      },
+      "FirstName": "Liam",
+      "LastName": "Brown (seed)",
+      "Email": "liam.brown130@example.invalid",
+      "AccountId": "@Acc13"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con131"
+      },
+      "FirstName": "Mia",
+      "LastName": "Wilson (seed)",
+      "Email": "mia.wilson131@example.invalid",
+      "AccountId": "@Acc13"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con140"
+      },
+      "FirstName": "Mia",
+      "LastName": "Chen (seed)",
+      "Email": "mia.chen140@example.invalid",
+      "AccountId": "@Acc14"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con141"
+      },
+      "FirstName": "Noah",
+      "LastName": "Martin (seed)",
+      "Email": "noah.martin141@example.invalid",
+      "AccountId": "@Acc14"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con150"
+      },
+      "FirstName": "Noah",
+      "LastName": "Walker (seed)",
+      "Email": "noah.walker150@example.invalid",
+      "AccountId": "@Acc15"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con151"
+      },
+      "FirstName": "Isla",
+      "LastName": "Hall (seed)",
+      "Email": "isla.hall151@example.invalid",
+      "AccountId": "@Acc15"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con160"
+      },
+      "FirstName": "Isla",
+      "LastName": "Nguyen (seed)",
+      "Email": "isla.nguyen160@example.invalid",
+      "AccountId": "@Acc16"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con161"
+      },
+      "FirstName": "Leo",
+      "LastName": "Smith (seed)",
+      "Email": "leo.smith161@example.invalid",
+      "AccountId": "@Acc16"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con170"
+      },
+      "FirstName": "Leo",
+      "LastName": "Brown (seed)",
+      "Email": "leo.brown170@example.invalid",
+      "AccountId": "@Acc17"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con171"
+      },
+      "FirstName": "Zoe",
+      "LastName": "Wilson (seed)",
+      "Email": "zoe.wilson171@example.invalid",
+      "AccountId": "@Acc17"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con180"
+      },
+      "FirstName": "Zoe",
+      "LastName": "Chen (seed)",
+      "Email": "zoe.chen180@example.invalid",
+      "AccountId": "@Acc18"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con181"
+      },
+      "FirstName": "Max",
+      "LastName": "Martin (seed)",
+      "Email": "max.martin181@example.invalid",
+      "AccountId": "@Acc18"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con190"
+      },
+      "FirstName": "Max",
+      "LastName": "Walker (seed)",
+      "Email": "max.walker190@example.invalid",
+      "AccountId": "@Acc19"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con191"
+      },
+      "FirstName": "Ruby",
+      "LastName": "Hall (seed)",
+      "Email": "ruby.hall191@example.invalid",
+      "AccountId": "@Acc19"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con200"
+      },
+      "FirstName": "Ruby",
+      "LastName": "Nguyen (seed)",
+      "Email": "ruby.nguyen200@example.invalid",
+      "AccountId": "@Acc20"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con201"
+      },
+      "FirstName": "Jack",
+      "LastName": "Smith (seed)",
+      "Email": "jack.smith201@example.invalid",
+      "AccountId": "@Acc20"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con210"
+      },
+      "FirstName": "Jack",
+      "LastName": "Brown (seed)",
+      "Email": "jack.brown210@example.invalid",
+      "AccountId": "@Acc21"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con211"
+      },
+      "FirstName": "Emma",
+      "LastName": "Wilson (seed)",
+      "Email": "emma.wilson211@example.invalid",
+      "AccountId": "@Acc21"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con220"
+      },
+      "FirstName": "Emma",
+      "LastName": "Chen (seed)",
+      "Email": "emma.chen220@example.invalid",
+      "AccountId": "@Acc22"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con221"
+      },
+      "FirstName": "Oscar",
+      "LastName": "Martin (seed)",
+      "Email": "oscar.martin221@example.invalid",
+      "AccountId": "@Acc22"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con230"
+      },
+      "FirstName": "Oscar",
+      "LastName": "Walker (seed)",
+      "Email": "oscar.walker230@example.invalid",
+      "AccountId": "@Acc23"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con231"
+      },
+      "FirstName": "Ava",
+      "LastName": "Hall (seed)",
+      "Email": "ava.hall231@example.invalid",
+      "AccountId": "@Acc23"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con240"
+      },
+      "FirstName": "Ava",
+      "LastName": "Nguyen (seed)",
+      "Email": "ava.nguyen240@example.invalid",
+      "AccountId": "@Acc24"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con241"
+      },
+      "FirstName": "Liam",
+      "LastName": "Smith (seed)",
+      "Email": "liam.smith241@example.invalid",
+      "AccountId": "@Acc24"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con250"
+      },
+      "FirstName": "Liam",
+      "LastName": "Brown (seed)",
+      "Email": "liam.brown250@example.invalid",
+      "AccountId": "@Acc25"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con251"
+      },
+      "FirstName": "Mia",
+      "LastName": "Wilson (seed)",
+      "Email": "mia.wilson251@example.invalid",
+      "AccountId": "@Acc25"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con260"
+      },
+      "FirstName": "Mia",
+      "LastName": "Chen (seed)",
+      "Email": "mia.chen260@example.invalid",
+      "AccountId": "@Acc26"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con261"
+      },
+      "FirstName": "Noah",
+      "LastName": "Martin (seed)",
+      "Email": "noah.martin261@example.invalid",
+      "AccountId": "@Acc26"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con270"
+      },
+      "FirstName": "Noah",
+      "LastName": "Walker (seed)",
+      "Email": "noah.walker270@example.invalid",
+      "AccountId": "@Acc27"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con271"
+      },
+      "FirstName": "Isla",
+      "LastName": "Hall (seed)",
+      "Email": "isla.hall271@example.invalid",
+      "AccountId": "@Acc27"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con280"
+      },
+      "FirstName": "Isla",
+      "LastName": "Nguyen (seed)",
+      "Email": "isla.nguyen280@example.invalid",
+      "AccountId": "@Acc28"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con281"
+      },
+      "FirstName": "Leo",
+      "LastName": "Smith (seed)",
+      "Email": "leo.smith281@example.invalid",
+      "AccountId": "@Acc28"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con290"
+      },
+      "FirstName": "Leo",
+      "LastName": "Brown (seed)",
+      "Email": "leo.brown290@example.invalid",
+      "AccountId": "@Acc29"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con291"
+      },
+      "FirstName": "Zoe",
+      "LastName": "Wilson (seed)",
+      "Email": "zoe.wilson291@example.invalid",
+      "AccountId": "@Acc29"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con300"
+      },
+      "FirstName": "Zoe",
+      "LastName": "Chen (seed)",
+      "Email": "zoe.chen300@example.invalid",
+      "AccountId": "@Acc30"
+    },
+    {
+      "attributes": {
+        "type": "Contact",
+        "referenceId": "Con301"
+      },
+      "FirstName": "Max",
+      "LastName": "Martin (seed)",
+      "Email": "max.martin301@example.invalid",
+      "AccountId": "@Acc30"
+    }
+  ]
+}

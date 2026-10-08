@@ -82,7 +82,7 @@ jobs:
         with: { ref: "${{ steps.pr.outputs.branch }}", fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
       - id: id
         uses: ./.pipeline/.github/actions/pipeline-identity
@@ -133,7 +133,7 @@ jobs:
             Use getByRole / getByLabel locators only. Cover the happy path and one negative case from the criteria.
             Assert what the platform stores, not what you typed: Salesforce changes some values when records change state (closing an Opportunity with a future Close Date sets it to today). Use dates in the past and read the record back for the expected value.
             Test the feature as a user sees it. Never configure the org through the UI (no Lightning App Builder, no Setup pages); if the feature is not visible where the story says, that is a failure of the feature, not something to build in the test.
-            After each criterion's assertion, call `evidence(page, "AC<n>: <what it shows>", <locator of the component that shows it>)` from e2e/support/evidence.ts: one per criterion, at most 6. A screenshot is evidence only if it shows the criterion met: create the records the criterion needs first (`sf data create record -o $SCRATCH_ALIAS ...`, as e2e/story-84.spec.ts does), assert the values the page shows (rows, totals, the field's value), and pass the locator of exactly that element (a table, a row, a field), never the app name or an empty page. The pipeline fails a spec that only checks visibility: assert values with toHaveText, toContainText, toHaveCount or toEqual, and never use getByRole("heading").first() (it is the app name). evidence() skips a locator inside the page header. It takes a small screenshot for the story when the test passes. If the test output says `evidence: "..." skipped`, that locator found nothing: fix it (the test still passes, but the story gets no screenshot).
+            After each criterion's assertion, call `evidence(page, "AC<n>: <what it shows>", <locator of the component that shows it>)` from e2e/support/evidence.ts: one per criterion, at most 6. A screenshot is evidence only if it shows the criterion met: create the records the criterion needs first (`sf data create record -o $SCRATCH_ALIAS ...`, as e2e/story-84.spec.ts does), assert the values the page shows (rows, totals, the field's value), and pass the locator of exactly that element (a table, a row, a field), never the app name or an empty page. The pipeline fails a spec that only checks visibility: assert values with toHaveText, toContainText, toHaveCount or toEqual, and never use getByRole("heading").first() (it is the app name). evidence() skips a locator inside the page header. The org already holds synthetic test data (data/seed: accounts across regions, contacts, won and open opportunities, cases, leads): read those by name, and create only what a criterion changes. If the story's Access section names a `Persona:` (a role and permission sets), test the criteria as that user with `loginAs(page, { role, permsets })` from e2e/support/login.ts, and test that a user without it (another role, no permission set) is refused. Salesforce shows "The requested resource does not exist" when a report or record is hidden from the user. It takes a small screenshot for the story when the test passes. If the test output says `evidence: "..." skipped`, that locator found nothing: fix it (the test still passes, but the story gets no screenshot).
             Run it with `npx playwright test e2e/story-${{ steps.org.outputs.key }}.spec.ts`. If it fails because the feature is wrong, say so; if the test is wrong, fix the test (at most 3 attempts).
       - name: Make sure the spec is committed and pushed (even if the agent stopped early)
         if: always() && steps.org.outputs.key != ''
@@ -189,7 +189,7 @@ jobs:
         with: { ref: "${{ steps.head.outputs.sha }}", persist-credentials: false }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed", persist-credentials: false }
       - name: Which spec?
         id: spec
         run: |

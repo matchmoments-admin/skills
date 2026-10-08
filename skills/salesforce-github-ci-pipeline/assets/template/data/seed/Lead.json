@@ -1,0 +1,124 @@
+{
+  "records": [
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led01"
+      },
+      "FirstName": "Liam",
+      "LastName": "Taylor (seed)",
+      "Company": "Seed Prospect 01",
+      "Status": "Open - Not Contacted",
+      "Email": "lead1@example.invalid",
+      "CountryCode": "GB"
+    },
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led02"
+      },
+      "FirstName": "Mia",
+      "LastName": "Hall (seed)",
+      "Company": "Seed Prospect 02",
+      "Status": "Open - Not Contacted",
+      "Email": "lead2@example.invalid",
+      "CountryCode": "US"
+    },
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led03"
+      },
+      "FirstName": "Noah",
+      "LastName": "Brown (seed)",
+      "Company": "Seed Prospect 03",
+      "Status": "Open - Not Contacted",
+      "Email": "lead3@example.invalid",
+      "CountryCode": "NZ"
+    },
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led04"
+      },
+      "FirstName": "Isla",
+      "LastName": "Lee (seed)",
+      "Company": "Seed Prospect 04",
+      "Status": "Open - Not Contacted",
+      "Email": "lead4@example.invalid",
+      "CountryCode": "AU"
+    },
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led05"
+      },
+      "FirstName": "Leo",
+      "LastName": "Smith (seed)",
+      "Company": "Seed Prospect 05",
+      "Status": "Open - Not Contacted",
+      "Email": "lead5@example.invalid",
+      "CountryCode": "GB"
+    },
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led06"
+      },
+      "FirstName": "Zoe",
+      "LastName": "Chen (seed)",
+      "Company": "Seed Prospect 06",
+      "Status": "Open - Not Contacted",
+      "Email": "lead6@example.invalid",
+      "CountryCode": "US"
+    },
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led07"
+      },
+      "FirstName": "Max",
+      "LastName": "Young (seed)",
+      "Company": "Seed Prospect 07",
+      "Status": "Open - Not Contacted",
+      "Email": "lead7@example.invalid",
+      "CountryCode": "NZ"
+    },
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led08"
+      },
+      "FirstName": "Ruby",
+      "LastName": "Wilson (seed)",
+      "Company": "Seed Prospect 08",
+      "Status": "Open - Not Contacted",
+      "Email": "lead8@example.invalid",
+      "CountryCode": "AU"
+    },
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led09"
+      },
+      "FirstName": "Jack",
+      "LastName": "Walker (seed)",
+      "Company": "Seed Prospect 09",
+      "Status": "Open - Not Contacted",
+      "Email": "lead9@example.invalid",
+      "CountryCode": "GB"
+    },
+    {
+      "attributes": {
+        "type": "Lead",
+        "referenceId": "Led10"
+      },
+      "FirstName": "Emma",
+      "LastName": "Patel (seed)",
+      "Company": "Seed Prospect 10",
+      "Status": "Open - Not Contacted",
+      "Email": "lead10@example.invalid",
+      "CountryCode": "US"
+    }
+  ]
+}
