@@ -27,6 +27,7 @@ import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
 import * as evidence from "../src/evidence.mjs";
+import * as baselineMod from "../src/baseline.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -322,11 +323,11 @@ test("org registry: attaches the live org found by Description; never creates wh
 
 test("org registry: creates, deploys and prepares when none is live; remove is a no-op when none", () => {
   const { sf, calls } = fakeSf([]);
-  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] });
+  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } });
   const o = r.ensure("story:12", { hotfix: true });
   assert.equal(o.created, true);
   assert.equal(o.definition, "config/scratch-hotfix.json");
-  assert.deepEqual(calls.filter((c) => !c.startsWith("data query")).slice(0, 4), ["limits api display", "org create scratch", "project deploy start", "org display -o"]);   // capacity first
+  assert.deepEqual(calls.filter((c) => !c.startsWith("data query")).slice(0, 4), ["limits api display", "org list snapshot", "org create scratch", "project deploy start"]);   // capacity first, then the newest snapshot (none: shape)
   assert.equal(r.remove("story:12"), false);
 });
 
@@ -652,7 +653,7 @@ test("removing an org goes through the Dev Hub record, never a login to the org;
     if (args[1] === "query") return { records: [{ Description: "issue-12", SignupUsername: "u12@x" }, { Description: "ci-9", SignupUsername: "c9@x" }] };
     return {};
   };
-  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] });
+  const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } });
   assert.equal(r.remove("story:12"), true);
   assert.equal(r.removeTagged("ci-9"), 1);
   assert.ok(calls.some((c) => c.includes("data delete record -o devhub -s ActiveScratchOrg -w SignupUsername='u12@x'")));
@@ -1393,7 +1394,7 @@ test("story orgs leave ORG_RESERVE slots for staging, UAT and CI; an expired org
   const limited = (remaining) => (args, o) => (args[0] === "limits" ? [{ name: "ActiveScratchOrgs", remaining, max: 40 }, { name: "DailyScratchOrgs", remaining: 50, max: 80 }] : sf(args, o));
   assert.throws(() => orgRegistry({ sf: limited(2), log: () => {}, packages: [], env: { ORG_RESERVE: "2" } }).ensure("story:9"), /2 kept for staging, UAT and CI/);
   assert.doesNotThrow(() => orgRegistry({ sf: limited(3), log: () => {}, packages: [], env: { ORG_RESERVE: "2" } }).ensure("story:9"));
-  assert.throws(() => orgRegistry({ sf, log: () => {}, packages: [] }).attach("story:9"), /expired \(story orgs live 7 days\)\. Comment \/start/);
+  assert.throws(() => orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off" } }).attach("story:9"), /expired \(story orgs live 7 days\)\. Comment \/start/);
 });
 
 test("cost wiring: no duplicate full run on release PRs, the fixer only for code failures, renudge only on the main lock", () => {
@@ -1430,7 +1431,7 @@ test("Apex tests run as production's CI user would: the story permission sets ar
     if (args[0] === "data" && args[1] === "query") return { records: [{ Id: "0PaX1" }] };
     return {};
   };
-  const r = orgRegistry({ sf, log: () => {}, packages: [] });
+  const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off" } });
   const seen = r.asProductionUser("issue-1", () => { calls.push("RUN TESTS"); return 42; }, dir);
   assert.equal(seen, 42);
   const at = (c) => calls.indexOf(c);
@@ -1560,7 +1561,7 @@ test("UAT access from GitHub: the card links UAT; a stand-in offers 'Send me a U
     if (args[0] === "data" && args[1] === "query") return { records: calls.filter((c) => c.startsWith("org create user")).length ? [{ Id: "005X" }] : [] };
     return {};
   };
-  const r = orgRegistry({ sf, log: () => {}, packages: [] }).tester("uat", { login: "Tester-1", email: "t@example.com" }, dir);
+  const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off" } }).tester("uat", { login: "Tester-1", email: "t@example.com" }, dir);
   assert.deepEqual(r, { username: "tester1.uat@00drt00000yw6bx.pipeline", created: true, persona: { role: null, permsets: ["Sales_Region_Access"] } });
   assert.ok(calls.some((c) => /org create user .*profileName=Standard User permsets=Sales_Region_Access/.test(c)));
   assert.ok(calls.some((c) => c.startsWith("apex run -o uat --file")), "Salesforce emails the password link");
@@ -1832,7 +1833,7 @@ test("the review rubric: the UI test spec comes after the review; answers win ov
 
 test("the reviewer's rules come from main (a PR cannot soften its own review)", () => {
   const wf = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
-  assert.match(wf, /sparse-checkout: "pipeline\\nscripts\\nconfig\\n\.github\/actions\\nREVIEW\.md\\nCLAUDE\.md\\ndocs\/agents"/);
+  assert.match(wf, /sparse-checkout: "pipeline\\nscripts\\nconfig\\n\.github\/actions\\nbaseline\\nREVIEW\.md\\nCLAUDE\.md\\ndocs\/agents"/);
   assert.match(wf, /following \.pipeline\/REVIEW\.md, \.pipeline\/CLAUDE\.md and \.pipeline\/docs\/agents\/salesforce\.md/);
 });
 
@@ -1939,32 +1940,32 @@ function provisionSf({ live = [], title = null, snapshotWorks = true } = {}) {
 test("Org provisioning: ready() holds the commit once; creates from the snapshot, else shape; personas set the tester's role", () => {
   // a live org already marked for this commit: nothing deployed again (ui-test used to deploy and prepare twice)
   let { sf, calls } = provisionSf({ live: [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }], title: "pipeline: ready abc123456789" });
-  let o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] }).ready("issue-12", { commit: "abc123456789ffff" });
+  let o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } }).ready("issue-12", { commit: "abc123456789ffff" });
   assert.equal(o.fresh, true);
   assert.ok(!calls.some((c) => c.startsWith("project deploy")));
   // marked for an older commit: deploy, prepare, mark with the new one
   ({ sf, calls } = provisionSf({ live: [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }], title: "pipeline: ready 000000000000" }));
-  o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] }).ready("issue-12", { commit: "abc123456789ffff" });
+  o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } }).ready("issue-12", { commit: "abc123456789ffff" });
   assert.ok(calls.some((c) => c.startsWith("project deploy start")));
   assert.ok(calls.some((c) => /Title='pipeline: ready abc123456789'/.test(c)));
   // none live, a snapshot set: created from it
   ({ sf, calls } = provisionSf());
-  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912" } }).ready("story:12", { commit: "abc" });
+  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912", BASELINE: "off" } }).ready("story:12", { commit: "abc" });
   assert.ok(calls.some((c) => c.startsWith("org create scratch") && c.includes("snapshot-")));
   assert.ok(!calls.some((c) => c.includes("config/scratch-dev.json")), "the snapshot worked: no shape create");
   // the snapshot fails (expired): falls back to shape, after removing the half-made attempt
   ({ sf, calls } = provisionSf({ snapshotWorks: false }));
-  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912" } }).ready("story:12", { commit: "abc" });
+  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912", BASELINE: "off" } }).ready("story:12", { commit: "abc" });
   assert.ok(calls.some((c) => c.includes("config/scratch-dev.json")));
   // a throwaway CI org skips source tracking
   ({ sf, calls } = provisionSf());
-  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [] }).temporary("ci-1");
+  orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off" } }).temporary("ci-1");
   assert.ok(calls.some((c) => c.startsWith("org create scratch") && c.includes("--no-track-source")));
   // personas
   assert.deepEqual(orgPersonaOf("### Access\n\n- Persona: DirectorDirectSales role, Regional_Reporting_Access\n"), { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] });
   assert.equal(orgPersonaOf("### Access\n\nNo change"), null);
   ({ sf, calls } = provisionSf());
-  const t = orgRegistry({ sf, log: () => {}, packages: [] }).tester("uat", { login: "pm", email: "p@x.com", persona: { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] } });
+  const t = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off" } }).tester("uat", { login: "pm", email: "p@x.com", persona: { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] } });
   assert.deepEqual(t.persona, { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] });
   assert.ok(calls.some((c) => /org create user .*permsets=Regional_Reporting_Access$/.test(c)));
   assert.ok(calls.some((c) => /UserRoleId=00E1/.test(c)), "the tester gets the persona's role");
@@ -1974,4 +1975,89 @@ test("Org provisioning: ready() holds the commit once; creates from the snapshot
     assert.match(y, /pipe\.mjs" org ready |pipe\.mjs org ready /, f);
     assert.doesNotMatch(y, /org ensure|org deploy|org prepare/, f);
   }
+});
+
+// ---------------------------------------------------------------- production baseline + snapshots (round 3)
+test("baseline: all of production, minus the managed, the platform's own and exclusions; sanitized; force-app owns what it holds", async () => {
+  const config = JSON.parse(readFileSync(new URL("../../config/baseline.json", import.meta.url), "utf8"));
+  const m = (fullName, extra = {}) => ({ fullName, manageableState: "unmanaged", lastModifiedByName: "Brendan Milton", lastModifiedDate: "2026-10-01T00:00:00Z", ...extra });
+  const manifest = baselineMod.manifestFor({
+    CustomObject: [m("Timesheet__c"), m("Account"), m("pkg__Thing__c", { namespacePrefix: "pkg" })],
+    CustomField: [m("Account.SLA__c"), m("Incident.Old__c", { lastModifiedDate: "2026-09-20T00:30:00Z" }), m("Timesheet__c.Hours__c", { lastModifiedDate: "2026-09-20T00:30:00Z" })],
+    Layout: [m("Account-Account Layout"), m("Case-Case Layout", { lastModifiedByName: "Salesforce, Inc." })],
+    ReportType: [m("Program_sfdcSESv60", { lastModifiedByName: "Salesforce, Inc." }), m("Opps_with_Accounts")],
+    PermissionSet: [m("Lifecycle_CI"), m("Timesheet_User")],
+    Flow: [m("sfdc_default_ReportExport_Protection_Flow"), m("Weather_Check")],
+  }, { config, orgCreated: "2026-09-20T00:00:00Z" });
+  assert.deepEqual(manifest, {
+    CustomObject: ["Timesheet__c"], CustomField: ["Account.SLA__c", "Timesheet__c.Hours__c"], Layout: ["Account-Account Layout"],
+    ReportType: ["Opps_with_Accounts"], PermissionSet: ["Timesheet_User"], Flow: ["Weather_Check"],
+  }, "standard objects come only through their children; standard-object children only when a person made them after the org's setup");
+  assert.match(baselineMod.packageXml({ Flow: ["Weather_Check"] }), /<members>Weather_Check<\/members>\n    <name>Flow<\/name>/);
+
+  const dash = baselineMod.sanitize("x.dashboard-meta.xml", "<Dashboard><dashboardType>SpecifiedUser</dashboardType>\n<runningUser>admin@prod.com</runningUser></Dashboard>");
+  assert.doesNotMatch(dash, /admin@prod/); assert.match(dash, /<dashboardType>LoggedInUser<\/dashboardType>/);
+  assert.match(baselineMod.sanitize("Case.workflow-meta.xml", "<integrationUser>workato@koala</integrationUser>"), /__SCRATCH_ADMIN__/);
+  assert.doesNotMatch(baselineMod.sanitize("Q.queue-meta.xml", "<Queue><queueMembers><users><user>a@b</user></users><roles><role>X</role></roles></queueMembers></Queue>"), /a@b/);
+  assert.throws(() => baselineMod.sanitize("n.namedCredential-meta.xml", "<password>hunter2</password>"), /holds a secret/);
+
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const t = mkdtempSync(join(tmpdir(), "bl-"));
+  for (const [f, body] of [["b/objects/Account/fields/SLA__c.field-meta.xml", "x"], ["b/objects/Account/fields/Tier__c.field-meta.xml", "x"], ["fa/objects/Account/fields/Tier__c.field-meta.xml", "x"],
+    ["b/sharingRules/ScratchOrgInfo.sharingRules-meta.xml", "<SharingRules/>"], ["b/sharingRules/Account.sharingRules-meta.xml", "<SharingRules><sharingCriteriaRules/></SharingRules>"]]) {
+    mkdirSync(join(t, f, ".."), { recursive: true }); writeFileSync(join(t, f), body);
+  }
+  assert.deepEqual(baselineMod.subtractOwned(join(t, "b"), join(t, "fa")), ["objects/Account/fields/Tier__c.field-meta.xml"], "one owner: force-app");
+  assert.deepEqual(baselineMod.dropEmpty(join(t, "b")), ["sharingRules/ScratchOrgInfo.sharingRules-meta.xml"]);
+  const id = baselineMod.baselineId(join(t, "b"));
+  assert.match(id, /^[0-9a-f]{10}$/);
+  writeFileSync(join(t, "b/objects/Account/fields/SLA__c.field-meta.xml"), "changed");
+  assert.notEqual(baselineMod.baselineId(join(t, "b")), id, "any change makes a new id, so orgs redeploy it");
+  const dir = baselineMod.composeProject({ baselineDir: join(t, "b"), sourceDir: join(t, "fa") });
+  const proj = JSON.parse(readFileSync(join(dir, "sfdx-project.json"), "utf8"));
+  assert.deepEqual(proj.packageDirectories.map((p) => p.path), ["baseline", "force-app"]);
+  assert.equal(proj.replacements[0].replaceWithEnv, "SCRATCH_ADMIN");
+  assert.ok(existsSync(join(dir, "baseline/objects/Account/fields/SLA__c.field-meta.xml")));
+  assert.match(baselineMod.driftSummary(["?? baseline/main/default/objects/Account/fields/SLA__c.field-meta.xml"], { CustomField: [m("Account.SLA__c")] }), /\| added \| `objects\/Account\/fields\/SLA__c` \| Brendan Milton, 2026-10-01 \|/);
+});
+
+test("baseline in orgs: one combined deploy; soft falls back to force-app alone; the newest Active snapshot is found; baseline/ is pipeline-owned", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const b = mkdtempSync(join(tmpdir(), "blo-"));
+  mkdirSync(join(b, "objects"), { recursive: true }); writeFileSync(join(b, "objects/x.xml"), "x");
+  const run = (deployOk) => {
+    const calls = [];
+    const sf = (args, opts) => {
+      const c = args.join(" "); calls.push([c, opts]);
+      if (args[0] === "org" && args[1] === "display") return { username: "admin@scratch" };
+      if (args[0] === "project" && args[1] === "deploy") return c.includes("-d baseline") ? (deployOk ? { success: true } : null) : { success: true };
+      if (args[0] === "org" && args[1] === "list" && args[2] === "snapshot") return [{ SnapshotName: "LCB2610080100", Status: "Active", CreatedDate: "2026-10-08T01:00:00Z" },
+        { SnapshotName: "LCB2610090100", Status: "InProgress", CreatedDate: "2026-10-09T01:00:00Z" }, { SnapshotName: "LCBTEST1", Status: "Active", CreatedDate: "2026-10-10T00:00:00Z" }];
+      return {};
+    };
+    const events = [];
+    const r = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], baselineDir: b, env: { BASELINE: "soft" }, record: (k, d) => events.push([k, d]) });
+    return { r, calls, events };
+  };
+  let { r, calls, events } = run(true);
+  assert.deepEqual(r.deploy("issue-1"), { baseline: baselineMod.baselineId(b) });
+  const combined = calls.find(([c]) => c.startsWith("project deploy start"));
+  assert.match(combined[0], /-d baseline -d force-app/);
+  assert.deepEqual(combined[1].env, { SCRATCH_ADMIN: "admin@scratch" }, "the outbound-message token becomes the org's admin");
+  ({ r, calls, events } = run(false));
+  assert.deepEqual(r.deploy("issue-1"), { baseline: null });
+  assert.ok(calls.some(([c]) => /^project deploy start -o issue-1 -d force-app/.test(c)), "soft: force-app alone");
+  assert.equal(events[0][0], "baseline");
+  assert.equal(r.currentSnapshot(), "LCB2610080100", "the newest ACTIVE pipeline snapshot (not in progress, not a test one)");
+  assert.equal(orgRegistry({ sf: () => [], log: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "off" } }).currentSnapshot(), null);
+  assert.equal(names.orgFor("snapshot").kind, "snapshot");
+  assert.ok(names.touchesPipeline(["baseline/main/default/objects/X.xml"]).length, "story PRs cannot edit baseline/");
+  const rel = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
+  assert.match(rel, /gh workflow run prod-baseline\.yml --ref main/);
+  assert.match(rel, /gh workflow run snapshot-refresh\.yml --ref main/);
+  assert.match(readFileSync(new URL("../../.github/workflows/prod-baseline.yml", import.meta.url), "utf8"), /github\.event_name != 'schedule' \|\| vars\.BASELINE_NIGHTLY == 'true'/);
 });

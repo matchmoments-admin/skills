@@ -1,0 +1,69 @@
+name: prod-baseline
+# The production baseline (GLOSSARY.md): production's customisations, copied into baseline/ so every scratch org holds
+# what production holds. Runs after each release (release.yml dispatches it), weekly (org-shape-refresh), by hand, and
+# nightly only with the setting BASELINE_NIGHTLY=true (to catch changes made directly in production Setup).
+# It only reads production. Drift becomes one bot PR, "Production baseline: drift", for a person to review and merge;
+# merging it rebuilds the snapshot (snapshot-refresh). No drift: the open PR, if any, is closed.
+on:
+  workflow_dispatch:
+    inputs:
+      reason: { description: "Why (e.g. release v2026.10.08-15)", required: false, default: "by hand" }
+  schedule:
+    - cron: "30 15 * * *"   # nightly 01:30-02:30 Sydney; does nothing unless BASELINE_NIGHTLY=true
+concurrency:
+  group: prod-baseline
+  cancel-in-progress: false
+permissions:
+  contents: write         # the event log; the PR branch is pushed as the pipeline App
+  pull-requests: write
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}
+jobs:
+  capture:
+    if: github.event_name != 'schedule' || vars.BASELINE_NIGHTLY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: prod-baseline-refresh
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline", persist-credentials: false }
+      - id: id
+        uses: ./.pipeline/.github/actions/pipeline-identity
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: main
+      - uses: ./.pipeline/.github/actions/sf-auth   # read-only use of production: list, retrieve
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Capture production into baseline/
+        id: cap
+        run: node pipeline/bin/pipe.mjs baseline capture --out "$RUNNER_TEMP/drift.md"
+      - name: Open or update the drift PR (or close it when production matches git)
+        env:
+          GH_TOKEN: ${{ steps.id.outputs.token }}
+          CHANGED: ${{ steps.cap.outputs.changed }}
+          REASON: ${{ inputs.reason || 'nightly' }}
+        run: |
+          OPEN=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ "${CHANGED:-0}" = 0 ]; then
+            echo "production matches baseline/ on main"
+            [ -z "$OPEN" ] || gh pr close "$OPEN" --comment "Production matches the baseline on main again: nothing to merge." --delete-branch
+            exit 0
+          fi
+          git config user.name "__owner__-pipeline[bot]"; git config user.email "pipeline@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add -A baseline
+          git commit -qm "chore(baseline): production baseline ($REASON)"
+          git push -f origin "$BRANCH"
+          { echo "Production's customisations differ from \`baseline/\` on main ($REASON). Merging this updates what every new scratch org holds (and rebuilds the snapshot)."
+            echo; echo "Review it like any change: these were made in production, outside this repo."; echo
+            cat "$RUNNER_TEMP/drift.md"
+            echo; echo "\`baseline/\` is never deployed to production; it only makes scratch orgs realistic. To change one of these components in a story, retrieve it into \`force-app\` (it then leaves the baseline)."; } > "$RUNNER_TEMP/body.md"
+          if [ -n "$OPEN" ]; then gh pr edit "$OPEN" --body-file "$RUNNER_TEMP/body.md"
+          else gh pr create --base main --head "$BRANCH" --title "Production baseline: drift ($REASON)" --body-file "$RUNNER_TEMP/body.md"; fi

@@ -78,7 +78,7 @@ jobs:
         with: { ref: "${{ steps.pr.outputs.branch }}", fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
       - id: id
         uses: ./.pipeline/.github/actions/pipeline-identity

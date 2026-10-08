@@ -1,0 +1,39 @@
+name: snapshot-refresh
+# The scratch-org snapshot new orgs start from (org.mjs create/currentSnapshot): production's shape, the managed
+# packages, the production baseline, main's source and the seed data, already deployed. Rebuilt after each release
+# (release.yml), when the baseline or the seed data changes on main, weekly (org-shape-refresh), and by hand.
+# Costs one daily scratch org and one active slot while it builds; the newest Active snapshot is used automatically,
+# and only the newest two are kept. A snapshot that is not Active yet is not used: orgs keep the previous one.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["baseline/**", "data/seed/**"]
+concurrency:
+  group: snapshot-refresh
+  cancel-in-progress: false
+permissions:
+  contents: write   # the event log
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}
+jobs:
+  build:
+    if: vars.SCRATCH_SNAPSHOT != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # snapshots can take an hour or more to become Active
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Build the source org and snapshot it
+        run: node pipeline/bin/pipe.mjs snapshot refresh --minutes 100
+      - name: A failed build never leaves the source org holding a slot (a pending snapshot keeps it; it lives a day)
+        if: failure()
+        run: node pipeline/bin/pipe.mjs org remove snapshot || true

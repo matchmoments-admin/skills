@@ -7,6 +7,8 @@
 // Storage: the `evidence` branch, one folder per story holding only its latest passing head (each publish replaces
 // the folder in one commit); squash() rewrites the branch to one commit of open stories' folders, so it never grows
 // (GitHub reclaims the dropped objects in its own time).
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { setting } from "./conventions.mjs";
 
 export const BRANCH = "evidence";
@@ -171,4 +173,35 @@ export async function squash({ api, repo, isOpen }) {
     throw new Error(`could not squash ${BRANCH}: ${r.message || r.errors.map((e) => e.message).join("; ")}`);
   }
   return { kept: open.size, removed };
+}
+
+/**
+ * Publish a passing UI test's screenshots (pipe evidence publish): check them, store them, post the comment, record the
+ * event. deps: { host, tracker, record, sleep, log }. Returns { url, shots, said }.
+ */
+export async function publish({ dir, key, sha, pr, orgUrl, host, tracker, record = () => {}, sleep = () => {}, log = () => {} }) {
+  if (!evidenceOn()) return { shots: 0, said: "UI evidence is off (UI_EVIDENCE is not true): nothing posted" };
+  const files = dir && existsSync(dir) ? readdirSync(dir).map((name) => ({ name, data: readFileSync(join(dir, name)) })) : [];
+  const { shots, rejected } = check(files);
+  for (const r of rejected) log(`::warning::UI evidence not published: ${r}`);
+  record("evidence", { story: key, pr: pr ? Number(pr) : undefined, shots: shots.length, rejected: rejected.length, kb: Math.round(shots.reduce((a, s) => a + s.data.length, 0) / 1024) });
+  if (!shots.length) return { shots: 0, said: "no UI evidence: the spec took no screenshots" };
+  store({ api: host.api, repo: host.repo, key, sha, shots, sleep });
+  const url = await tracker.card(key, evidenceComment({ key, pr, sha, shots, orgUrl, repoUrl: host.repoUrl }), EVIDENCE_MARK, EVIDENCE_TITLE);
+  return { url, shots: shots.length, said: url || `posted ${shots.length} screenshot(s) on ${key}` };
+}
+
+/**
+ * The janitor's sweep (pipe evidence squash): a closed story's comment is rewritten FIRST, and only then are its
+ * screenshots deleted (a failed rewrite keeps them for the next sweep). Returns what it says.
+ */
+export async function sweep({ host, tracker, log = () => {} }) {
+  const keep = new Set();
+  for (const k of storiesOnBranch({ api: host.api, repo: host.repo })) {
+    const open = await tracker.story(k).then((s) => s.state !== "CLOSED", () => true);
+    const has = !open && (await tracker.comments(k).catch(() => null))?.some((c) => String(c.body).includes(EVIDENCE_TITLE));
+    if (open || (has && !(await tracker.card(k, removedComment(), EVIDENCE_MARK, EVIDENCE_TITLE).then(() => true, (e) => (log(`::warning::${k}: ${e.message}`), false))))) keep.add(k);
+  }
+  const r = await squash({ api: host.api, repo: host.repo, isOpen: async (k) => keep.has(k) });
+  return r ? `evidence branch: ${r.kept} open stories kept${r.removed.length ? `, removed ${r.removed.join(", ")}` : ""}` : "no evidence branch";
 }

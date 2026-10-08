@@ -40,7 +40,7 @@ export const COVERAGE_MIN = 75;
 /** Pipeline code: story PRs may not change it (it runs with production credentials). */
 // package.json and the lockfile too: install scripts run in jobs that hold credentials, so a story cannot change them.
 // The rules the checks and agents enforce too (code-analyzer.yml, CLAUDE.md, REVIEW.md): a story cannot loosen its own review.
-export const PIPELINE_PATHS = [".github/", "pipeline/", "scripts/", "config/", "devhub-setup/", "package.json", "package-lock.json",
+export const PIPELINE_PATHS = [".github/", "pipeline/", "scripts/", "config/", "devhub-setup/", "baseline/", "package.json", "package-lock.json",
   "code-analyzer.yml", "CLAUDE.md", "REVIEW.md"];
 
 /** Is this login one of the pipeline's own identities (PIPELINE_BOTS: bare names, e.g. "github-actions,acme-pipeline")?
@@ -134,6 +134,7 @@ export function openRelease(branches) {
 export function orgFor(target, { hotfix = false } = {}) {
   let kind, id;
   const t = String(target);
+  if (t === "snapshot") return { kind: "snapshot", alias: "snapshot-src", description: "snapshot-src", lock: "org-snapshot", definition: DEFINITION.story, days: 1 };   // the snapshot's source org
   if (t.startsWith("story:")) [kind, id] = ["story", t.slice(6)];
   else if (t.startsWith("uat:")) [kind, id] = ["uat", t.slice(4)];
   else if (t.startsWith("sprint:")) [kind, id] = ["sprint", t.slice(7)];

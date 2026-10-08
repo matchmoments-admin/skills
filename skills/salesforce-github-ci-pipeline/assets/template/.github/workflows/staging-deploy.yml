@@ -25,7 +25,7 @@ jobs:
       tested: ${{ steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.current.outputs.superseded != 'true' }}
     steps:
       - uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline", persist-credentials: false }
       - name: The open sprint
         id: ctx
         working-directory: .pipeline

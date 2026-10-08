@@ -57,7 +57,7 @@ jobs:
         with: { ref: main, fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
       - name: Names for this story
         id: ctx

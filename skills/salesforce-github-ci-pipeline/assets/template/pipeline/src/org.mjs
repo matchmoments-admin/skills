@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { orgFor } from "./conventions.mjs";
 import { PIPELINE_ROOT } from "./io.mjs";
+import { baselineId as idOf, composeProject, DIR as BASELINE_DIR } from "./baseline.mjs";
 
 // Scratch definitions come from the trusted pipeline checkout, so a PR cannot change its own org's shape.
 const definitionPath = (d) => join(PIPELINE_ROOT, d);
@@ -42,7 +43,7 @@ export function packageList(file = join(PIPELINE_ROOT, "config/packages.json")) 
 const DEVHUB = "devhub";
 /** Written to the scratch org admin user's Title when ready() has finished every step, with the commit it holds. */
 export const READY = "pipeline: ready";
-export const readyMarker = (commit) => (commit ? `${READY} ${String(commit).slice(0, 12)}` : READY);
+export const readyMarker = (commit, baseline = null) => (commit ? `${READY} ${String(commit).slice(0, 12)}${baseline ? ` b${baseline}` : ""}` : READY);
 
 /** Who a story is for, from its "Persona:" line (Access section): "Persona: DirectorDirectSales role, Regional_Reporting_Access".
  *  { role, permsets } or null. Pure. */
@@ -75,7 +76,11 @@ export function permissionSets(dir = "force-app") {
   return out.sort();
 }
 
-export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key`, packages = packageList(), env = process.env }) {
+export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key`, packages = packageList(), env = process.env,
+  baselineDir = join(PIPELINE_ROOT, BASELINE_DIR), record = () => {} }) {
+  // the production baseline (BASELINE: off | soft (default) | strict), from main's trusted checkout, never the branch's
+  const baselineMode = String(env.BASELINE || "soft").toLowerCase();
+  const baseline = () => (baselineMode !== "off" && existsSync(baselineDir) ? idOf(baselineDir) : null);
   const active = () =>
     (sf(["data", "query", "-o", DEVHUB, "-q", "SELECT SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate FROM ScratchOrgInfo WHERE Status = 'Active' ORDER BY CreatedDate DESC"]).records || []);
   /** Delete through the Dev Hub's ActiveScratchOrg record: no login to the org itself, so it works on any org. */
@@ -112,7 +117,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     ready(target, { commit = null, manifest = null, ...opts } = {}) {
       const existing = self.find(target, opts);
       const org = existing ? self.attach(existing) : resolve(target, opts);
-      const want = readyMarker(commit);
+      const want = readyMarker(commit, baseline());
       if (existing && self.isReady(org.alias, want)) { log(`${org.alias} already holds ${commit ? String(commit).slice(0, 7) : "its source"}`); return { ...org, created: false, fresh: true }; }
       if (existing) log(`${org.alias} exists: bringing it to ${commit ? String(commit).slice(0, 7) : "its source"}`);
       else {
@@ -136,8 +141,8 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     create(org) {
       const base = ["org", "create", "scratch", "--alias", org.alias, "--description", org.description, "--duration-days", String(org.days), "--target-dev-hub", DEVHUB,
         ...(org.kind === "temp" ? ["--no-track-source"] : [])];
-      const snapshot = String(env.SCRATCH_SNAPSHOT || "").trim();
-      if (snapshot && /^[A-Za-z0-9]{1,15}$/.test(snapshot) && org.kind !== "snapshot") {
+      const snapshot = org.kind === "snapshot" ? null : self.currentSnapshot();
+      if (snapshot) {
         const def = join(tmpdir(), `snapshot-${process.pid}.json`);
         writeFileSync(def, JSON.stringify({ orgName: `Lifecycle ${org.description}`, snapshot }));
         log(`creating ${org.alias} (${org.description}) from snapshot ${snapshot}, ${org.days} days`);
@@ -148,6 +153,40 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
       sf([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]);
       return { fromSnapshot: false };
+    },
+
+    /**
+     * The snapshot new orgs start from: SCRATCH_SNAPSHOT if set ("off" turns snapshots off), else the newest Active
+     * pipeline snapshot (LCB...) in the Dev Hub, so no variable has to be written when a new one is made.
+     */
+    currentSnapshot() {
+      const set = String(env.SCRATCH_SNAPSHOT || "").trim();
+      if (set.toLowerCase() === "off") return null;
+      if (/^[A-Za-z0-9]{1,15}$/.test(set)) return set;
+      const list = sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || [];
+      return (Array.isArray(list) ? list : []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || "") && s.Status === "Active")
+        .sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)))[0]?.SnapshotName || null;
+    },
+
+    /**
+     * Make a new snapshot of a ready source org (production's shape + packages + baseline + seed), wait until it is
+     * Active, then keep only the newest `keep` pipeline snapshots. Returns { name, active }.
+     */
+    snapshot(alias, { name, description, waitMinutes = 60, keep = 2 }) {
+      sf(["org", "create", "snapshot", "--name", name, "--source-org", alias, "-v", DEVHUB, "--description", String(description).slice(0, 255)]);
+      let status = "";
+      for (let i = 0; i < Math.ceil(waitMinutes / 2); i++) {
+        status = sf(["org", "get", "snapshot", "--snapshot", name, "-v", DEVHUB], { allowFail: true })?.Status || "";
+        log(`snapshot ${name}: ${status || "?"}`);
+        if (status === "Active" || status === "Error") break;
+        sleep(120_000);
+      }
+      if (status === "Active") {
+        const ours = (sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || ""))
+          .sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)));
+        for (const old of ours.slice(keep)) { sf(["org", "delete", "snapshot", "--snapshot", old.SnapshotName, "-v", DEVHUB, "--no-prompt"], { allowFail: true }); log(`deleted old snapshot ${old.SnapshotName}`); }
+      }
+      return { name, active: status === "Active", status };
     },
 
     /** The ready marker: the org's admin user's Title, set only when ready() finished every step for a commit. */
@@ -191,9 +230,27 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       return { ...org, created: true, ...how };
     },
 
-    deploy(alias, { manifest } = {}) {
+    /**
+     * Deploy the source. With a production baseline (and no manifest), the baseline and force-app go in ONE deploy
+     * (they reference each other both ways). In soft mode a failed combined deploy warns, records why, and deploys
+     * force-app alone, so a story is never blocked by production's own metadata; strict fails.
+     */
+    deploy(alias, { manifest, dryRun = false } = {}) {
+      const id = manifest ? null : baseline();
+      if (id) {
+        const admin = sf(["org", "display", "-o", alias])?.username;
+        const dir = composeProject({ baselineDir, sourceDir: join(process.cwd(), "force-app"), forceignore: join(process.cwd(), ".forceignore") });
+        const r = sf(["project", "deploy", "start", "-o", alias, "-d", BASELINE_DIR, "-d", "force-app", "--ignore-conflicts", "--wait", "45", ...(dryRun ? ["--dry-run"] : [])],
+          { cwd: dir, env: { SCRATCH_ADMIN: admin }, allowFail: baselineMode !== "strict" });
+        const ok = r && r.success !== false && !["Failed", "Canceled"].includes(r.status);
+        if (!ok && r?.details?.componentFailures) for (const f of [].concat(r.details.componentFailures).slice(0, 15)) log(`  ${f.componentType} ${f.fullName}: ${f.problem}`);
+        if (ok) { log(`deployed the production baseline (${id}) and force-app to ${alias}`); return { baseline: id }; }
+        log(`::warning::the production baseline (${id}) did not deploy to ${alias}: deploying force-app alone (BASELINE=soft). See the deploy errors above.`);
+        record("baseline", { action: "deploy-failed", org: alias, id });
+      }
       const src = manifest ? ["--manifest", manifest] : ["-d", "force-app"];
-      sf(["project", "deploy", "start", "-o", alias, ...src, "--ignore-conflicts", "--wait", "30"]);
+      sf(["project", "deploy", "start", "-o", alias, ...src, "--ignore-conflicts", "--wait", "30", ...(dryRun ? ["--dry-run"] : [])]);
+      return { baseline: null };
     },
 
     /** Make the org usable for tests: Lightning on, a valid country (production's shape has State and

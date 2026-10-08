@@ -110,6 +110,21 @@ jobs:
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - run: sf org create shape -o devhub
+  baseline:
+    name: refresh the production baseline and the snapshot
+    needs: [plan, deploy, tag]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true    # scratch orgs keep the previous baseline and snapshot if this fails
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          gh workflow run prod-baseline.yml --ref main -f reason="release ${{ needs.tag.outputs.tag || needs.plan.outputs.sha }}"
+          gh workflow run snapshot-refresh.yml --ref main
   tag:
     name: tag and release notes
     needs: [plan, deploy]

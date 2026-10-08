@@ -6,9 +6,10 @@ import { fileURLToPath } from "node:url";
 /** The checkout this pipeline code came from (".pipeline/" in CI: main's copy, never the PR's). */
 export const PIPELINE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
-export function run(cmd, args, { input, quiet = false, allowFail = false, env, encoding = "utf8" } = {}) {
+export function run(cmd, args, { input, quiet = false, allowFail = false, env, encoding = "utf8", cwd } = {}) {
   try {
     return execFileSync(cmd, args, {
+      cwd,
       encoding: encoding === "buffer" ? undefined : encoding, input, maxBuffer: 64 * 1024 * 1024,   // no encoding = a Buffer
       stdio: ["pipe", "pipe", quiet ? "pipe" : "inherit"],
       env: { ...process.env, SF_AUTOUPDATE_DISABLE: "true", FORCE_COLOR: "0", NO_COLOR: "1", NODE_NO_WARNINGS: "1", ...env },

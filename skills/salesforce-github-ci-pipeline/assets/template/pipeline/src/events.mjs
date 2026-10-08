@@ -7,7 +7,7 @@
 // path each time, so writers never conflict on a file. Readers fetch the branch once.
 
 export const BRANCH = "metrics";
-const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence"];
+const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot"];
 
 /** The event as stored: what happened plus where (run, workflow, job). Pure. */
 export function event(kind, data = {}, env = process.env, now = new Date()) {

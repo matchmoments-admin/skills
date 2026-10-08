@@ -90,7 +90,7 @@ jobs:
       - name: Trusted pipeline code (main)
         if: steps.pr.outputs.skip != 'true'
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nREVIEW.md\nCLAUDE.md\ndocs/agents", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nREVIEW.md\nCLAUDE.md\ndocs/agents", persist-credentials: false }
       - if: steps.pr.outputs.skip != 'true'
         run: echo ".pipeline/" >> .git/info/exclude
       - name: Anything worth an AI review? (and, with AI_TRIAGE, is it risky enough?)

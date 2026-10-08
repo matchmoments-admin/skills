@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: write   # starts the weekly production baseline and snapshot rebuild
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
@@ -26,3 +27,9 @@ jobs:
         run: |
           sf org create shape -o devhub
           sf org list shape
+      - name: Then the production baseline and the snapshot (weekly; Salesforce's seasonal upgrades included)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run prod-baseline.yml --ref main -f reason="weekly" || echo "::warning::could not start prod-baseline"
+          gh workflow run snapshot-refresh.yml --ref main || echo "::warning::could not start snapshot-refresh"

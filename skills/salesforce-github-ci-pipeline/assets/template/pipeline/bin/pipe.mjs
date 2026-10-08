@@ -28,6 +28,7 @@
 //   pr        card <n> | --sha S [--now "what" [--failed]] [--tag T]   the release card, or the story card of a story PR
 //   story     new <key>                                  the card of a story not started yet (boxes: plan, start) · blockers <key> (merged?)
 //   spec      context <n> --out F · pending <n> --now W [--failed] · post <n> --file F   bigger work (then "Make it a story")
+//   baseline  capture [--out drift.md] · snapshot refresh [--minutes M]   production baseline and scratch-org snapshots
 //   evidence  publish --key K --pr N --sha S --dir D [--org-url U] · squash   UI evidence screenshots (UI_EVIDENCE)
 import { appendFileSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -53,6 +54,7 @@ import { codeHost } from "../src/github.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
 import * as evidence from "../src/evidence.mjs";
+import * as baseline from "../src/baseline.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
   "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url"]);
@@ -85,7 +87,7 @@ const summary = (md) => { if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(pr
 const host = codeHost({ io, sleep, log });
 const tracker = makeTracker(io);
 const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, ghPages: io.ghPages }), log });
-const orgs = () => orgRegistry({ sf: io.sf, log, env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT") } });
+const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT"), BASELINE: names.setting("BASELINE") } });
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 
@@ -114,7 +116,6 @@ const commands = {
     if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
     output({ alias: o.alias, created: o.created }); return say(o.alias);
   },
-  "org ensure": () => commands["org ready"](),   // the older name
   "org attach": () => { const o = orgs().attach(arg(0)); output({ alias: o.alias }); return say(o.alias); },
   "org remove": () => { const o = names.orgFor(arg(0)); if (orgs().remove(arg(0))) record("org", { action: "deleted", org: o?.description, story: o?.key }); },
   "org remove-tagged": () => { if (orgs().removeTagged(arg(0))) record("org", { action: "deleted", org: arg(0) }); },
@@ -236,32 +237,24 @@ const commands = {
     return say(`${t.kind} (${t.why})`);
   },
   // ---- UI evidence (pipeline/src/evidence.mjs): checked, stored on the evidence branch, one comment on the story
-  "evidence publish": async () => {
-    if (!evidence.evidenceOn()) return say("UI evidence is off (UI_EVIDENCE is not true): nothing posted");
-    const dir = flag("dir");
-    const files = dir && existsSync(dir) ? readdirSync(dir).map((name) => ({ name, data: readFileSync(join(dir, name)) })) : [];
-    const { shots, rejected } = evidence.check(files);
-    for (const r of rejected) log(`::warning::UI evidence not published: ${r}`);
-    const [key, sha, pr] = [flag("key"), flag("sha"), flag("pr")];
-    const kb = Math.round(shots.reduce((a, s) => a + s.data.length, 0) / 1024);
-    record("evidence", { story: key, pr: pr ? Number(pr) : undefined, shots: shots.length, rejected: rejected.length, kb });
-    if (!shots.length) return say("no UI evidence: the spec took no screenshots");
-    evidence.store({ api: host.api, repo: host.repo, key, sha, shots, sleep });
-    const url = await tracker.card(key, evidence.evidenceComment({ key, pr, sha, shots, orgUrl: flag("org-url"), repoUrl: host.repoUrl }), evidence.EVIDENCE_MARK, evidence.EVIDENCE_TITLE);
-    output({ url: url || "", shots: shots.length });
-    return say(url || `posted ${shots.length} screenshot(s) on ${key}`);
+  "evidence publish": async () => {   // pipeline/src/evidence.mjs publish(): check, store, comment, event
+    const r = await evidence.publish({ dir: flag("dir"), key: flag("key"), sha: flag("sha"), pr: flag("pr"), orgUrl: flag("org-url"), host, tracker, record, sleep, log });
+    output({ url: r.url || "", shots: r.shots }); return say(r.said);
   },
   "ui spec-check": () => { const p = evidence.specProblems(readFileSync(flag("file"), "utf8")); output({ problems: p.join("; ") }); return say(p.length ? `weak spec: ${p.join("; ")}` : "spec checks values"); },
-  "evidence squash": async () => {   // runs whatever the switch says, so turning UI_EVIDENCE off still clears what was stored
-    // a closed story's comment is rewritten FIRST; only then are its screenshots deleted (a failed rewrite keeps them)
-    const keep = new Set();
-    for (const k of evidence.storiesOnBranch({ api: host.api, repo: host.repo })) {
-      const open = await tracker.story(k).then((s) => s.state !== "CLOSED", () => true);
-      const has = !open && (await tracker.comments(k).catch(() => null))?.some((c) => String(c.body).includes(evidence.EVIDENCE_TITLE));
-      if (open || (has && !(await tracker.card(k, evidence.removedComment(), evidence.EVIDENCE_MARK, evidence.EVIDENCE_TITLE).then(() => true, (e) => (log(`::warning::${k}: ${e.message}`), false))))) keep.add(k);
-    }
-    const r = await evidence.squash({ api: host.api, repo: host.repo, isOpen: async (k) => keep.has(k) });
-    return say(r ? `evidence branch: ${r.kept} open stories kept${r.removed.length ? `, removed ${r.removed.join(", ")}` : ""}` : "no evidence branch");
+  "evidence squash": async () => say(await evidence.sweep({ host, tracker, log })),   // whatever UI_EVIDENCE says: off still clears what was stored
+  "baseline capture": () => {   // production's customisations into baseline/ (pipeline/src/baseline.mjs); the workflow opens the drift PR
+    const r = baseline.capture({ sf: io.sf, config: JSON.parse(readFileSync("config/baseline.json", "utf8")), log });
+    const changes = (io.git(["status", "--porcelain", "--", baseline.DIR], { allowFail: true }) || "").split("\n").filter(Boolean);
+    writeFileSync(flag("out", "drift.md"), baseline.driftSummary(changes, r.listings)); output({ changed: changes.length, id: baseline.baselineId(baseline.DIR) || "" });
+    record("baseline", { action: changes.length ? "drift" : "refreshed", changed: changes.length }); return say(`${changes.length} file(s) differ from git`);
+  },
+  "snapshot refresh": () => {   // a source org (shape + packages + baseline + source + seed), snapshotted; the newest Active one is used
+    const o = orgs().ready("snapshot", { commit: io.git(["rev-parse", "HEAD"])?.trim() });
+    const name = `LCB${new Date().toISOString().replace(/\D/g, "").slice(2, 12)}`;
+    const r = orgs().snapshot(o.alias, { name, description: `main@${(io.git(["rev-parse", "--short", "HEAD"]) || "").trim()}`, waitMinutes: Number(flag("minutes", "60")) });
+    if (r.active) orgs().remove("snapshot"); record("snapshot", { action: r.active ? "active" : "pending", name, status: r.status }); output({ name, active: r.active });
+    return say(r.active ? `snapshot ${name} is active: new orgs start from it` : `snapshot ${name} is ${r.status || "not active yet"}: new orgs keep using the previous one until it is`);
   },
   "triage review": async () => {
     const range = `${flag("base", "origin/main")}...${flag("head", "HEAD")}`;

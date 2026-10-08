@@ -23,6 +23,10 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
 - Overall coverage must stay at or above 75%; new classes should reach 90%.
 
 ## Metadata
+- `baseline/` is production's copy of everything not in `force-app` (the production baseline: refreshed by a bot PR after
+  each release). It is deployed into every scratch org with `force-app` and **never** to production. Never edit it. To
+  change one of its components, retrieve it from your story's org into `force-app` (`sf project retrieve start -m
+  <Type>:<Name>`): `force-app` then owns it and the next capture drops it from `baseline/`.
 - API version 67.0. Every new custom field and object needs a permission set entry. Metadata deploys grant no field access by themselves.
 - A component users see must be on the Lightning record page they use. Ship the FlexiPage in `force-app` and activate it as the org default for the object with an `actionOverrides` entry (View, Large, Flexipage) in the object's `.object-meta.xml`, so every environment shows the same page.
 - A field users edit must also be on the page layout they use. Retrieve the layout from the scratch org first (`sf project retrieve start -o issue-12 -m "Layout:Account-Account Layout"`), add the field, and commit the layout. Scratch orgs copy production's shape, so a retrieved layout only references what production has.

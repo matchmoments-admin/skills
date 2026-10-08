@@ -1,0 +1,23 @@
+{
+  "_about": "The production baseline (pipeline/src/baseline.mjs): what of production's customisations every scratch org gets, so features are built against what production really has. All of production by default; exclude what cannot or must not reach a scratch org. Members are filtered: namespaced (managed) members are dropped, and the customisedOnly types keep only what a person changed after the org was created.",
+  "types": [
+    "ApexClass", "ApexTrigger", "ApexPage", "ApexComponent", "LightningComponentBundle", "AuraDefinitionBundle", "StaticResource",
+    "CustomObject", "CustomField", "ValidationRule", "RecordType", "ListView", "WebLink", "CompactLayout", "FieldSet", "BusinessProcess",
+    "Layout", "FlexiPage", "CustomApplication", "CustomTab", "QuickAction",
+    "Flow", "Workflow", "DuplicateRule", "MatchingRules", "SharingRules",
+    "PermissionSet", "CustomPermission", "CustomLabel", "CustomMetadata", "GlobalValueSet", "CustomNotificationType",
+    "Report", "ReportType", "Dashboard", "EmailTemplate",
+    "Queue", "Group",
+    "NamedCredential", "ExternalCredential", "ExternalDataSource", "ExternalServiceRegistration", "RemoteSiteSetting", "CspTrustedSite",
+    "PlatformEventChannelMember"
+  ],
+  "customisedOnly": ["Layout", "FlexiPage", "CustomApplication", "QuickAction", "ListView", "CompactLayout"],
+  "folders": { "Report": "ReportFolder", "Dashboard": "DashboardFolder", "EmailTemplate": "EmailFolder" },
+  "exclude": [
+    "ConnectedApp", "ExternalClientApplication", "Certificate", "AuthProvider", "Profile",
+    "PermissionSet:Lifecycle_CI", "PermissionSet:sfdcInternalInt__*", "PermissionSet:X00e*",
+    "Flow:sfdc_default_*",
+    "Group:AllInternalUsers", "Group:AllPartnerUsers", "Group:AllCustomerPortal*"
+  ],
+  "_exclude_note": "Type, or Type:Name with * wildcards. Lifecycle_CI is the pipeline's own CI permission set (devhub-setup); add your org's own exclusions here."
+}
