@@ -57,7 +57,7 @@ import * as evidence from "../src/evidence.mjs";
 import * as baseline from "../src/baseline.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -87,7 +87,10 @@ const summary = (md) => { if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(pr
 const host = codeHost({ io, sleep, log });
 const tracker = makeTracker(io);
 const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, ghPages: io.ghPages }), log });
-const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT"), BASELINE: names.setting("BASELINE") } });
+// a snapshot Salesforce refused is marked with a tag (snapshot-refused-<name>) so no later run spends a daily org on it
+const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;
+const refuseSnapshot = (n) => { const sha = host.api("GET", `repos/${host.repo}/git/ref/heads/main`)?.object?.sha; if (sha) host.api("POST", `repos/${host.repo}/git/refs`, { ref: `refs/tags/snapshot-refused-${n}`, sha }); };
+const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT"), BASELINE: names.setting("BASELINE") } });
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 
@@ -122,6 +125,7 @@ const commands = {
   "org prepare": () => { orgs().prepare(arg(0)); },
   "org deploy": () => { orgs().deploy(arg(0), { manifest: flag("manifest") }); },
   "org temp": () => { const o = orgs().temporary(arg(0)); record("org", { action: "created", org: o.description }); output({ alias: o.alias, temp: true }); return say(o.alias); },
+  "org changes": () => { const o = orgs(), c = o.retrieveChanges(arg(0), o.setupChanges(arg(0), { exclude: JSON.parse(readFileSync("config/baseline.json", "utf8")).exclude })); output({ count: c.length }); return say(c.map((x) => `${x.type}:${x.name}`).join("\n") || "no Setup changes"); },
   "org limits": () => { const l = orgs().limits(); return say(`active scratch orgs ${l.active.remaining}/${l.active.max} free, created today ${l.daily.max - l.daily.remaining}/${l.daily.max}`); },
   "org sweep": async () => {
     // every orphan: CI orgs whose run died, closed stories' orgs, staging and UAT orgs of sprints no longer open
@@ -137,9 +141,9 @@ const commands = {
   "uat tester": async () => {   // a person's login, emailed by Salesforce, as the story's persona (or UAT_TESTER_ROLE); never a secret
     const story = names.storyOf(flag("alias", "")); const body = story ? (await tracker.story(story).catch(() => ({}))).body : "";
     const persona = orgPersona(body) || (names.setting("UAT_TESTER_ROLE") ? { role: names.setting("UAT_TESTER_ROLE"), permsets: [] } : null);
-    const r = orgs().tester(flag("alias", "uat"), { login: flag("login"), email: flag("email"), persona });
+    const r = orgs().tester(flag("alias", "uat"), { login: flag("login"), email: flag("email"), persona, admin: has("admin") });
     const masked = flag("email").replace(/^(.).*?(@.*)$/, "$1***$2");
-    io.gh(["pr", "comment", flag("pr"), "--body", `🔑 @${flag("login")}: Salesforce has emailed **${masked}** a link to set a password for **${flag("alias", "uat") === "uat" ? "UAT" : `the story's scratch org (${flag("alias")})`}**. Username: \`${r.username}\`. ${r.persona.role ? `Role **${r.persona.role}**, permission sets ${r.persona.permsets.join(", ")}: you see what that user sees.` : `Every permission set in the code, no role (Standard User). If the feature is shared by role, set the story's \`Persona:\` line or UAT_TESTER_ROLE.`}`]);
+    io.gh(["issue", "comment", flag("pr"), "--body", `🔑 @${flag("login")}: Salesforce has emailed **${masked}** a link to set a password for **${flag("alias", "uat") === "uat" ? "UAT" : `the story's scratch org (${flag("alias")})`}**. Username: \`${r.username}\`. ${r.admin ? "System Administrator: build what the story needs in Setup, then tick **Bring my Setup changes into the story** (or comment /retrieve)." : r.persona.role ? `Role **${r.persona.role}**, permission sets ${r.persona.permsets.join(", ")}: you see what that user sees.` : `Every permission set in the code, no role (Standard User). If the feature is shared by role, set the story's \`Persona:\` line or UAT_TESTER_ROLE.`}`]);
     return say(r.username);
   },
   "lane acquire": () => {
@@ -250,6 +254,8 @@ const commands = {
     record("baseline", { action: changes.length ? "drift" : "refreshed", changed: changes.length }); return say(`${changes.length} file(s) differ from git`);
   },
   "snapshot refresh": () => {   // a source org (shape + packages + baseline + source + seed), snapshotted; the newest Active one is used
+    const age = orgs().snapshotAgeHours();   // --if-older-than: scheduled rebuilds at most daily (each costs a daily org)
+    if (flag("if-older-than") && age !== null && age < Number(flag("if-older-than"))) return say(`snapshot is ${age.toFixed(1)} h old: not rebuilt`);
     const o = orgs().ready("snapshot", { commit: io.git(["rev-parse", "HEAD"])?.trim() });
     const name = `LCB${new Date().toISOString().replace(/\D/g, "").slice(2, 12)}`;
     const r = orgs().snapshot(o.alias, { name, description: `main@${(io.git(["rev-parse", "--short", "HEAD"]) || "").trim()}`, waitMinutes: Number(flag("minutes", "60")) });
@@ -340,11 +346,10 @@ const commands = {
   "tests run": async () => {
     const alias = arg(0);
     const story = names.storyOf(process.env.REF || process.env.GITHUB_HEAD_REF || "");
-    let polls = 0;
+    // the card says it once, when testing starts; progress lives on the live check run (cards change on start and end only)
+    if (story) await cards.refresh(story, { activity: { state: "running", what: "CI is testing the change in its scratch org (progress: the Salesforce tests check)", url: host.runUrl } }).catch(() => {});
     const r = orgs().asProductionUser(alias, () => tests.runForCheckout(io, {
-      host, alias, base: flag("base", "origin/main"), sha: flag("sha"), all: has("all"), min: Number(flag("min", "75")), outDir: flag("out", "test-results"), sleep, log,
-      // the card's Now line, every ~2 minutes, reusing this process's facts (two comment edits, no re-gathering)
-      onProgress: (st, title) => { if (story && polls++ % 8 === 0) cards.refresh(story, { light: true, activity: { state: "running", what: `CI is testing the change in its scratch org (${title})`, url: host.runUrl } }).catch(() => {}); },
+      host, alias, base: flag("base", "origin/main"), sha: flag("sha"), all: has("all"), level: names.setting("CI_TEST_LEVEL") || "RunRelevantTests", min: Number(flag("min", "75")), outDir: flag("out", "test-results"), sleep, log,
     }));
     if (!r.result) return say("no Salesforce changes");
     record("tests", { story, sha: flag("sha"), org: alias, mode: r.plan.mode, ok: r.result.ok, seconds: r.seconds, reasons: r.result.ok ? undefined : r.result.reasons,

@@ -1,0 +1,89 @@
+name: story-retrieve
+# BUTTON: "Bring my Setup changes into the story" on the story card. An admin who built something by clicking in the
+# story's scratch org (Send me an admin login) gets it into git: the components people changed there (SourceMember,
+# not the org's own admin user that the pipeline deploys as) are retrieved into force-app, committed to the story
+# branch as the pipeline App with the person as co-author (so they count as its last pusher: someone else approves),
+# and pushed; CI runs, and a PR is opened if the story has none. Agent-free: main's pipeline code, no AI.
+run-name: "bring @${{ inputs.who }}'s Setup changes into story ${{ inputs.story }}"
+on:
+  workflow_dispatch:
+    inputs:
+      story: { description: Story key (issue number or Jira key), required: true }
+      who: { description: GitHub login of the person who made the changes, required: true }
+concurrency:
+  group: story-retrieve-${{ inputs.story }}
+  cancel-in-progress: false
+permissions:
+  contents: write         # the event log; the branch is pushed as the pipeline App
+  pull-requests: write
+  issues: write
+  checks: read            # the story card is built from the gate's facts
+  statuses: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}
+jobs:
+  retrieve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KEY: ${{ inputs.story }}
+      WHO: ${{ inputs.who }}
+    steps:
+      - name: Check the inputs
+        run: '[[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ && "$WHO" =~ ^[A-Za-z0-9-]+$ ]] || { echo "::error::bad input"; exit 1; }'
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed", persist-credentials: false }
+      - run: echo ".pipeline/" >> .git/info/exclude
+      - name: Names for this story
+        id: ctx
+        run: node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$(gh issue view "$KEY" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || true)"
+      - id: id
+        uses: ./.pipeline/.github/actions/pipeline-identity   # re-checks out the story branch as the App
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: ${{ steps.ctx.outputs.STORY_BRANCH }}
+      - uses: ./.pipeline/.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Retrieve what people changed in the story's org
+        id: get
+        env:
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "bringing @$WHO's Setup changes into the story" || true
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH")
+          node .pipeline/pipeline/bin/pipe.mjs org changes "$ALIAS" | tee "$RUNNER_TEMP/changes.txt"
+      - name: Commit and push them (the person is co-author), and open the PR if there is none
+        env:
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+          BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
+          MILESTONE: ${{ steps.ctx.outputs.HOTFIX == 'true' && '' || steps.ctx.outputs.MILESTONE }}
+        run: |
+          git add -A force-app
+          if git diff --cached --quiet; then
+            node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "📥 @$WHO: nothing new to bring in: the story's org has no Setup changes that are not already on \`$BRANCH\`."
+            exit 0
+          fi
+          ID=$(gh api "users/$WHO" --jq .id)
+          git config user.name "__owner__-pipeline[bot]"; git config user.email "pipeline@users.noreply.github.com"
+          { echo "feat: Setup changes by @$WHO in the story's org"; echo; echo "Retrieved from the story's scratch org by story-retrieve:"; sed 's/^/- /' "$RUNNER_TEMP/changes.txt"; echo; echo "Co-authored-by: $WHO <$ID+$WHO@users.noreply.github.com>"; } > "$RUNNER_TEMP/msg.txt"
+          git commit -q -F "$RUNNER_TEMP/msg.txt"
+          git push -q origin "HEAD:$BRANCH"
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')" ]; then
+            if [[ "$KEY" =~ ^[0-9]+$ ]]; then STORY="Story #$KEY"; else STORY="Story $KEY"; fi
+            printf '%s\n\nBuilt in Setup by @%s in scratch org `%s`, brought in by story-retrieve.\n' "$STORY" "$WHO" "$BRANCH" > "$RUNNER_TEMP/pr.md"
+            gh pr create --base "$BASE" --head "$BRANCH" --title "$(git log -1 --format=%s)" --body-file "$RUNNER_TEMP/pr.md" ${MILESTONE:+--milestone "$MILESTONE"}
+          fi
+          { echo "📥 @$WHO: brought into \`$BRANCH\` ($(git rev-parse --short HEAD)):"; echo; sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/changes.txt"; echo; echo "CI tests it now. You pushed this change, so another approver approves it."; } > "$RUNNER_TEMP/said.md"
+          node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "$(cat "$RUNNER_TEMP/said.md")"
+      - name: The card says it failed, and where to look
+        if: failure()
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "bringing the Setup changes in" --failed --retry "tick Bring my Setup changes into the story again" || true

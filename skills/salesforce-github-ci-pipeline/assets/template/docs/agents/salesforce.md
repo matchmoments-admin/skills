@@ -82,6 +82,11 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   resource does not exist".
 - **Test data:** Apex tests make their own (they cannot see org data). The org's seed (`data/seed`, synthetic) is for
   UI tests, Flow checks and people: read seed records by name, create only what a test changes.
+- **Every Apex test class declares what it tests:** `@IsTest(testFor='ApexClass:CaseHandler,ApexTrigger:CaseTrigger')`
+  at class level (not on methods), and sharing or access tests add `critical=true` (they always run). CI and the
+  production validation use `RunRelevantTests` (Salesforce beta, API 66+): the platform picks the tests a change
+  affects, and each deployed class still needs 75% coverage on its own. It can run 0 tests and pass; the pipeline
+  then runs its own selection (CI) or every test class (production). Flow tests are never part of it.
 - **Reports in Apex tests** need `@IsTest(SeeAllData=true)` to find the org's report definitions; suppress
   `PMD.ApexUnitTestShouldNotUseSeeAllDataTrue` on exactly those methods and keep the data assertions in SOQL tests
   without SeeAllData.

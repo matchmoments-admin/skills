@@ -12,13 +12,24 @@ export function run(cmd, args, { input, quiet = false, allowFail = false, env, e
       cwd,
       encoding: encoding === "buffer" ? undefined : encoding, input, maxBuffer: 64 * 1024 * 1024,   // no encoding = a Buffer
       stdio: ["pipe", "pipe", quiet ? "pipe" : "inherit"],
-      env: { ...process.env, SF_AUTOUPDATE_DISABLE: "true", FORCE_COLOR: "0", NO_COLOR: "1", NODE_NO_WARNINGS: "1", ...env },
+      env: { ...process.env, SF_AUTOUPDATE_DISABLE: "true", SF_SKIP_NEW_VERSION_CHECK: "true", FORCE_COLOR: "0", NO_COLOR: "1", NODE_NO_WARNINGS: "1", ...env },
     });
   } catch (e) {
     if (allowFail) return null;
-    const detail = (e.stderr || e.stdout || "").toString().trim().split("\n").slice(-5).join("\n");
+    const detail = failureDetail(e.stdout, e.stderr);
     throw new Error(`${cmd} ${args.slice(0, 3).join(" ")} failed${detail ? `: ${detail}` : ""}`);
   }
+}
+
+/** Why a command failed: a --json reply's own name and message first (stderr often holds only a CLI "update
+ *  available" warning, which hid the real reason on story #166), else the last lines of stderr, else stdout. Pure. */
+export function failureDetail(stdout, stderr) {
+  const out = String(stdout || ""), i = out.indexOf("{");
+  if (i >= 0) {
+    try { const j = JSON.parse(out.slice(i)); if (j && (j.message || j.name)) return [j.name, j.message].filter(Boolean).join(": ").replace(/\s+/g, " ").slice(0, 500); } catch { /* not JSON */ }
+  }
+  const lines = (s) => String(s || "").trim().split("\n").filter((l) => !/update available|›\s+Warning/i.test(l)).slice(-5).join("\n");
+  return lines(stderr) || lines(stdout);
 }
 
 /** Parse the JSON object out of CLI output (warning lines can precede it). */

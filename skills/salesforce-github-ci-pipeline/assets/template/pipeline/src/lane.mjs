@@ -70,7 +70,7 @@ export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = (
       let tree = mainTree();
       if (!tree) throw new Error(`lane ${name}: cannot read main`);
       const until = now() + timeoutMinutes * 60e3;
-      let told = null, errors = 0;
+      let told = null, errors = 0, polls = 0;
       for (;;) {
         const r = tryOnce(name, tree);
         if (r === true) { log(`lane ${name}: held by run ${holder.run} (${holder.job})`); return true; }
@@ -81,7 +81,8 @@ export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = (
         } else errors = 0;
         if (r !== WAITING && r.waitingFor && r.waitingFor.run !== told) { told = r.waitingFor.run; onWait(r.waitingFor); log(`lane ${name}: waiting for run ${told} (${r.waitingFor.job || "?"}), queued since ${r.waitingFor.at || "?"}`); }
         if (now() > until) throw new Error(`lane ${name}: still busy after ${timeoutMinutes} minutes (run ${told}); try again later`);
-        sleep(pollSeconds * 1000 * (0.8 + Math.random() * 0.4));   // jitter: waiters do not poll in step
+        // back off (30 s, 60 s, 2 min, then 3 min) so many waiters stay far inside the API's hourly limit; jitter keeps them apart
+        sleep(Math.min(180, pollSeconds * 2 ** Math.min(3, polls++)) * 1000 * (0.8 + Math.random() * 0.4));
       }
     },
 

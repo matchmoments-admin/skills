@@ -124,7 +124,7 @@ jobs:
     steps:
       - run: |
           gh workflow run prod-baseline.yml --ref main -f reason="release ${{ needs.tag.outputs.tag || needs.plan.outputs.sha }}"
-          gh workflow run snapshot-refresh.yml --ref main
+          gh workflow run snapshot-refresh.yml --ref main -f if-older-than=20
   tag:
     name: tag and release notes
     needs: [plan, deploy]

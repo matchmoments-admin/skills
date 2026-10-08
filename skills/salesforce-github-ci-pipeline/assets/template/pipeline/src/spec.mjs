@@ -6,22 +6,28 @@
 // Pure, except makeStory(), which acts through the gh seam.
 import { checklist } from "./actions.mjs";
 import { planContext, PENDING } from "./plan.mjs";
+import { approverList } from "./gate.mjs";
+import { setting } from "./conventions.mjs";
 
 export const SPEC_MARK = "<!-- pipeline:spec -->";
 export const SPEC_TITLE = "Spec";
 const MADE = /<!-- story:(\d+) -->/;
 
 /** How many open questions the spec still has. Pure. */
+// More user stories than this and one story gets hard to review and to UAT: the spec suggests slicing it.
+export const STORY_SIZE_LIMIT = 6;
+const userStories = (text) => (sections(String(text))["User stories"] || "").split("\n").filter((l) => /^\s*(?:\d+[.)]|[-*])\s+\S/.test(l)).length;
 export const openQuestions = (text) => (String(text).match(/### Open questions\s*\n([\s\S]*?)(\n###\s|$)/i)?.[1] || "").split("\n").filter((l) => /^\s*\d+[.)]\s+\S/.test(l)).length;
 
 /** The spec comment: Claude's spec, then what to do next. With open questions, making the story is an explicit choice.
  *  story: the story already made from this spec (a revision keeps the link and offers no second story). */
 export function specComment(text, { story = null } = {}) {
-  const questions = openQuestions(text);
+  const questions = openQuestions(text), size = userStories(text);
+  const big = size > STORY_SIZE_LIMIT ? [`**Big for one story:** ${size} user stories. One story is one review and one UAT; consider splitting by hand into slices that each deploy alone (open each as a story, and write \`Blocked by #N\` where one needs another). Making it one story still works.`, ""] : [];
   if (story) return [SPEC_MARK, `### ${SPEC_TITLE}`, "", String(text).trim(), "", `<!-- story:${story} -->`, `**Story:** #${story}. This is the revised spec: everyone working on the story reads this version.`].join("\n");
   return [SPEC_MARK, `### ${SPEC_TITLE}`, "", String(text).trim(), "",
     questions ? `**Next:** answer the ${questions === 1 ? "question" : `${questions} questions`} in a comment, then comment **/spec** to revise it. Or make the story now: the spec's assumed answers then stand.` : "**Next:** check it; if it is right, make it a story (or reply with changes and comment **/spec**).",
-    "", ...checklist([questions ? "story-anyway" : "story"])].join("\n");
+    "", ...big, ...checklist([questions ? "story-anyway" : "story"])].join("\n");
 }
 
 /** The spec's sections by heading ("### Problem" -> "Problem"). Pure. */
@@ -62,7 +68,7 @@ export function makeStory({ gh, repo, spec, title, body }) {
   const made = String(body || "").match(MADE)?.[1];
   if (made) return { number: Number(made), body, already: true };
   const t = storyFromSpec({ spec, text: body, title });
-  const url = String(gh(["issue", "create", "--title", `Story: ${t.title}`, "--label", "feature", "--body", storyBody(t, { spec })]) || "");
+  const url = String(gh(["issue", "create", "--title", `Story: ${t.title}`, "--label", "feature", "--body", storyBody(t, { spec, approver: approverList(setting("APPROVERS"))[0] })]) || "");   // the team's default approver
   const n = Number(url.match(/\/issues\/(\d+)/)?.[1]);
   if (!n) throw new Error(`the story was not created (gh said: ${url.slice(0, 120)})`);
   const id = gh(["api", `repos/${repo}/issues/${n}`, "--jq", ".id"], { allowFail: true });   // a sub-issue of the spec, best effort
@@ -72,8 +78,9 @@ export function makeStory({ gh, repo, spec, title, body }) {
 }
 
 /** A story's issue body, in the format the pipeline reads (docs/agents/issue-tracker.md). */
-export function storyBody(t, { spec, blockers = [] }) {
+export function storyBody(t, { spec, blockers = [], approver = null }) {
   return ["### Summary", "", t.summary, "", "### Acceptance criteria", "", ...t.criteria.map((c) => `- ${c}`), "", "### Access", "", t.access, "",
+    ...(approver ? ["### Approver", "", `@${approver}`, ""] : []),
     "### Where to see it in the UI", "", t.where, "", "### Out of scope", "", t.out, ...(blockers.length ? ["", `Blocked by ${blockers.map((n) => `#${n}`).join(", ")}.`] : []),
     "", `Part of spec #${spec}.`].join("\n");
 }

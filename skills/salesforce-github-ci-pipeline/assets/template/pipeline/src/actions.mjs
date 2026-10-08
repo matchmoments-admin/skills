@@ -5,8 +5,8 @@
 //
 // Effects: a label (applied as the pipeline App, so its workflow starts), a trusted commit status from an agent-free job
 // (the sign-off and UAT verdicts the gate reads), or a workflow dispatch.
-import { STATUS } from "./gate.mjs";
-import { storyOf, nextSprint, sprintOfMilestoneTitle } from "./conventions.mjs";
+import { STATUS, approvalProblem } from "./gate.mjs";
+import { storyOf, storyBranch, nextSprint, sprintOfMilestoneTitle } from "./conventions.mjs";
 
 export const ACTIONS = {
   spec: { label: "📝 Write the spec with Claude: the problem, the solution, user stories, decisions, open questions", on: "issue", adds: ["ai:spec"], flag: "plan" },
@@ -26,7 +26,9 @@ export const ACTIONS = {
   "uat-login": { label: "🔑 Send me a UAT login (Salesforce emails you a link to set a password)", on: "pr" },
   gate: { label: "🔁 Check again (re-run the gate)", on: "pr" },
   "fix-story": { label: "🛠 Open a fix story for the failing tests (it goes into the sprint; Plan / Start / Build it like any story)", on: "pr" },
-  "org-login": { label: "🔑 Send me a login to this story's scratch org (to see the feature yourself)", on: "pr" },
+  "org-login": { label: "🔑 Send me a login to this story's scratch org, as the story's persona (to see the feature as its users will)", on: "any" },
+  "org-login-admin": { label: "🛠 Send me an admin login to this story's scratch org (System Administrator: build or change things in Setup)", on: "any" },
+  "retrieve": { label: "📥 Bring my Setup changes into the story (what you changed in its scratch org becomes a commit on its branch)", on: "any" },
   sprint: { label: "🏁 Start the next sprint (release branch, staging org, milestone)", on: "any" },
   "release-cut": { label: "📦 Cut the sprint's release (the release PR: staging, UAT, approval, production)", on: "any" },
   ci: { label: "🔁 Re-run CI", on: "pr" },
@@ -36,7 +38,7 @@ export const ACTIONS = {
 // the comment commands, and the action each one is
 const COMMANDS = { "/spec": "spec", "/story": "story", "/tickets": "story", "/plan": "plan", "/start": "start", "/build": "build", "/hotfix": "hotfix", "/review": "review", "/fix": "fix",
   "/test": "test", "/ui-test": "ai-test", "/ship": "ship", "/review-ok": "review-ok", "/uat-pass": "uat-pass", "/uat-fail": "uat-fail", "/gate": "gate", "/ci": "ci",
-  "/staging": "staging", "/uat": "uat", "/fix-story": "fix-story", "/login": "org-login", "/sprint-start": "sprint", "/release-cut": "release-cut", "/help": "help" };
+  "/staging": "staging", "/uat": "uat", "/fix-story": "fix-story", "/login": "org-login", "/admin-login": "org-login-admin", "/retrieve": "retrieve", "/sprint-start": "sprint", "/release-cut": "release-cut", "/help": "help" };
 
 const MARK = (id) => `<!-- act:${id} -->`;
 
@@ -45,7 +47,7 @@ export function command(body) {
   const line = String(body || "").split("\n")[0].trim();
   const [word, ...rest] = line.split(/\s+/);
   const id = COMMANDS[word?.toLowerCase()];
-  return id ? { id, arg: rest.join(" ").slice(0, 100) } : null;
+  return id ? { id, arg: rest.join(" ").slice(0, 1000) } : null;   // a /review-ok reason goes on record in full
 }
 
 /** The tick boxes for these actions (unticked; each line carries its action's marker). */
@@ -71,9 +73,10 @@ export function mayAct({ login, type, permission }) {
 
 /**
  * Do it. where: { number, isPr, pr?: { headRefName, headRefOid, baseRefName } }; who: the login (for the record).
- * deps: { host, appGh (gh as the pipeline App), gh (gh with the Actions token), inUat(sha) }. Returns what was done.
+ * deps: { host, appGh (gh as the pipeline App), gh (gh with the Actions token), inUat(sha), mayApprove(login): why not, or
+ * null (gate.approvalProblem on the PR's facts) }. Returns what was done.
  */
-export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
+export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprove = () => null }) {
   const a = ACTIONS[id];
   if (id === "uat-fail" || id === "uat-pass") {
     const pr = where.pr;
@@ -92,6 +95,8 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
   if (id === "ship") {
     const pr = where.pr;
     if (pr.baseRefName === "main") return { said: `Pull requests into main need a GitHub approval: **[Approve here](${host.repoUrl}/pull/${where.number}/files)** (Review changes > Approve).` };
+    const no = mayApprove(who);
+    if (no) return { said: `Not signed off: ${no}.` };
     host.status(pr.headRefOid, STATUS.signoff, "success", `Signed off by @${who}`);
     host.dispatch("gate.yml", { pr: where.number });
     return { done: `signed off by @${who} on ${pr.headRefOid.slice(0, 7)}` };
@@ -99,6 +104,8 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
   if (id === "review-ok") {   // a person overrules the AI review on this exact commit; the reason goes on the status and the PR
     const pr = where.pr;
     if (!arg) return { said: `@${who}: to accept the change over the AI review, say why in a comment: \`/review-ok <why>\` (for example \`/review-ok THIS_YEAR is valid SOQL and CI passed\`). The reason goes on the PR's record.` };
+    const no = mayApprove(who);   // overruling the review is an approver's call, never the author's own
+    if (no) return { said: `The AI review stands: ${no}.` };
     host.status(pr.headRefOid, STATUS.review, "success", `AI review overruled by @${who}${arg ? `: ${arg}` : ""}`.slice(0, 139));
     host.dispatch("gate.yml", { pr: where.number });
     return { done: `AI review overruled by @${who} on ${pr.headRefOid.slice(0, 7)}`, said: `✋ @${who} accepted this change over the AI review on \`${pr.headRefOid.slice(0, 7)}\`: ${arg}. A new push needs a review again.` };
@@ -108,7 +115,17 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
   if (id === "staging") { host.dispatch("staging-deploy.yml", {}, where.pr.headRefName); return { done: "re-running the staging regression" }; }
   if (id === "uat") { host.dispatch("uat-deploy.yml", { pr: where.number, again: "true" }); return { done: "deploying to UAT again" }; }
   if (id === "uat-login") { host.dispatch("uat-login.yml", { pr: where.number, who }); return { done: `sending @${who} a UAT login` }; }
-  if (id === "org-login") { host.dispatch("uat-login.yml", { pr: where.number, who, target: where.pr.headRefName }); return { done: `sending @${who} a login to ${where.pr.headRefName}` }; }
+  if (id === "org-login" || id === "org-login-admin") {   // on the story (after Start) or its PR: the story's scratch org
+    const target = where.isPr ? where.pr.headRefName : storyBranch(String(where.number));
+    host.dispatch("uat-login.yml", { pr: where.number, who, target, admin: String(id === "org-login-admin") });
+    return { done: `sending @${who} ${id === "org-login-admin" ? "an admin" : "a"} login to ${target}` };
+  }
+  if (id === "retrieve") {
+    const key = where.isPr ? storyOf(where.pr.headRefName) : String(where.number);
+    if (!key) return { said: "`/retrieve` works on a story or its pull request." };
+    host.dispatch("story-retrieve.yml", { story: key, who });
+    return { done: `bringing @${who}'s Setup changes into story ${key}` };
+  }
   if (id === "fix-story") {
     // a sprint story for what failed on the release (the failing checks' own lists), so it goes through the normal flow
     const failed = (gh(["api", `repos/${host.repo}/commits/${where.pr.headRefOid}/check-runs?per_page=100`]) || {}).check_runs?.filter((c) => c.conclusion === "failure") || [];
@@ -131,8 +148,8 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
 /** The /help reply. */
 export function help(isPr) {
   return isPr
-    ? "**On a pull request:** `/review` AI review · `/fix` AI fixes the findings · `/test` runs the UI test (`/ui-test`: Claude writes it) · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/review-ok <why>` accepts the change over a wrong AI review · `/gate` checks again · `/ci` re-runs CI · on a release PR `/uat-pass`, `/uat-fail <why>`, `/uat`, `/staging`. Or tick the boxes on the card."
-    : "**On a story:** `/plan` Claude proposes the build and asks its questions · `/start` creates its branch and scratch org · `/build` has Claude build it · `/hotfix` starts it as an urgent production fix. **On a spec (bigger work):** `/spec` Claude writes (or revises) the spec · `/story` makes it a story. Or tick the boxes on the card.";
+    ? "**On a pull request:** `/review` AI review · `/fix` AI fixes the findings · `/test` runs the UI test (`/ui-test`: Claude writes it) · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/review-ok <why>` accepts the change over a wrong AI review · `/login` (as the persona) or `/admin-login` a login to the story's org · `/retrieve` brings Setup changes made there into the story · `/gate` checks again · `/ci` re-runs CI · on a release PR `/uat-pass`, `/uat-fail <why>`, `/uat`, `/staging`. Or tick the boxes on the card."
+    : "**On a story:** `/plan` Claude proposes the build and asks its questions · `/start` creates its branch and scratch org · `/build` has Claude build it · after Start: `/admin-login` to build it in Setup yourself, then `/retrieve` to bring those changes in (`/login`: see it as its users will) · `/hotfix` starts it as an urgent production fix. **On a spec (bigger work):** `/spec` Claude writes (or revises) the spec · `/story` makes it a story. Or tick the boxes on the card.";
 }
 
 /**
@@ -171,7 +188,8 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
       await cards.newStory(String(number), { spec: true, stage: "story", stories: [r.number] });
       continue;
     }
-    const r = perform(id, arg, { number, isPr, pr, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat });
+    const mayApprove = (login) => (pr ? approvalProblem(host.prFacts(pr.number, {}), login) : null);
+    const r = perform(id, arg, { number, isPr, pr, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat, mayApprove });
     if (r.said) io.gh(["issue", "comment", String(number), "--body", r.said]);
     if (r.done) { log(r.done); host.record("stage", { story: storyOf(pr?.headRefName || "") || (isPr ? undefined : String(number)), pr: isPr ? Number(number) : undefined, what: `${id} by @${who}`, state: "running" }); }
   }

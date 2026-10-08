@@ -32,4 +32,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh workflow run prod-baseline.yml --ref main -f reason="weekly" || echo "::warning::could not start prod-baseline"
-          gh workflow run snapshot-refresh.yml --ref main || echo "::warning::could not start snapshot-refresh"
+          gh workflow run snapshot-refresh.yml --ref main -f if-older-than=20 || echo "::warning::could not start snapshot-refresh"

@@ -32,6 +32,12 @@ body:
       label: Access
       description: Who may see or change it (which permission set), and anything about record sharing. "No change" is fine; Claude's plan fills in the rest.
       placeholder: Sales reps with the Sales Region Access permission set see and edit it; nobody else sees it.
+  - type: input
+    id: approver
+    attributes:
+      label: Approver
+      description: Who approves this story before it merges (a GitHub login, e.g. @alex). Leave blank for anyone on the team's approver list (the APPROVERS setting). Whoever pushes the latest change cannot approve it.
+      placeholder: "@alex"
   - type: textarea
     id: where
     attributes:

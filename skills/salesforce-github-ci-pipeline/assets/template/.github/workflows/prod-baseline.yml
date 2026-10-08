@@ -61,7 +61,8 @@ jobs:
           git add -A baseline
           git commit -qm "chore(baseline): production baseline ($REASON)"
           git push -f origin "$BRANCH"
-          { echo "Production's customisations differ from \`baseline/\` on main ($REASON). Merging this updates what every new scratch org holds (and rebuilds the snapshot)."
+          { echo "⚠️ **$CHANGED file(s) changed directly in production, outside a story** ($REASON): production's customisations differ from \`baseline/\` on main. Merging this updates what every new scratch org holds (and rebuilds the snapshot)."
+            echo; echo "Changes belong in a story (build in its scratch org, then **Bring my Setup changes into the story**), so they are reviewed, tested and approved before production. If one of these was urgent, open a story to bring it into \`force-app\` properly.";
             echo; echo "Review it like any change: these were made in production, outside this repo."; echo
             cat "$RUNNER_TEMP/drift.md"
             echo; echo "\`baseline/\` is never deployed to production; it only makes scratch orgs realistic. To change one of these components in a story, retrieve it into \`force-app\` (it then leaves the baseline)."; } > "$RUNNER_TEMP/body.md"

@@ -1,6 +1,7 @@
 // Close-out after a production release (see GLOSSARY.md). plan() is pure; gather() reads GitHub and git;
 // apply() acts through the tracker and the org registry.
 import { storyOf, sprintOf, releaseBranch, setting } from "./conventions.mjs";
+import { approverOf, lastPusherOf } from "./gate.mjs";
 
 /**
  * Inputs:
@@ -60,7 +61,14 @@ export async function gather({ gh, git }, tracker, { sha = "HEAD", previous = nu
 }
 
 /** Safe to run again after a partial failure: closed stories, deleted orgs and branches are skipped. */
-export async function apply(p, { tag, tracker, orgs, git, gh, cards = null, log = console.error }) {
+export async function apply(p, { tag, tracker, orgs, git, gh, cards = null, log = console.error, now = new Date() }) {
+  // the delivery record first (while the release branch, its PRs and statuses are all still there); best effort
+  if (gh) {
+    for (const key of [...p.ship, ...p.hotfix.map((h) => h.key)]) {
+      try { await tracker.card(key, deliveryRecord(gatherDelivery(key, gh, { tag, sprint: p.hotfix.some((h) => h.key === key) ? null : p.sprint, now })), DELIVERY_MARK, DELIVERY_TITLE); }
+      catch (e) { log(`::warning::no delivery record for ${key}: ${e.message}`); }
+    }
+  }
   for (const key of p.ship) if ((await tracker.story(key)).state === "OPEN") await tracker.done(key, `Shipped in release ${p.sprint} (${tag}).`);
   for (const key of p.carry) await tracker.carry(key, p.sprint, `Not finished in sprint ${p.sprint}; carried over to the next sprint.`);
   // PRs still aimed at the release branch would be closed or retargeted at main by GitHub when it is deleted.
@@ -99,6 +107,75 @@ export async function apply(p, { tag, tracker, orgs, git, gh, cards = null, log 
     else log(`deleted ${p.deleteBranch}`);
   }
   log(`close-out: sprint=${p.sprint || "none"} shipped=[${p.ship}] carried=[${p.carry}] hotfixes=[${p.hotfix.map((h) => h.key)}]`);
+}
+
+export const DELIVERY_MARK = "<!-- pipeline:delivery-record -->";
+export const DELIVERY_TITLE = "Delivery record";
+const hoursBetween = (a, b) => (a && b ? Math.round(((new Date(b) - new Date(a)) / 3600e3) * 10) / 10 : null);
+
+/**
+ * What a shipped story's trail says, from GitHub (gh: the gh seam): who approved and when, the AI review or the
+ * person who overruled it (the full reason, from their PR comment), the UI test and its evidence, the UAT sign-off,
+ * the production validation, and the timeline. sprint: null for a hotfix (its own PR went to main). Fields it cannot
+ * find stay null.
+ */
+export function gatherDelivery(key, gh, { tag, sprint = null, now = new Date(), repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY }) {
+  const api = (path) => gh(["api", path], { allowFail: true });
+  const statusesOf = (sha) => (api(`repos/${repo}/commits/${sha}/statuses?per_page=100`) || []);
+  const latest = (sts, context) => sts.filter((s) => s.context === context).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0] || null;
+  const issue = gh(["issue", "view", String(key), "--json", "title,body,createdAt"], { allowFail: true }) || {};
+  const pr = (gh(["pr", "list", "--state", "merged", "--search", `head:issue-${key}`, "--limit", "20", "--json", "number,headRefName,headRefOid,createdAt,mergedAt,commits"], { allowFail: true }) || [])
+    .filter((x) => storyOf(x.headRefName) === String(key)).sort((a, b) => String(b.mergedAt).localeCompare(String(a.mergedAt)))[0];
+  if (!pr) throw new Error(`no merged pull request for story ${key}`);
+  const sts = statusesOf(pr.headRefOid);
+  const reviews = (api(`repos/${repo}/pulls/${pr.number}/reviews?per_page=100`) || []).filter((r) => r.user?.type === "User" && r.state === "APPROVED")
+    .sort((a, b) => String(b.submitted_at).localeCompare(String(a.submitted_at)));
+  const signoff = latest(sts, "pipeline/sign-off");
+  const approved = reviews[0] ? { by: reviews[0].user.login, at: reviews[0].submitted_at, how: "approved the pull request" }
+    : signoff?.state === "success" ? { by: String(signoff.description).match(/@([A-Za-z0-9-]+)/)?.[1] || null, at: signoff.created_at, how: "ticked Sign off" } : null;
+  const review = latest(sts, "pipeline/ai-review");
+  const overruled = /overruled by @([A-Za-z0-9-]+)/.exec(review?.description || "");
+  const reason = overruled ? (api(`repos/${repo}/issues/${pr.number}/comments?per_page=100`) || []).map((c) => String(c.body || ""))
+    .reverse().find((b) => b.startsWith(`✋ @${overruled[1]} accepted this change`))?.replace(/^.*?`[0-9a-f]{7}`: /s, "").replace(/\. A new push needs a review again\.$/, "") : null;
+  const ui = latest(sts, "pipeline/ui-test");
+  // the release (or, for a hotfix, the PR itself): UAT sign-off and the production validation's deploy id
+  const rel = sprint ? (gh(["pr", "list", "--head", releaseBranch(sprint), "--base", "main", "--state", "merged", "--json", "number,headRefOid,mergedAt"], { allowFail: true }) || [])[0] : { headRefOid: pr.headRefOid, mergedAt: pr.mergedAt };
+  const uat = rel ? latest(statusesOf(rel.headRefOid), "pipeline/uat") : null;
+  const validation = rel ? (api(`repos/${repo}/commits/${rel.headRefOid}/check-runs?per_page=100`)?.check_runs || []).filter((c) => c.name === "Production validation" && c.conclusion === "success")
+    .map((c) => String(c.output?.summary || "").match(/`(0Af[A-Za-z0-9]+)`/)?.[1]).find(Boolean) : null;
+  return {
+    key: String(key), title: issue.title || "", tag, sprint, pr: pr.number,
+    approver: approverOf(issue.body), lastPusher: lastPusherOf(pr.commits || []), approved,
+    review: review ? { state: review.state, overruledBy: overruled?.[1] || null, reason, text: review.description || "" } : null,
+    ui: ui ? { state: ui.state, url: ui.target_url || null } : null,
+    uat: uat?.state === "success" ? String(uat.description || "").match(/@([A-Za-z0-9-]+)/)?.[1] || "signed off" : null,
+    validation,
+    timeline: { storyOpened: issue.createdAt || null, prOpened: pr.createdAt, approved: approved?.at || null, merged: pr.mergedAt, released: rel?.mergedAt || null, closedOut: new Date(now).toISOString() },
+  };
+}
+
+/** The Delivery record comment: one table people read, and the same facts as one JSON line for reports. Pure. */
+export function deliveryRecord(d) {
+  const t = d.timeline || {};
+  const who = (l) => (l ? `@${l}` : "n/a");
+  const review = !d.review ? "not run" : d.review.overruledBy ? `overruled by @${d.review.overruledBy}: ${d.review.reason || d.review.text}` : d.review.state === "success" ? d.review.text || "passed" : d.review.state;
+  const rows = [
+    ["Approver (named on the story)", d.approver ? who(d.approver) : "none named (any approver)"],
+    ["Approved by", d.approved ? `${who(d.approved.by)} (${d.approved.how}, ${String(d.approved.at).slice(0, 16).replace("T", " ")} UTC)` : "n/a"],
+    ["Latest change pushed by", d.lastPusher ? who(d.lastPusher) : "the pipeline (AI-built)"],
+    ["AI review", String(review).replace(/\|/g, "\\|").replace(/\n/g, " ")],
+    ["UI test", d.ui ? `${d.ui.state}${d.ui.url ? ` ([evidence](${d.ui.url}))` : ""}` : "not needed"],
+    ["UAT signed off by", d.uat ? who(d.uat) : "n/a (no UAT step)"],
+    ["Released", `${d.tag}${d.sprint ? ` (sprint ${d.sprint})` : " (hotfix)"}; production validation \`${d.validation || "n/a"}\``],
+    ["Pull request", `#${d.pr}`],
+  ];
+  const stages = [["story opened → PR opened", t.storyOpened, t.prOpened], ["PR opened → approved", t.prOpened, t.approved], ["approved → merged", t.approved, t.merged],
+    ["merged → in production", t.merged, t.released], ["lead time (story opened → in production)", t.storyOpened, t.released]];
+  const data = { ...d, hours: Object.fromEntries(stages.map(([n, a, b]) => [n, hoursBetween(a, b)])) };
+  return [`### ${DELIVERY_TITLE}`, "", "What shipped, who approved it and how long each stage took (written at close-out; reports read the JSON line).", "",
+    "| | |", "|---|---|", ...rows.map(([k, v]) => `| ${k} | ${v} |`), "",
+    "| Stage | hours |", "|---|---|", ...stages.map(([n, a, b]) => `| ${n} | ${hoursBetween(a, b) ?? "n/a"} |`), "",
+    `<!-- delivery: ${JSON.stringify(data).replace(/--/g, "- -")} -->`].join("\n");
 }
 
 /** The release PR's body: what merged into the sprint and the sprint's stories. */

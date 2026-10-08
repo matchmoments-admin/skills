@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { orgFor } from "./conventions.mjs";
 import { PIPELINE_ROOT } from "./io.mjs";
-import { baselineId as idOf, composeProject, DIR as BASELINE_DIR } from "./baseline.mjs";
+import { baselineId as idOf, composeProject, excluded, DIR as BASELINE_DIR } from "./baseline.mjs";
 
 // Scratch definitions come from the trusted pipeline checkout, so a PR cannot change its own org's shape.
 const definitionPath = (d) => join(PIPELINE_ROOT, d);
@@ -105,7 +105,9 @@ export function permissionSets(dir = "force-app") {
 }
 
 export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key`, packages = packageList(), env = process.env,
-  baselineDir = join(PIPELINE_ROOT, BASELINE_DIR), seedDir = join(PIPELINE_ROOT, "data/seed"), record = () => {} }) {
+  baselineDir = join(PIPELINE_ROOT, BASELINE_DIR), seedDir = join(PIPELINE_ROOT, "data/seed"), record = () => {},
+  // a snapshot Salesforce refused once is never tried again (each attempt spends a daily scratch org): marked by the caller
+  snapshotRefused = () => false, refuseSnapshot = () => {} }) {
   // the production baseline (BASELINE: off | soft (default) | strict), from main's trusted checkout, never the branch's
   const baselineMode = String(env.BASELINE || "soft").toLowerCase();
   const baseline = () => (baselineMode !== "off" && existsSync(baselineDir) ? idOf(baselineDir) : null);
@@ -182,6 +184,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         try { sf([...base, "--definition-file", def, "--wait", "45"]); return { fromSnapshot: true, snapshot }; } catch (e) { why = String(e.message).split("\n").slice(-2).join(" ").slice(0, 300); }
         log(`::warning::snapshot ${snapshot} could not be used (${why || "no reason given"}): creating ${org.alias} from production's shape instead`);
         record("snapshot", { action: "fallback", name: snapshot, org: org.description, why });
+        refuseSnapshot(snapshot, why);   // the next org goes straight to shape until a new snapshot is built
         self.removeTagged(org.description);   // a half-made attempt must not hold a slot
       }
       log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
@@ -198,8 +201,16 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       if (set.toLowerCase() === "off") return null;
       if (/^[A-Za-z0-9]{1,15}$/.test(set)) return set;
       const list = sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || [];
-      return (Array.isArray(list) ? list : []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || "") && s.Status === "Active")
+      return (Array.isArray(list) ? list : []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || "") && s.Status === "Active" && !snapshotRefused(s.SnapshotName))
         .sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)))[0]?.SnapshotName || null;
+    },
+
+    /** The newest Active pipeline snapshot's age in hours, or null (for "rebuild at most once a day"). */
+    snapshotAgeHours(now = Date.now()) {
+      const list = sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || [];
+      const newest = (Array.isArray(list) ? list : []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || "") && s.Status === "Active")
+        .map((s) => Date.parse(String(s.CreatedDate).replace(/\+0000$/, "Z"))).sort().pop();
+      return newest ? (now - newest) / 3600e3 : null;
     },
 
     /**
@@ -389,24 +400,59 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
      * permission sets, so they see what that user sees; without one, every permission set in the source.
      * Returns { username, created, persona }.
      */
-    tester(alias, { login, email, persona = null }, dir = "force-app") {
-      const sets = persona?.permsets?.length ? persona.permsets : permissionSets(dir);
+    tester(alias, { login, email, persona = null, admin = false }, dir = "force-app") {
+      // admin: System Administrator (an admin looking at the story's org as themselves); else Standard User as the persona
+      const sets = admin ? [] : persona?.permsets?.length ? persona.permsets : permissionSets(dir);
+      const q = (soql) => sf(["data", "query", "-o", alias, "-q", soql], { allowFail: true })?.records || [];
       const orgId = sf(["org", "display", "-o", alias]).id;
-      const username = `${String(login).toLowerCase().replace(/[^a-z0-9]/g, "")}.uat@${String(orgId).slice(0, 15).toLowerCase()}.pipeline`;
-      const found = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM User WHERE Username = '${username}'`], { allowFail: true })?.records?.[0];
+      const username = `${String(login).toLowerCase().replace(/[^a-z0-9]/g, "")}.${admin ? "admin" : "uat"}@${String(orgId).slice(0, 15).toLowerCase()}.pipeline`;
+      const found = q(`SELECT Id, IsActive FROM User WHERE Username = '${username}'`)[0];
+      // a record, not `sf org create user` (it fails with a JWT login on Hyperforce); a full org frees the licence a
+      // UI-test persona holds (they are recreated on their next run), as e2e/support/login.ts does
+      const withLicence = (f) => {
+        try { return f(); } catch (e) {
+          if (!/LICENSE_LIMIT_EXCEEDED|License Limit Exceeded/i.test(e.message)) throw e;
+          for (const u of q(`SELECT Id FROM User WHERE IsActive = true AND Username LIKE 'persona.%'`)) sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", u.Id, "-v", "IsActive=false"], { allowFail: true });
+          return f();
+        }
+      };
       let id = found?.Id;
       if (!id) {
-        const made = sf(["org", "create", "user", "-o", alias, `username=${username}`, `email=${email}`, `lastName=${login}`, "profileName=Standard User", `permsets=${sets.join(",")}`]);
-        id = made?.fields?.id || sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM User WHERE Username = '${username}'`]).records[0].Id;
-      } else for (const p of sets) sf(["org", "assign", "permset", "--name", p, "-o", alias, "--on-behalf-of", username], { allowFail: true });
-      const roleId = persona?.role ? sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM UserRole WHERE DeveloperName = '${String(persona.role).replace(/[^A-Za-z0-9_]/g, "")}'`], { allowFail: true })?.records?.[0]?.Id : null;
-      if (persona?.role && !roleId) log(`::warning::role ${persona.role} not found in ${alias}: the tester has no role`);
+        const profile = q(`SELECT Id FROM Profile WHERE Name = '${admin ? "System Administrator" : "Standard User"}'`)[0]?.Id;
+        id = withLicence(() => sf(["data", "create", "record", "-o", alias, "-s", "User", "-v", [`Username='${username}'`, `Email='${email}'`, `LastName='${String(login).slice(0, 70)}'`,
+          `Alias='t${Date.now() % 1e6}'`, `ProfileId=${profile}`, "TimeZoneSidKey='Australia/Sydney'", "LocaleSidKey='en_AU'", "EmailEncodingKey='UTF-8'", "LanguageLocaleKey='en_US'"].join(" ")]).id);
+      } else if (!found.IsActive) withLicence(() => sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", id, "-v", "IsActive=true"]));
+      for (const p of sets) sf(["org", "assign", "permset", "--name", p, "-o", alias, "--on-behalf-of", username], { allowFail: true });
+      const roleId = persona?.role && !admin ? q(`SELECT Id FROM UserRole WHERE DeveloperName = '${String(persona.role).replace(/[^A-Za-z0-9_]/g, "")}'`)[0]?.Id : null;
+      if (persona?.role && !admin && !roleId) log(`::warning::role ${persona.role} not found in ${alias}: the tester has no role`);
       sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", id, "-v", `Email=${email} CountryCode=AU UserPreferencesLightningExperiencePreferred=true${roleId ? ` UserRoleId=${roleId}` : ""}`], { allowFail: true });
       const apex = join(tmpdir(), `reset-${process.pid}.apex`);
       writeFileSync(apex, `System.resetPassword('${id}', true);\n`);
       sf(["apex", "run", "-o", alias, "--file", apex]);
-      log(`tester ${username}${roleId ? ` (role ${persona.role})` : ""}: password email sent`);
-      return { username, created: !found, persona: { role: roleId ? persona.role : null, permsets: sets } };
+      log(`tester ${username}${admin ? " (System Administrator)" : roleId ? ` (role ${persona.role})` : ""}: password email sent`);
+      return { username, created: !found, admin, persona: { role: roleId ? persona.role : null, permsets: sets } };
+    },
+
+    /**
+     * What people changed in Setup in this source-tracked org (a story org an admin logged into): SourceMember rows
+     * changed by anyone but the org's own admin user, which every pipeline deploy runs as. Profiles never (permission
+     * sets carry access), nor what config/baseline.json excludes. Deletions are not included. [{ type, name }].
+     */
+    setupChanges(alias, { exclude = [] } = {}) {
+      const admin = sf(["org", "display", "-o", alias]).username;
+      const adminId = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM User WHERE Username = '${admin}'`]).records?.[0]?.Id;
+      const rows = (by) => sf(["data", "query", "-o", alias, "--use-tooling-api", "-q", `SELECT MemberType, MemberName, IsNameObsolete, ${by} FROM SourceMember`], { allowFail: true })?.records;
+      let by = "ChangedBy", list = rows(by);   // ChangedBy is API 60+; LastModifiedById otherwise
+      if (!list) { by = "LastModifiedById"; list = rows(by) || []; }
+      const seen = new Set();
+      return list.filter((r) => r[by] && r[by] !== adminId && !r.IsNameObsolete && !excluded(r.MemberType, r.MemberName, ["Profile", ...exclude]))
+        .map((r) => ({ type: r.MemberType, name: r.MemberName })).filter((c) => !seen.has(`${c.type}:${c.name}`) && seen.add(`${c.type}:${c.name}`));
+    },
+
+    /** Retrieve those changes into force-app: the story owns them from now on (so they leave the baseline). */
+    retrieveChanges(alias, changes) {
+      if (changes.length) sf(["project", "retrieve", "start", "-o", alias, ...changes.flatMap((c) => ["-m", `${c.type}:${c.name}`]), "--ignore-conflicts"]);
+      return changes;
     },
 
     /** Delete the target's org if it is alive. Returns true if one was deleted. */

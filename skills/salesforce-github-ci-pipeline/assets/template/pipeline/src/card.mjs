@@ -3,7 +3,7 @@
 // same facts and decision the gate uses (gate.gather / gate.evaluate), so the card and the gate cannot disagree.
 // storyCards() puts it on the story and its PR (and moves the board), through the code host and the tracker.
 import { CHECKS, storyBranch, aiFeatures, context, setting, sprintOf, storyOf } from "./conventions.mjs";
-import { latestCheck, verdictFor, humanApproval, requiredVerdicts, evaluate, route, STATUS } from "./gate.mjs";
+import { latestCheck, verdictFor, approval, requiredVerdicts, evaluate, route, STATUS } from "./gate.mjs";
 import { planContext } from "./plan.mjs";
 import { stageOf, moveCard } from "./board.mjs";
 import { checklist, allowed } from "./actions.mjs";
@@ -31,7 +31,8 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   if (!pr) {
     rows.push(["waiting", "Build", ai.implement ? `build on ${branchLink} and open a PR into \`${base}\`, or comment **/build** on this story` : `build on ${branchLink} and open a PR into \`${base}\``]);
     next = ai.implement ? "Build it, or tick **Build it with Claude** below." : `Build it on ${branchLink} and open a pull request.`;
-    return render(key, next, rows, now, allowed([...(planned ? [] : ["plan"]), "build"], ai));
+    // an admin can build it by clicking in the story's org, then bring the changes in (story-retrieve)
+    return render(key, next, rows, now, allowed([...(planned ? [] : ["plan"]), "build", "org-login-admin", "retrieve", "org-login"], ai));
   }
 
   const merged = pr.state === "MERGED";
@@ -54,9 +55,10 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
     else rows.push(["off", label, v.context === STATUS.review ? "off: your approval is the review" : "not needed"]);
   }
 
-  const approved = merged || humanApproval(ctx) || verdictFor(STATUS.signoff, ctx).state === "success";
+  const a = approval(ctx, { signOff: base !== "main" });
+  const approved = merged || a.ok;
   const signOff = base === "main" ? "(Review changes > Approve)" : "(Review changes > Approve), or tick **Sign off** below";
-  rows.push([approved ? "done" : "waiting", "Approval", approved ? "approved" : `**[Approve here](${prUrl}/files)** ${signOff}`]);
+  rows.push([approved ? "done" : "waiting", "Approval", approvalText(a, { merged, prUrl, how: signOff, approver: facts?.storyApprover })]);
   rows.push([shipped ? "done" : merged ? "done" : "waiting", "Merged", merged ? `into \`${base}\`; the staging regression runs next` : "merges by itself when everything above is green"]);
   rows.push([shipped ? "done" : "waiting", "In production", shipped ? `released in [${shipped.tag}](${shipped.url})` : base === "main" ? "ships right after the merge" : "ships with the sprint's release"]);
 
@@ -79,6 +81,14 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   return render(key, next, rows, now, merged ? mergedActions : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }));
 }
 
+/** The Approval row: who approved, or who should and how; a refused approval says why (approval() in gate.mjs). */
+function approvalText(a, { merged, prUrl, how, approver, team = [] }) {
+  if (merged) return "approved";
+  if (a.ok) return `approved by ${a.by.map((l) => `@${l}`).join(", ")}`;
+  const who = approver ? `@${approver} (the approver): ` : team.length ? `an approver (${team.map((l) => `@${l}`).join(", ")}): ` : "";
+  return `${who}**[Approve here](${prUrl}/files)** ${how}${a.refused.length ? `. Not counted: ${a.refused.map((r) => r.why).join("; ")}` : ""}`;
+}
+
 /** The boxes a story PR's card offers, from where it stands (pure). */
 function storyActions(rows, { ai, base, ci }) {
   const at = (stage) => rows.find((r) => r[1] === stage)?.[0];
@@ -90,6 +100,7 @@ function storyActions(rows, { ai, base, ci }) {
   if (at("UI test") === "failed") ids.push("fix");   // the fixer reads the Playwright error
   if (at("Approval") === "waiting" && base !== "main") ids.push("ship");
   if (at("Approval") === "waiting") ids.push("org-login");   // the approver can see the feature in the story's org
+  ids.push("org-login-admin", "retrieve");   // a change made by clicking in the story's org comes in as a commit
   return allowed([...new Set(ids)], ai);
 }
 
@@ -137,8 +148,9 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
       stale: ["waiting", "signed off an older commit: it redeploys, then sign off again"], missing: ["waiting", "deploys after the staging regression"] }[u.state] || ["waiting", u.state];
     rows.push([row[0], "UAT sign-off", row[1]]);
   }
-  const approved = merged || humanApproval(ctx);
-  rows.push([approved ? "done" : "waiting", "Approval", approved ? "approved" : `**[Approve here](${prUrl}/files)** (Review changes > Approve)`]);
+  const a = approval(ctx);
+  const approved = merged || a.ok;
+  rows.push([approved ? "done" : "waiting", "Approval", approvalText(a, { merged, prUrl, how: "(Review changes > Approve)", approver: null, team: facts.approvers })]);
   const v = stateOf(latestCheck(runs, "Production validation"));
   const validation = merged ? "done" : latestCheck(runs, "Production validation") === "missing" ? "waiting" : v;
   rows.push([validation, "Production validation", validation === "failed" ? `production rejected it: [see why](${prUrl}/checks)` : validation === "done" ? "passed (check-only deploy with the relevant tests)" : validation === "running" ? `[running](${prUrl}/checks)` : "runs when everything above is green"]);
@@ -300,7 +312,7 @@ async function syncBoard({ host, key, pr, facts, shipped, log }) {
   if (!project || !host.hasApp() || !/^\d+$/.test(String(key))) return;
   try {
     const issueNodeId = host.api("GET", `repos/${host.repo}/issues/${key}`)?.node_id;
-    const approved = Boolean(facts && humanApproval({ ...facts, head: pr?.headRefOid }));
+    const approved = Boolean(facts && approval({ ...facts, head: pr?.headRefOid }, { signOff: true }).ok);
     const stage = stageOf({ pr, approved, shipped });
     await moveCard({ graphql: host.appGraphql, org: host.repo.split("/")[0], project, issueNodeId, stage });
     log(`board: story ${key} -> ${stage}`);

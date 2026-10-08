@@ -6,6 +6,8 @@ name: snapshot-refresh
 # and only the newest two are kept. A snapshot that is not Active yet is not used: orgs keep the previous one.
 on:
   workflow_dispatch:
+    inputs:
+      if-older-than: { description: "Rebuild only if the newest snapshot is older than this many hours (empty: always)", required: false, default: "" }
   push:
     branches: [main]
     paths: ["baseline/**", "data/seed/**"]
@@ -33,7 +35,9 @@ jobs:
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Build the source org and snapshot it
-        run: node pipeline/bin/pipe.mjs snapshot refresh --minutes 100
+        env:
+          OLDER: ${{ inputs.if-older-than }}
+        run: node pipeline/bin/pipe.mjs snapshot refresh --minutes 100 ${OLDER:+--if-older-than "$OLDER"}
       - name: A failed build never leaves the source org holding a slot (a pending snapshot keeps it; it lives a day)
         if: failure()
         run: node pipeline/bin/pipe.mjs org remove snapshot || true

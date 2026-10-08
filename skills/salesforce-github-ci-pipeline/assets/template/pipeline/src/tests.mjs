@@ -89,7 +89,7 @@ export const changedCode = (changed, files, read) =>
  * onProgress(state, title) is for the story card. Returns { plan, state, result, seconds }; result is null when there
  * was nothing to run.
  */
-export function runForCheckout(io, { host, alias, base, sha, all = false, min = 75, outDir, sleep, onProgress = () => {}, log = () => {} }) {
+export function runForCheckout(io, { host, alias, base, sha, all = false, min = 75, outDir, sleep, level = "RunRelevantTests", onProgress = () => {}, log = () => {} }) {
   const src = io.sourceFiles({ base });
   const plan = selectTests({ changed: src.changed, deleted: src.deleted, files: src.files, read: src.read, mode: all ? "all" : "relevant" });
   log(`tests: ${plan.mode} (${plan.why})${plan.mode === "relevant" ? `: ${[...plan.apex, ...plan.flows].join(", ")}` : ""}`);
@@ -97,27 +97,69 @@ export function runForCheckout(io, { host, alias, base, sha, all = false, min = 
   const started = Date.now();
   if (plan.mode === "none") { check.update({ title: "No Salesforce changes", summary: plan.why }, "success"); return { plan, state: null, result: null, seconds: 0 }; }
   const classPath = (cls) => src.files.find((p) => p.endsWith(`/${cls}.cls`)) || null;
-  const state = runTests(io, {
-    alias, plan, sleep, outDir,
-    onProgress: (st) => {
-      const out = checkOutput(st, { plan, classPath });
-      check.update(out);
-      log(`  apex ${st.apex.passed}/${st.apex.ran} passed (${st.apex.classesDone}/${st.apex.classes} classes)${st.phase === "flows" ? " · flow tests running" : ""}`);
-      onProgress(st, out.title.replace(/^Running: /, ""));
-    },
-  });
+  const progress = (st) => {
+    const out = checkOutput(st, { plan, classPath });
+    check.update(out);
+    log(`  apex ${st.apex.passed}/${st.apex.ran} passed (${st.apex.classesDone}/${st.apex.classes} classes)${st.phase === "flows" ? " · flow tests running" : ""}`);
+    onProgress(st, out.title.replace(/^Running: /, ""));
+  };
+  // a story's Apex tests: Salesforce's own choice (RunRelevantTests) when the org offers it and it ran some; else ours
+  const relevant = plan.mode === "relevant" && level === "RunRelevantTests" ? runRelevant(io, { alias, changed: src.changed.filter((p) => src.files.includes(p)), sleep, onProgress: progress, log }) : null;
+  if (relevant) Object.assign(plan, { apex: relevant.chosen, why: `${plan.why}; Apex tests chosen by Salesforce (RunRelevantTests)`, chosenBy: "salesforce" });
+  const state = runTests(io, { alias, plan, sleep, outDir, onProgress: progress, apexDone: relevant?.state });
   const result = verdict(state, { plan, changedCode: changedCode(src.changed, src.files, src.read), min });
   check.update(checkOutput(state, { plan, result, classPath }), result.ok ? "success" : "failure");
   for (const f of [...state.apex.failures, ...state.flows.failures]) log(`  FAIL ${f.test}: ${f.message}`);
   return { plan, state, result, seconds: Math.round((Date.now() - started) / 1000) };
 }
 
-export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs = 15000, maxPolls = plan.mode === "all" ? 240 : 80, outDir }) {
+/**
+ * RunRelevantTests (Salesforce beta, API 66+): validate just the changed components in the story org, where everything
+ * is already deployed, and let the platform pick the Apex tests they affect (test classes declare
+ * @IsTest(testFor='ApexClass:X') to be picked; critical=true always runs). Deploy and validate only: no
+ * `sf apex run test` equivalent. Returns { chosen: [class], state } (state.apex and state.coverage filled), or null
+ * when the org rejects the level or it ran no tests (it can run none silently), so the caller uses its own selection.
+ */
+export function runRelevant(io, { alias, changed, sleep, onProgress = () => {}, log = () => {}, pollMs = 15000, maxPolls = 80 }) {
+  // a bundle (LWC, Aura) deploys as its folder; any other source file names its own component
+  const parts = [...new Set(changed.filter((p) => p.startsWith("force-app/")).map((p) => p.match(/^(.*\/(?:lwc|aura)\/[^/]+)\//)?.[1] || p))];
+  if (!parts.length) return null;
+  let id;
+  try { id = io.sf(["project", "deploy", "validate", "-o", alias, ...parts.flatMap((p) => ["--source-dir", p]), "--test-level", "RunRelevantTests", "--async"])?.id; }
+  catch (e) { log(`RunRelevantTests not used (${String(e.message).slice(0, 200)}): our own test selection runs instead`); return null; }
+  if (!id) return null;
+  const state = { phase: "apex", apex: { classes: 0, classesDone: 0, ran: 0, passed: 0, failed: 0, failures: [], finished: false }, flows: { ran: 0, passed: 0, failed: 0, failures: [], finished: false }, coverage: {}, orgWide: null };
+  let r = {};
+  for (let i = 0; i < maxPolls; i++) {
+    r = io.sf(["project", "deploy", "report", "-o", alias, "--job-id", id], { allowFail: true }) || {};
+    Object.assign(state.apex, { ran: Number(r.numberTestsCompleted) || 0, failed: Number(r.numberTestErrors) || 0 });
+    state.apex.passed = state.apex.ran - state.apex.failed;
+    onProgress(state);
+    if (r.done || ["Succeeded", "SucceededPartial", "Failed", "Canceled"].includes(r.status)) break;
+    sleep(pollMs);
+  }
+  const rt = r.details?.runTestResult || {};
+  const list = (x) => (Array.isArray(x) ? x : x ? [x] : []);
+  const ran = Number(rt.numTestsRun ?? r.numberTestsCompleted) || 0;
+  if (!ran) { log(`RunRelevantTests ran no tests (${r.status || "no report"}${r.errorMessage ? `: ${r.errorMessage}` : ""}): our own test selection runs instead`); return null; }
+  const failures = list(rt.failures).map((f) => ({ test: `${f.name}.${f.methodName}`, cls: f.name, message: f.message || "", stack: f.stackTrace || "" }));
+  const chosen = [...new Set([...list(rt.successes), ...list(rt.failures)].map((t) => t.name).filter(Boolean))].sort();
+  Object.assign(state.apex, { classes: chosen.length, classesDone: chosen.length, ran, passed: ran - failures.length, failed: failures.length, failures, finished: true, running: [] });
+  for (const c of list(rt.codeCoverage)) {
+    const all = Number(c.numLocations) || 0;
+    if (all) state.coverage[c.name] = Math.round((100 * (all - (Number(c.numLocationsNotCovered) || 0))) / all);
+  }
+  log(`RunRelevantTests: Salesforce chose ${chosen.join(", ") || "no classes"} (${ran} tests)`);
+  return { chosen, state };
+}
+
+export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs = 15000, maxPolls = plan.mode === "all" ? 240 : 80, outDir, apexDone = null }) {
   // maxPolls x pollMs: 20 minutes for a story's tests, 60 for everything (a large org); the jobs allow for it. A run
   // that does not finish is aborted, so the next job in the org's lane does not deploy under running tests.
   const state = { phase: "apex", apex: { classes: 0, classesDone: 0, ran: 0, passed: 0, failed: 0, failures: [], finished: false },
     flows: { ran: 0, passed: 0, failed: 0, failures: [], finished: false }, coverage: {}, orgWide: null };
-  const runApex = plan.mode === "all" || plan.apex.length > 0;
+  if (apexDone) Object.assign(state, { apex: apexDone.apex, coverage: apexDone.coverage });   // RunRelevantTests already ran them
+  const runApex = !apexDone && (plan.mode === "all" || plan.apex.length > 0);
   if (runApex) {
     const level = plan.mode === "all" ? ["--test-level", "RunLocalTests"] : ["--test-level", "RunSpecifiedTests", ...plan.apex.flatMap((t) => ["--tests", t])];
     const id = io.sf(["apex", "run", "test", "-o", alias, ...level, "--code-coverage"]).testRunId;

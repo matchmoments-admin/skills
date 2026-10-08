@@ -9,7 +9,7 @@
 // AI is optional (facts.ai, from the AI_* repo variables). Required verdicts: the AI review only when AI_REVIEW is on;
 // the UI test when the change is UI-facing and either AI_UI_TEST is on or the PR commits its story spec. A failed
 // verdict on the code always blocks, whatever the flags. With every flag off, CI plus a person's approval is the gate.
-import { CHECKS, storyOf, sprintOf, uiFacing, storySpec, isPipelineAuthor } from "./conventions.mjs";
+import { CHECKS, storyOf, sprintOf, uiFacing, storySpec, isPipelineAuthor, setting } from "./conventions.mjs";
 
 // signoff: a person's sign-off on a story PR into the sprint (a ticked box or /ship), recorded by an agent-free job.
 export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", uat: "pipeline/uat", signoff: "pipeline/sign-off" };
@@ -88,27 +88,74 @@ export function verdictFor(context, { statuses = [], head, diffsToHead = {} }) {
   return { state: last.state, description: last.description || "", url: last.url || null };
 }
 
-/** Has a person approved the code as it is now? Latest decisive review per human, on the head (or e2e-only since). */
-export function humanApproval({ reviews = [], head, diffsToHead = {} }) {
+/** Who approved the code as it is now (logins)? Latest decisive review per human, on the head (or e2e-only since). */
+export function reviewApprovers({ reviews = [], head, diffsToHead = {} }) {
   const latest = new Map();
   for (const r of [...reviews].sort((a, b) => String(a.submitted_at).localeCompare(String(b.submitted_at)))) {
     if (r.user?.type !== "User") continue;
     if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) latest.set(r.user.login, r);
   }
-  return [...latest.values()].some((r) => r.state === "APPROVED" && onlySpecsSince(r.commit_id, head, diffsToHead));
+  return [...latest.values()].filter((r) => r.state === "APPROVED" && onlySpecsSince(r.commit_id, head, diffsToHead)).map((r) => r.user.login);
+}
+/** Has a person approved the code as it is now (any person; approval() applies the team's rule)? */
+export const humanApproval = (ctx) => reviewApprovers(ctx).length > 0;
+
+/** The story's approver: an "Approver: @login" line (or the story form's Approver field), else null. Pure. */
+export const approverOf = (body) => String(body || "").match(/^(?:#+\s*)?\**Approver\**:?\**\s*\n*\s*@([A-Za-z0-9-]+)/im)?.[1] || null;
+/** The APPROVERS setting as logins (the first is the default approver of new stories). Pure. */
+export const approverList = (v) => String(v || "").split(/[\s,]+/).map((x) => x.replace(/^@/, "")).filter(Boolean);
+/** Who pushed the PR's latest change: the person on the newest commit with a human author (not Claude, not the pipeline). */
+export const lastPusherOf = (commits = []) => [...commits].sort((a, b) => String(a.committedDate).localeCompare(String(b.committedDate)))
+  .map((c) => (c.authors || []).find((a) => a.login && a.login !== "claude" && !isPipelineAuthor(a.login))?.login).filter(Boolean).pop() || null;
+
+/**
+ * Why this person's approval does not count, or null when it does (see GLOSSARY.md: Approver). With APPROVERS unset,
+ * anyone with write access approves (a team without a policy yet). With it set: never the person who pushed the
+ * latest change (nobody approves their own work), and only the story's approver; with none named (a release, a
+ * hotfix without one), or when the approver pushed the latest change themselves, anyone in APPROVERS. Pure.
+ */
+export function approvalProblem({ approvers = [], storyApprover = null, lastPusher = null }, login) {
+  if (!approvers.length || !login) return null;
+  const is = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
+  const inTeam = approvers.some((a) => is(a, login));
+  if (is(login, lastPusher)) return `@${login} pushed the latest change, so ${storyApprover && !is(storyApprover, login) ? `@${storyApprover} (the approver)` : "another approver"} needs to approve`;
+  if (storyApprover && !is(storyApprover, login) && !(is(storyApprover, lastPusher) && inTeam)) return `@${storyApprover} is this story's approver (change the story's Approver line to hand it over)`;
+  if (!storyApprover && !inTeam) return `@${login} is not an approver (APPROVERS: ${approvers.map((a) => `@${a}`).join(", ")})`;
+  return null;
+}
+
+/**
+ * Does a person's approval cover the code as it is now (Sign-off)? Reviews on the head; with signOff, also a ticked
+ * Sign off or /ship (the trusted pipeline/sign-off status) and `ready` or /ship after the push. Each is checked
+ * against approvalProblem(). Returns { ok, by: [login], refused: [{ login, why }] }. Pure.
+ */
+export function approval(ctx, { signOff = false } = {}) {
+  const who = [...reviewApprovers(ctx)];
+  if (signOff) {
+    const s = verdictFor(STATUS.signoff, ctx);
+    if (s.state === "success") who.push(String(s.description || "").match(/@([A-Za-z0-9-]+)/)?.[1] || "");
+    who.push(...readyBy(ctx));
+  }
+  const by = [], refused = [];
+  for (const login of [...new Set(who)]) {
+    const why = approvalProblem(ctx, login);
+    if (why) refused.push({ login, why }); else by.push(login);
+  }
+  return { ok: by.length > 0, by, refused };
 }
 
 /** `ready` counts if a person applied it after the head commit was pushed (first check on the head, server time). */
 export const SIGN_OFF_COMMENT = /^\/ship\b/;
 const CAN_SIGN_OFF = ["OWNER", "MEMBER", "COLLABORATOR"];
-export function readyAfterPush({ labelEvents = [], checkRuns = [], comments = [] }) {
+export function readyBy({ labelEvents = [], checkRuns = [], comments = [] }) {
   const pushedAt = checkRuns.map((c) => c.started_at).filter(Boolean).sort()[0];
-  const label = labelEvents.filter((e) => e.event === "labeled" && e.label?.name === "ready" && e.actor?.type !== "Bot").map((e) => e.created_at);
+  if (!pushedAt) return [];
+  const label = labelEvents.filter((e) => e.event === "labeled" && e.label?.name === "ready" && e.actor?.type !== "Bot").map((e) => [e.created_at, e.actor?.login]);
   // `/ship` in a comment by a person with write access counts the same as the `ready` label.
-  const ship = comments.filter((c) => SIGN_OFF_COMMENT.test(String(c.body || "").trim()) && c.user?.type !== "Bot" && CAN_SIGN_OFF.includes(c.author_association)).map((c) => c.created_at);
-  const ready = [...label, ...ship].sort().pop();
-  return Boolean(pushedAt && ready && ready >= pushedAt);
+  const ship = comments.filter((c) => SIGN_OFF_COMMENT.test(String(c.body || "").trim()) && c.user?.type !== "Bot" && CAN_SIGN_OFF.includes(c.author_association)).map((c) => [c.created_at, c.user?.login]);
+  return [...new Set([...label, ...ship].filter(([at]) => at >= pushedAt).map(([, login]) => login || "someone"))];
 }
+export const readyAfterPush = (facts) => readyBy(facts).length > 0;
 
 /** Which verdicts this PR needs, given the AI flags and what it changes (prFiles: files changed against its base). */
 export function requiredVerdicts({ ai = {}, compare = {} }, story) {
@@ -169,11 +216,15 @@ export function evaluate(facts) {
   }
   // a story whose blockers have not landed in the sprint (or shipped) waits for them
   for (const b of facts.blockers || []) if (!b.landed) reasons.push(`blocked by #${b.number}: it has not merged into the sprint yet`);
-  const approved = humanApproval(ctx);
-  const staleApproval = !approved && (facts.reviews || []).some((x) => x.user?.type === "User" && x.state === "APPROVED");
-  if (rules.approval === "review" && !approved) reasons.push(staleApproval ? "your approval was for an older commit; approve again" : "not approved (Review changes > Approve)");
-  const signedOff = verdictFor(STATUS.signoff, ctx).state === "success";
-  if (rules.approval === "sign-off" && !approved && !signedOff && !readyAfterPush(facts)) reasons.push(staleApproval ? "your approval was for an older commit; approve again" : "no sign-off (approve it, or comment /ship)");
+  // approvals (Approver): the story's approver, never the person who pushed the latest change, when APPROVERS is set
+  if (rules.approval !== "none") {
+    const a = approval(ctx, { signOff: rules.approval === "sign-off" });
+    const staleApproval = !a.ok && (facts.reviews || []).some((x) => x.user?.type === "User" && x.state === "APPROVED");
+    const named = facts.storyApprover ? ` by @${facts.storyApprover}` : "";
+    if (!a.ok) reasons.push(a.refused.length ? `approval does not count: ${a.refused[0].why}`
+      : staleApproval ? "your approval was for an older commit; approve again"
+      : rules.approval === "review" ? `not approved${named} (Review changes > Approve)` : `no sign-off${named} (approve it, or comment /ship)`);
+  }
 
   const forceApp = Boolean(compare.forceAppChanged);
   const validate = rules.validate === true || (rules.validate === "if-force-app" && forceApp);
@@ -191,7 +242,7 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
   const reviews = ghPages(`repos/${repo}/pulls/${prNumber}/reviews?per_page=100`);
   const checkRuns = ghPages(`repos/${repo}/commits/${head}/check-runs?per_page=100`, "check_runs");
   const labelEvents = ghPages(`repos/${repo}/issues/${prNumber}/events?per_page=100`);
-  const comments = ghPages(`repos/${repo}/issues/${prNumber}/comments?per_page=100`).map((c) => ({ body: c.body, created_at: c.created_at, author_association: c.author_association, user: { type: c.user?.type } }));
+  const comments = ghPages(`repos/${repo}/issues/${prNumber}/comments?per_page=100`).map((c) => ({ body: c.body, created_at: c.created_at, author_association: c.author_association, user: { type: c.user?.type, login: c.user?.login } }));
   const statuses = [];
   for (const c of pr.commits || []) {
     for (const s of ghPages(`repos/${repo}/commits/${c.oid}/statuses?per_page=100`)) {
@@ -223,7 +274,10 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
   const key = storyOf(pr.headRefName);
   const body = key && /^\d+$/.test(key) ? gh(["issue", "view", key, "--json", "body"], { allowFail: true })?.body || "" : "";
   const blockers = blockersOf(body).map((n) => ({ number: n, landed: landedOf(n, gh) }));
-  return { pr, reviews, checkRuns, labelEvents, comments, statuses, diffsToHead, compare, ai, uat, rolledBack, blockers };
+  // the approval rule's inputs: the team (APPROVERS), the story's approver, who pushed the latest change
+  const approvers = approverList(setting("APPROVERS"));
+  return { pr, reviews, checkRuns, labelEvents, comments, statuses, diffsToHead, compare, ai, uat, rolledBack, blockers,
+    approvers, storyApprover: approverOf(body), lastPusher: lastPusherOf(pr.commits) };
 }
 
 /** Re-run the gate when a person has signed off (or the PR needs no sign-off), so it merges when its last input lands.

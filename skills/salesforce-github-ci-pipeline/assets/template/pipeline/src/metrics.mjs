@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 const HOUR = 3600e3;
 const hours = (a, b) => (new Date(b) - new Date(a)) / HOUR;
+const p90 = (xs) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.ceil(xs.length * 0.9) - 1)] : null);
 const median = (xs) => {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b), m = Math.floor(s.length / 2);
@@ -33,7 +34,7 @@ export function summarize({ days, prs, releases, runs, fixCommits = {}, transcri
     w.minutes.push((new Date(r.updated_at) - new Date(r.run_started_at)) / 60e3);
   }
   const pipeline = Object.fromEntries(Object.entries(workflows).sort().map(([n, w]) => [n, {
-    runs: w.runs, successRate: Math.round((100 * w.success) / w.runs), medianMinutes: round1(median(w.minutes)),
+    runs: w.runs, successRate: Math.round((100 * w.success) / w.runs), medianMinutes: round1(median(w.minutes)), p90Minutes: round1(p90(w.minutes)),
   }]));
 
   const reviewed = features.filter((p) => p.labels?.some((l) => l.name.startsWith("review:")));
@@ -78,8 +79,8 @@ export function aiCost(transcripts) {
 
 export function toMarkdown(s, { dora = true } = {}) {
   const v = (x, unit = "") => (x === null || x === undefined ? "n/a" : `${x}${unit}`);
-  const health = ["| Workflow | runs | success | median minutes |", "|---|---|---|---|",
-    ...Object.entries(s.pipeline).map(([n, w]) => `| ${n} | ${w.runs} | ${w.successRate}% | ${v(w.medianMinutes)} |`)];
+  const health = ["| Stage (workflow) | runs | success | median minutes | p90 minutes |", "|---|---|---|---|---|",
+    ...Object.entries(s.pipeline).map(([n, w]) => `| ${n} | ${w.runs} | ${w.successRate}% | ${v(w.medianMinutes)} | ${v(w.p90Minutes)} |`)];
   // once the event log covers the window, its DORA and AI cost are the ones to read: only workflow health here
   if (!dora) return [`## Delivery metrics, last ${s.days} days`, "", ...health].join("\n");
   return [

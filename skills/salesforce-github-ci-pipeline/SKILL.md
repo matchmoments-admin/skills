@@ -18,8 +18,8 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
 1. **GitHub owner.** Branch rules on a private repo need GitHub Pro (personal) or Team (organisation). Recommend an organisation on Team: it also enables the pipeline App identity and org-level Actions policy.
 2. **Production org and Dev Hub.** Often the same org. Note its edition: Developer Edition allows 3 active / 6 daily scratch orgs, which caps the team at about two stories in flight (see gotchas, *Scaling*).
 3. **Tracker.** GitHub Issues (default) or Jira ([`references/jira.md`](references/jira.md)).
-4. **AI switches.** All off by default: the pipeline is complete without AI (CI + a person's approval). Turn on only what the user wants, each a repository variable: `AI_PLAN`, `AI_IMPLEMENT`, `AI_REVIEW`, `AI_FIX`, `AI_UI_TEST`, `AI_AUTO_CHAIN`, `AI_TRIAGE` (Jev), optional `AI_MODEL`. Pipeline switches (not AI): `BASELINE` (the production baseline in every scratch org: soft by default), `BASELINE_NIGHTLY`, `SCRATCH_SNAPSHOT` (force or `off`; unset uses the newest pipeline snapshot), `UAT_TESTER_ROLE`, `UI_EVIDENCE` (a passing UI test posts one small screenshot per acceptance criterion on the story; off unless `true`), `UAT_ENABLED` (a UAT stage with `/uat-pass`; sandbox via secret `SF_UAT_USERNAME`, else a scratch stand-in) and `PROD_TEST_LEVEL` (default `RunRelevantTests`, falling back to every test class). Cheapest useful preset: `AI_REVIEW` + `AI_TRIAGE`. See [`references/architecture.md`](references/architecture.md), *AI switches*.
-5. **Claude auth in CI** (only if any Claude switch is on). Subscription token (`claude setup-token`) or an API key. Subscription usage counts against the user's plan limits; the template already uses Haiku for review and UI test.
+4. **AI switches.** All off by default: the pipeline is complete without AI (CI + a person's approval). Turn on only what the user wants, each a repository variable: `AI_PLAN`, `AI_IMPLEMENT`, `AI_REVIEW`, `AI_FIX`, `AI_UI_TEST`, `AI_AUTO_CHAIN`, `AI_TRIAGE` (Jev), optional `AI_MODEL`. Pipeline switches (not AI): `BASELINE` (the production baseline in every scratch org: soft by default), `BASELINE_NIGHTLY`, `SCRATCH_SNAPSHOT` (force or `off`; unset uses the newest pipeline snapshot), `UAT_TESTER_ROLE`, `UI_EVIDENCE` (a passing UI test posts one small screenshot per acceptance criterion on the story; off unless `true`), `UAT_ENABLED` (a UAT stage with `/uat-pass`; sandbox via secret `SF_UAT_USERNAME`, else a scratch stand-in) `PROD_TEST_LEVEL` (default `RunRelevantTests`, falling back to every test class) and `CI_TEST_LEVEL` (default `RunRelevantTests` for a story's Apex tests, falling back to the pipeline's own selection; `selector` turns it off). Cheapest useful preset: `AI_REVIEW` + `AI_TRIAGE`. See [`references/architecture.md`](references/architecture.md), *AI switches*.
+5. **Claude auth in CI** (only if any Claude switch is on). Subscription token (`claude setup-token`) or an API key. Subscription usage counts against the user's plan limits; the template uses Haiku for the UI test and Sonnet for plan, spec, build, fix and review.
 6. **Jev** (only with `AI_TRIAGE`): a TypeSafe key (`apik…`) as secret `TYPESAFE_API_KEY`. Reuse an existing one from another project by piping it into `gh secret set` without printing it.
 7. **Sprint naming** (e.g. `2026-w42`).
 8. **Existing org?** A fresh org follows the phases as written. An established Enterprise/Unlimited org (Flows,
@@ -29,7 +29,22 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
    If the team only wants per-feature scratch-org tests in an existing build (Buildkite, Bitbucket, no pipeline
    change), use the separate `salesforce-scratch-org-tests` skill instead of this one.
 
-Done when: all nine answers are written down.
+10. **Where is the code hosted?** GitHub is what this template runs on. If the team is on Bitbucket or GitLab, say
+    so plainly: the pipeline (Actions, rulesets, the App, issue cards) does not run there yet. Offer the
+    `salesforce-scratch-org-tests` skill for their existing build, or a GitHub organisation for the pipeline, and
+    stop here until they choose. Follow the team's own conventions for repo naming, branch names and labels where
+    they have them (ask; the pipeline's names are in `pipeline/src/conventions.mjs`).
+11. **How are secrets kept?** Ask before creating any. Default: GitHub secrets, with the production credentials in
+    the `production` environment (deployments from `main` only; on GitHub Enterprise add required reviewers). If
+    the company has a vault (HashiCorp, AWS, Azure), note it in `CLAUDE.md` and keep GitHub as the store for now:
+    OIDC from Actions to the vault is a next step ([`references/enterprise.md`](references/enterprise.md)).
+12. **Who may hold production credentials?** Default and recommendation: nobody but CI. People keep their own
+    production logins for Setup; the pipeline's key (`secrets/ci.key`) is made once, stored as a secret, and deleted
+    from the machine that made it. Admins reach a story's scratch org with **Send me an admin login**, never the key.
+13. **Approvers.** Who approves stories (`APPROVERS`, default first, e.g. the lead). With it set, nobody approves a
+    change they pushed, and each story names its approver ([`references/enterprise.md`](references/enterprise.md), *People*).
+
+Done when: all thirteen answers are written down.
 
 ## Phase 1 — Repo from the template
 
@@ -54,7 +69,7 @@ Run [`scripts/github-setup.sh`](scripts/github-setup.sh) `<owner/repo> <ci-usern
 
 Then the pipeline App, which only a person can confirm: [`scripts/create-app.sh`](scripts/create-app.sh) `<owner> <repo>` opens a pre-filled manifest page; the user clicks Create, pastes back the `code`, the script stores `PIPELINE_APP_ID` and `PIPELINE_APP_PRIVATE_KEY` without printing the key; the user installs the App on the repo.
 
-Then the variables: `PIPELINE_BOTS=github-actions,<app-slug>` (the only bots allowed to start agents; bare logins, no `[bot]`; every agent step reads it, and a pipeline test checks each workflow does) and each switch the user chose in Phase 0 (`gh variable set AI_REVIEW --body true`). Leave the rest unset.
+Then the variables: `APPROVERS` (Phase 0), `PIPELINE_BOTS=github-actions,<app-slug>` (the only bots allowed to start agents; bare logins, no `[bot]`; every agent step reads it, and a pipeline test checks each workflow does) and each switch the user chose in Phase 0 (`gh variable set AI_REVIEW --body true`). Leave the rest unset.
 
 **Merge button and emergencies.** Both rulesets require `pipeline/gate` from the GitHub Actions app (integration
 15368): the gate posts it, so GitHub's merge button stays locked until every requirement is met. Emergency approval

@@ -12,6 +12,9 @@ finding. Comments on the story and its spec since they were written win over the
 - **major**: anything the change needs that the deploy does not carry (a run-once script, "add these members by hand",
   a public group's members): production would get it empty. See `docs/agents/salesforce.md`.
 - **major**: missing test category (negative, permission, bulk), missing permission set entry, an acceptance criterion not met, a field or component missing from the page layout or UI the issue's "Where to see it" describes.
+- **major**: a new or changed Apex test class without `@IsTest(testFor='ApexClass:X,ApexTrigger:Y')` naming the classes
+  and triggers it tests (class level). CI and the production validation run `RunRelevantTests`: an unannotated test
+  is only picked by Salesforce's own dependency analysis, which can miss it. Sharing and access tests also say `critical=true`.
 - **minor**: naming, duplication, comment quality, small clarity issues.
 
 ## Flows

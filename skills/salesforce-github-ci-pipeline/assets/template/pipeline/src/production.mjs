@@ -46,6 +46,10 @@ export function validate(io, { org = "devhub", source, level = "RunRelevantTests
     sleep(pollMs);
   }
   const p = progress(id, used, r);
+  // RunRelevantTests can pass having run nothing; with Apex tests in the repo that is not a validation: run them all
+  if (r.status === "Succeeded" && used === "RunRelevantTests" && allTests.length && !(Number(r.details?.runTestResult?.numTestsRun ?? r.numberTestsTotal) > 0)) {
+    return validate(io, { org, source, level: "all", allTests, onProgress, sleep, pollMs, maxPolls });
+  }
   if (r.status !== "Succeeded" && used === "RunRelevantTests" && rejectsLevel(`${r.errorMessage || ""} ${r.errorStatusCode || ""}`)) {
     return validate(io, { org, source, level: "all", allTests, onProgress, sleep, pollMs, maxPolls });   // rejected late
   }

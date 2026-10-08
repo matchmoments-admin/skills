@@ -365,7 +365,7 @@ test("the review verdict comes only from the pipeline's comments posted during t
 test("close-out is safe to re-run and closes PRs still aimed at the shipped release branch", async () => {
   const done = [], closed = [];
   const tracker = { story: async (k) => ({ state: k === "1" ? "CLOSED" : "OPEN" }), done: async (k) => done.push(k), carry: async () => {}, closeSprint: async () => {} };
-  const gh = (args) => (args[1] === "list" ? [{ number: 40, headRefName: "issue-5" }] : (closed.push(args[2]), null));
+  const gh = (args) => (args[1] === "list" ? [{ number: 40, headRefName: "issue-5" }] : args[1] === "close" ? (closed.push(args[2]), null) : null);
   const { apply } = await import("../src/closeout.mjs");
   await apply({ sprint: "w", ship: ["1", "3"], carry: [], hotfix: [], deleteOrgs: [], deleteBranch: "release/w" },
     { tag: "v1", tracker, orgs: { remove: () => true }, git: (args) => (args[0] === "ls-remote" ? null : ""), gh, log: () => {} });
@@ -407,7 +407,7 @@ test("metrics: DORA from releases and PR routes, AI first-pass rate from fix com
   assert.equal(s.dora.changeFailureRate, 50);
   assert.equal(s.dora.timeToRestoreHours, 2);
   assert.equal(s.ai.passedFirstReview, 50);
-  assert.deepEqual(s.pipeline.ci, { runs: 2, successRate: 50, medianMinutes: 15 });
+  assert.deepEqual(s.pipeline.ci, { runs: 2, successRate: 50, medianMinutes: 15, p90Minutes: 20 });
   assert.match(toMarkdown(s), /\| ci \| 2 \| 50% \| 15 \|/);
 });
 
@@ -1366,7 +1366,7 @@ test("lane: a waiting poll is one read of the lock (holder read once, its run ch
   calls = [];
   assert.throws(() => mk("2").acquire("org-issue-1", { timeoutMinutes: 10, pollSeconds: 30 }));
   const polls = calls.filter((c) => c === "GET git/refs/locks/org-issue-1").length;
-  assert.ok(polls >= 18, `polled ${polls} times`);
+  assert.ok(polls >= 5 && polls <= 10, `polled ${polls} times in 10 minutes: backing off to 3 minutes keeps many waiters inside the API limit`);
   assert.ok(calls.length <= polls + 8, `${calls.length} calls for ${polls} polls`);
   assert.equal(calls.filter((c) => c.startsWith("POST")).length, 0, "no claim commit while the lane is busy");
 });
@@ -1562,12 +1562,34 @@ test("UAT access from GitHub: the card links UAT; a stand-in offers 'Send me a U
   const sf = (args) => {
     calls.push(args.join(" "));
     if (args[0] === "org" && args[1] === "display") return { id: "00DRt00000YW6BXMA1" };
-    if (args[0] === "data" && args[1] === "query") return { records: calls.filter((c) => c.startsWith("org create user")).length ? [{ Id: "005X" }] : [] };
+    if (args[0] === "data" && args[1] === "query") return { records: /FROM Profile/.test(args.join(" ")) ? [{ Id: "00eSTD" }] : [] };
+    if (args[0] === "data" && args[1] === "create") return { id: "005X" };
     return {};
   };
   const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).tester("uat", { login: "Tester-1", email: "t@example.com" }, dir);
-  assert.deepEqual(r, { username: "tester1.uat@00drt00000yw6bx.pipeline", created: true, persona: { role: null, permsets: ["Sales_Region_Access"] } });
-  assert.ok(calls.some((c) => /org create user .*profileName=Standard User permsets=Sales_Region_Access/.test(c)));
+  assert.deepEqual(r, { username: "tester1.uat@00drt00000yw6bx.pipeline", created: true, admin: false, persona: { role: null, permsets: ["Sales_Region_Access"] } });
+  assert.ok(calls.some((c) => /data create record -o uat -s User -v Username='tester1\.uat@.*ProfileId=00eSTD/.test(c)), "a User record (org create user fails with JWT on Hyperforce)");
+  assert.ok(calls.some((c) => c === "org assign permset --name Sales_Region_Access -o uat --on-behalf-of tester1.uat@00drt00000yw6bx.pipeline"));
+  assert.ok(calls.some((c) => /FROM Profile WHERE Name = 'Standard User'/.test(c)));
+  // an admin asks for their own login: System Administrator, no persona permission sets
+  calls.length = 0;
+  const a = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).tester("issue-166", { login: "alice", email: "a@example.com", admin: true }, dir);
+  assert.equal(a.username, "alice.admin@00drt00000yw6bx.pipeline");
+  assert.ok(calls.some((c) => /FROM Profile WHERE Name = 'System Administrator'/.test(c)));
+  assert.ok(!calls.some((c) => c.startsWith("org assign permset")));
+  // a full org: the UI-test personas' licences are freed, then it is tried again
+  calls.length = 0;
+  let full = true;
+  const sfFull = (args) => {
+    const c = args.join(" "); calls.push(c);
+    if (args[1] === "display") return { id: "00DRt00000YW6BXMA1" };
+    if (args[1] === "query") return { records: /FROM Profile/.test(c) ? [{ Id: "00eSTD" }] : /persona\./.test(c) ? [{ Id: "005P1" }] : [] };
+    if (args[1] === "create") { if (full) { full = false; throw new Error("LICENSE_LIMIT_EXCEEDED: License Limit Exceeded"); } return { id: "005Y" }; }
+    return {};
+  };
+  orgRegistry({ sf: sfFull, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).tester("uat", { login: "t2", email: "t@example.com" }, dir);
+  assert.ok(calls.includes("data update record -o uat -s User -i 005P1 -v IsActive=false"));
+  assert.equal(calls.filter((c) => c.startsWith("data create record")).length, 2);
   assert.ok(calls.some((c) => c.startsWith("apex run -o uat --file")), "Salesforce emails the password link");
   const wf = readFileSync(new URL("../../.github/workflows/uat-login.yml", import.meta.url), "utf8");
   assert.match(wf, /::add-mask::\$EMAIL/);
@@ -1971,7 +1993,7 @@ test("Org provisioning: ready() holds the commit once; creates from the snapshot
   ({ sf, calls } = provisionSf());
   const t = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).tester("uat", { login: "pm", email: "p@x.com", persona: { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] } });
   assert.deepEqual(t.persona, { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] });
-  assert.ok(calls.some((c) => /org create user .*permsets=Regional_Reporting_Access$/.test(c)));
+  assert.ok(calls.some((c) => /org assign permset --name Regional_Reporting_Access -o uat/.test(c)));
   assert.ok(calls.some((c) => /UserRoleId=00E1/.test(c)), "the tester gets the persona's role");
   // every workflow readies orgs one way; ui-test no longer deploys and prepares a second time
   for (const f of ["issue-start", "ai-implement", "ai-fix", "ui-test", "staging-deploy", "sprint-start", "uat-deploy"]) {
@@ -2146,4 +2168,195 @@ test("a story that has not started keeps its Start card when something refreshes
   const src = readFileSync(new URL("../src/card.mjs", import.meta.url), "utf8");
   assert.match(src, /not started \(no PR, no branch\): the card offers Plan and Start/);
   assert.match(newStoryCard({ key: "166", ai: { plan: true } }), /act:start/);
+});
+
+test("enterprise A: a CLI warning never hides the real error; a refused snapshot is not tried again; rebuilds at most daily; cards change at the start, not on every poll", async () => {
+  const { failureDetail } = await import("../src/io.mjs");
+  assert.equal(failureDetail('{"status":1,"name":"SnapshotNotActive","message":"The snapshot is not active"}', " ›   Warning: @salesforce/cli update available from 2.152 to 2.153"), "SnapshotNotActive: The snapshot is not active");
+  assert.equal(failureDetail("", " ›   Warning: @salesforce/cli update available\nERROR: boom"), "ERROR: boom");
+  const list = [{ SnapshotName: "LCB2610081953", Status: "Active", CreatedDate: "2026-10-08T19:53:51.000+0000" }, { SnapshotName: "LCB2610081922", Status: "Active", CreatedDate: "2026-10-08T19:22:19.000+0000" }];
+  const sf = (a) => (a[0] === "org" && a[2] === "snapshot" ? list : {});
+  const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" }, snapshotRefused: (n) => n === "LCB2610081953" });
+  assert.equal(r.currentSnapshot(), "LCB2610081922", "the refused one is skipped");
+  assert.equal(Math.round(r.snapshotAgeHours(Date.parse("2026-10-09T07:53:51Z"))), 12);
+  const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /polls\+\+ % 8/, "no card refresh on every few test polls");
+  assert.match(readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8"), /snapshot-refresh\.yml --ref main -f if-older-than=20/);
+});
+
+test("approver (enterprise B): the story's approver approves, never the person who pushed the latest change; APPROVERS unset keeps today's rule", () => {
+  const team = { approvers: ["alice", "carol"], storyApprover: "alice", lastPusher: "bob" };
+  assert.equal(gate.approvalProblem({ ...team, approvers: [] }, "bob"), null, "no policy: anyone with write access");
+  assert.equal(gate.approvalProblem(team, "alice"), null);
+  assert.match(gate.approvalProblem(team, "bob"), /@bob pushed the latest change, so @alice \(the approver\) needs to approve/);
+  assert.match(gate.approvalProblem(team, "carol"), /@alice is this story's approver/);
+  const selfPushed = { ...team, lastPusher: "alice" };   // the approver fixed it themselves: another approver steps in
+  assert.match(gate.approvalProblem(selfPushed, "alice"), /pushed the latest change/);
+  assert.equal(gate.approvalProblem(selfPushed, "carol"), null);
+  assert.match(gate.approvalProblem(selfPushed, "dave"), /@alice is this story's approver/);
+  const none = { ...team, storyApprover: null };   // a release, or a story with no Approver line
+  assert.equal(gate.approvalProblem(none, "Carol"), null, "logins compare case-insensitively");
+  assert.match(gate.approvalProblem(none, "dave"), /not an approver \(APPROVERS: @alice, @carol\)/);
+
+  assert.equal(gate.approverOf("### Access\n\nx\n\n### Approver\n\n@alice\n"), "alice");
+  assert.equal(gate.approverOf("### Approver\n\n_No response_"), null);
+  assert.deepEqual(gate.approverList("@alice, carol  dave"), ["alice", "carol", "dave"]);
+  assert.equal(gate.lastPusherOf([
+    { committedDate: "2026-10-09T01:00:00Z", authors: [{ login: "bob" }] },
+    { committedDate: "2026-10-09T03:00:00Z", authors: [{ login: "github-actions" }] },   // the pipeline
+    { committedDate: "2026-10-09T02:00:00Z", authors: [{ login: "dave" }, { login: "claude" }] },
+  ]), "dave");
+
+  // the gate: PR #23 was approved by matchmoments-admin; with a policy, only the named approver's approval counts
+  const f = withVerdicts(fixture(23));
+  assert.deepEqual(gate.evaluate({ ...f, approvers: ["matchmoments-admin"], storyApprover: null, lastPusher: "someone-else" }).reasons, []);
+  assert.match(gate.evaluate({ ...f, approvers: ["matchmoments-admin", "lead"], storyApprover: "lead", lastPusher: "x" }).reasons.join(), /approval does not count: @lead is this story's approver/);
+  assert.match(gate.evaluate({ ...f, approvers: ["matchmoments-admin"], lastPusher: "matchmoments-admin" }).reasons.join(), /pushed the latest change/);
+  // a ticked Sign off names its person (the trusted status says who); it is checked the same way
+  const signed = { ...f, reviews: [], statuses: [...f.statuses, { ...ok(f.pr.headRefOid, gate.STATUS.signoff), description: "Signed off by @alice" }] };
+  assert.deepEqual(gate.approval({ ...signed, head: f.pr.headRefOid, ...team }, { signOff: true }).by, ["alice"]);
+  assert.match(gate.approval({ ...signed, head: f.pr.headRefOid, ...team, lastPusher: "alice" }, { signOff: true }).refused[0].why, /pushed the latest change/);
+});
+
+test("approver (enterprise B): Sign off and /review-ok refuse an approval that would not count; the reason is kept in full; stories name the default approver; a big spec suggests slicing", () => {
+  const did = [];
+  const host = { repoUrl: "https://github.com/o/r", status: (...a) => did.push(a), dispatch: () => {} };
+  const story = { headRefName: "issue-106", headRefOid: "h1", baseRefName: "release/w45" };
+  const deps = { host, appGh: () => {}, gh: () => {}, inUat: () => false, mayApprove: (who) => (who === "bob" ? "@bob pushed the latest change, so @alice (the approver) needs to approve" : null) };
+  assert.match(actions.perform("ship", "", { number: 108, isPr: true, pr: story }, "bob", deps).said, /Not signed off: @bob pushed the latest change/);
+  assert.match(actions.perform("review-ok", "it is fine", { number: 108, isPr: true, pr: story }, "bob", deps).said, /The AI review stands/);
+  assert.equal(did.length, 0, "no status was written for a refused approval");
+  assert.match(actions.perform("ship", "", { number: 108, isPr: true, pr: story }, "alice", deps).done, /signed off by @alice/);
+  const long = "x".repeat(400);
+  assert.equal(actions.command(`/review-ok ${long}`).arg.length, 400, "the full reason, not 100 characters");
+
+  const body = specs.storyBody({ summary: "s", criteria: ["a"], access: "No change", where: "w", out: "o" }, { spec: 1, approver: "alice" });
+  assert.match(body, /### Approver\n\n@alice\n/);
+  assert.equal(gate.approverOf(body), "alice");
+  const seven = specs.specComment(`### Problem\nx\n### User stories\n${[1, 2, 3, 4, 5, 6, 7].map((n) => `${n}. As a rep, I want ${n}`).join("\n")}\n`);
+  assert.match(seven, /\*\*Big for one story:\*\* 7 user stories/);
+  assert.match(seven, /act:story/, "it can still be made one story");
+  assert.doesNotMatch(specs.specComment("### Problem\nx\n### User stories\n1. As a rep, I want y\n"), /Big for one story/);
+
+  const f = withVerdicts(fixture(23));
+  const card = storyCard({ key: "23", repoUrl: "https://github.com/o/r", branch: "issue-23", base: "release/w", pr: { ...f.pr, state: "OPEN" }, facts: { ...f, reviews: [], approvers: ["alice", "carol"], storyApprover: "alice", lastPusher: "bob" }, decision: { mergeable: false } });
+  assert.match(card, /@alice \(the approver\): \*\*\[Approve here\]/);
+});
+
+test("RunRelevantTests (enterprise C): CI lets Salesforce choose a story's Apex tests, falls back to our selection when it runs none; production never accepts a zero-test validation", () => {
+  const calls = [];
+  const report = { status: "Succeeded", done: true, numberTestsCompleted: 3, numberTestErrors: 1, details: { runTestResult: { numTestsRun: 3,
+    successes: [{ name: "CaseHandlerTest", methodName: "a" }, { name: "CaseHandlerTest", methodName: "b" }],
+    failures: { name: "RegionTest", methodName: "c", message: "boom" },
+    codeCoverage: [{ name: "CaseHandler", numLocations: 20, numLocationsNotCovered: 4 }] } } };
+  const io = (rep) => ({ sf: (a) => { calls.push(a.join(" ")); return a[2] === "validate" ? { id: "0AfR" } : rep; } });
+  const changed = ["force-app/main/default/classes/CaseHandler.cls", "force-app/main/default/lwc/regionCard/regionCard.js", "force-app/main/default/lwc/regionCard/regionCard.html", "README.md"];
+  const r = tests.runRelevant(io(report), { alias: "issue-7", changed, sleep: () => {} });
+  assert.match(calls[0], /deploy validate -o issue-7 --source-dir force-app\/main\/default\/classes\/CaseHandler\.cls --source-dir force-app\/main\/default\/lwc\/regionCard --test-level RunRelevantTests --async$/, "a bundle deploys as its folder; non-source files stay out");
+  assert.deepEqual(r.chosen, ["CaseHandlerTest", "RegionTest"]);
+  assert.equal(r.state.apex.ran, 3);
+  assert.equal(r.state.apex.failed, 1);
+  assert.equal(r.state.apex.failures[0].test, "RegionTest.c");
+  assert.equal(r.state.coverage.CaseHandler, 80);
+  const logs = [];
+  assert.equal(tests.runRelevant(io({ status: "Succeeded", done: true, details: { runTestResult: { numTestsRun: 0 } } }), { alias: "a", changed, sleep: () => {}, log: (l) => logs.push(l) }), null, "zero tests: not trusted");
+  assert.match(logs.join(), /ran no tests.*our own test selection/);
+  assert.equal(tests.runRelevant({ sf: () => { throw new Error("INVALID_TEST_LEVEL"); } }, { alias: "a", changed, sleep: () => {} }), null, "an org without the beta");
+  // the runner takes RunRelevantTests' results and runs no Apex of its own (flow tests still run)
+  const st = tests.runTests({ sf: (a) => { calls.push(a.join(" ")); return a[1] === "run" ? { testRunId: "f1" } : { summary: { outcome: "Passed" }, tests: [{ FullName: "F.t", Outcome: "Pass" }] }; } },
+    { alias: "a", plan: { mode: "relevant", apex: r.chosen, flows: ["F"] }, sleep: () => {}, apexDone: r.state });
+  assert.equal(st.apex.ran, 3);
+  assert.equal(st.flows.ran, 1);
+  assert.ok(!calls.some((c) => c.startsWith("apex run test")));
+
+  // production: a "Succeeded" RunRelevantTests validation that ran nothing is re-run with every test class
+  const prodCalls = [];
+  const reports = [{ status: "Succeeded", done: true, numberTestsTotal: 0, details: { runTestResult: { numTestsRun: 0 } } }, { status: "Succeeded", done: true, numberTestsTotal: 2 }];
+  const p = production.validate({ sf: (a) => { prodCalls.push(a.join(" ")); return a[2] === "validate" ? { id: "0AfP" } : reports.shift(); } }, { source: ["-d", "force-app"], allTests: ["A", "B"], sleep: () => {} });
+  assert.equal(p.level, "all");
+  assert.match(prodCalls.at(-2), /--test-level RunSpecifiedTests --tests A --tests B/);
+});
+
+test("delivery record (enterprise D): the shipped story's trail, read from GitHub, as one table and one JSON line; an overrule keeps its full reason", async () => {
+  const { gatherDelivery, deliveryRecord, apply, DELIVERY_MARK } = await import("../src/closeout.mjs");
+  const R = "repos/o/r";
+  const reason = "THIS_YEAR is valid SOQL and CI passed; the reviewer misread the date literal, which the Salesforce docs list as a valid filter for CreatedDate";
+  const data = {
+    "issue view 166": { title: "Story: Regional Sales dashboard", body: "### Approver\n\n@alice\n", createdAt: "2026-10-08T00:00:00Z" },
+    "pr list issue-166": [{ number: 180, headRefName: "issue-166", headRefOid: "h180", createdAt: "2026-10-08T06:00:00Z", mergedAt: "2026-10-09T00:00:00Z", commits: [{ committedDate: "2026-10-08T07:00:00Z", authors: [{ login: "bob" }] }] }],
+    [`${R}/commits/h180/statuses?per_page=100`]: [
+      { context: "pipeline/ai-review", state: "success", description: `AI review overruled by @alice: ${reason}`.slice(0, 139), created_at: "2026-10-08T08:00:00Z" },
+      { context: "pipeline/ui-test", state: "success", target_url: "https://github.com/o/r/issues/166#issuecomment-9", created_at: "2026-10-08T08:30:00Z" },
+      { context: "pipeline/sign-off", state: "success", description: "Signed off by @alice", created_at: "2026-10-08T12:00:00Z" }],
+    [`${R}/pulls/180/reviews?per_page=100`]: [],
+    [`${R}/issues/180/comments?per_page=100`]: [{ body: `✋ @alice accepted this change over the AI review on \`abc1234\`: ${reason}. A new push needs a review again.` }],
+    "pr list release/2026-w47": [{ number: 181, headRefOid: "r181", mergedAt: "2026-10-10T00:00:00Z" }],
+    [`${R}/commits/r181/statuses?per_page=100`]: [{ context: "pipeline/uat", state: "success", description: "Signed off in UAT by @carol", created_at: "2026-10-09T20:00:00Z" }],
+    [`${R}/commits/r181/check-runs?per_page=100`]: { check_runs: [{ name: "Production validation", conclusion: "success", output: { summary: "**Check-only deploy to production** `0AfAB000001xyz` with **RunRelevantTests**." } }] },
+  };
+  const gh = (a) => a[0] === "api" ? data[a[1]] : a[0] === "issue" ? data[`issue view ${a[2]}`] : data[`pr list ${(a.find((x) => /^head:|^release\//.test(x)) || "").replace("head:", "")}`];
+  const d = gatherDelivery("166", gh, { tag: "v2026.10.10-1", sprint: "2026-w47", now: new Date("2026-10-10T01:00:00Z"), repo: "o/r" });
+  assert.equal(d.approver, "alice");
+  assert.deepEqual(d.approved, { by: "alice", at: "2026-10-08T12:00:00Z", how: "ticked Sign off" });
+  assert.equal(d.lastPusher, "bob");
+  assert.equal(d.review.overruledBy, "alice");
+  assert.equal(d.review.reason, reason, "the full reason, not the 139-character status");
+  assert.equal(d.uat, "carol");
+  assert.equal(d.validation, "0AfAB000001xyz");
+  const md = deliveryRecord(d);
+  assert.match(md, /\| Approved by \| @alice \(ticked Sign off, 2026-10-08 12:00 UTC\) \|/);
+  assert.match(md, /\| AI review \| overruled by @alice: THIS_YEAR is valid SOQL.*CreatedDate \|/);
+  assert.match(md, /\| lead time \(story opened → in production\) \| 48 \|/);
+  const json = JSON.parse(md.match(/<!-- delivery: (.*) -->/)[1]);
+  assert.equal(json.hours["PR opened → approved"], 6);
+  // apply writes it once per shipped story, through the tracker's marked comment (re-running updates it)
+  const cards = [];
+  const tracker = { story: async () => ({ state: "OPEN" }), done: async () => {}, carry: async () => {}, closeSprint: async () => {}, card: async (k, body, mark) => cards.push([k, mark, body]) };
+  await apply({ sprint: "2026-w47", ship: ["166"], carry: [], hotfix: [], deleteOrgs: [], deleteBranch: null }, { tag: "v1", tracker, orgs: { remove: () => {} }, git: () => "", gh, log: () => {} });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0][1], DELIVERY_MARK);
+});
+
+test("admins' path (enterprise D): a login to the story's org from the story itself, as the persona or as an admin; Setup changes come back as a commit; people's changes only", () => {
+  const did = [];
+  const deps = { host: { dispatch: (...a) => did.push(a) }, appGh: () => {}, gh: () => {}, inUat: () => false };
+  actions.perform("org-login-admin", "", { number: 166, isPr: false }, "alice", deps);
+  actions.perform("org-login", "", { number: 180, isPr: true, pr: { headRefName: "issue-166" } }, "bob", deps);
+  actions.perform("retrieve", "", { number: 166, isPr: false }, "alice", deps);
+  assert.deepEqual(did, [
+    ["uat-login.yml", { pr: 166, who: "alice", target: "issue-166", admin: "true" }],
+    ["uat-login.yml", { pr: 180, who: "bob", target: "issue-166", admin: "false" }],
+    ["story-retrieve.yml", { story: "166", who: "alice" }]]);
+  assert.equal(actions.command("/admin-login").id, "org-login-admin");
+  assert.equal(actions.command("/retrieve").id, "retrieve");
+  // the started story's card offers them before there is a PR
+  const card = storyCard({ key: "166", repoUrl: "https://github.com/o/r", branch: "issue-166", base: "release/w", ai: { plan: true } });
+  assert.match(card, /act:org-login-admin/);
+  assert.match(card, /act:retrieve/);
+
+  // what people changed: not the org's own admin user (the pipeline's deploys), not profiles, not exclusions
+  const calls = [];
+  const sf = (a) => {
+    const c = a.join(" "); calls.push(c);
+    if (a[1] === "display") return { username: "test-abc@example.com", id: "00D1" };
+    if (/FROM User/.test(c)) return { records: [{ Id: "005ADMIN" }] };
+    if (/ChangedBy/.test(c)) return null;   // an older API: LastModifiedById instead
+    if (/FROM SourceMember/.test(c)) return { records: [
+      { MemberType: "CustomField", MemberName: "Account.Tier__c", LastModifiedById: "005ALICE" },
+      { MemberType: "CustomField", MemberName: "Account.Tier__c", LastModifiedById: "005ALICE" },
+      { MemberType: "Profile", MemberName: "Admin", LastModifiedById: "005ALICE" },
+      { MemberType: "ApexClass", MemberName: "RegionService", LastModifiedById: "005ADMIN" },
+      { MemberType: "Layout", MemberName: "Account-Old", IsNameObsolete: true, LastModifiedById: "005ALICE" },
+      { MemberType: "PermissionSet", MemberName: "Lifecycle_CI", LastModifiedById: "005ALICE" },
+      { MemberType: "FlexiPage", MemberName: "Account_Record_Page", LastModifiedById: "005ALICE" }] };
+    return {};
+  };
+  const r = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } });
+  const ch = r.setupChanges("issue-166", { exclude: ["PermissionSet:Lifecycle_CI"] });
+  assert.deepEqual(ch, [{ type: "CustomField", name: "Account.Tier__c" }, { type: "FlexiPage", name: "Account_Record_Page" }]);
+  r.retrieveChanges("issue-166", ch);
+  assert.ok(calls.includes("project retrieve start -o issue-166 -m CustomField:Account.Tier__c -m FlexiPage:Account_Record_Page --ignore-conflicts"));
+  const wf = readFileSync(new URL("../../.github/workflows/story-retrieve.yml", import.meta.url), "utf8");
+  assert.match(wf, /Co-authored-by: \$WHO/, "the person is the change's author: someone else approves it");
+  assert.match(wf, /path: \.pipeline/, "main's pipeline code, never the branch's");
 });
