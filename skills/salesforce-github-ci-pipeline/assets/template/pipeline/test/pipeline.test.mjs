@@ -2413,3 +2413,10 @@ test("RunRelevantTests never skips a changed test class (live, story #166: Sales
   const src = readFileSync(new URL("../src/tests.mjs", import.meta.url), "utf8");
   assert.match(src, /changedTests = relevant \? plan\.apex\.filter/);
 });
+
+test("UI tests log in as a persona after the Dev Hub is logged out (story #166: `sf org display` failed there)", () => {
+  const wf = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
+  assert.equal((wf.match(/SCRATCH_ORG_ID=.*SCRATCH_INSTANCE_URL=/g) || []).length, 2, "both jobs export the org's id and URL");
+  assert.ok(wf.indexOf("SCRATCH_INSTANCE_URL") < wf.indexOf("sf org logout -o devhub"), "before production access is dropped");
+  assert.match(readFileSync(new URL("../../e2e/support/login.ts", import.meta.url), "utf8"), /process\.env\.SCRATCH_ORG_ID && process\.env\.SCRATCH_INSTANCE_URL/);
+});

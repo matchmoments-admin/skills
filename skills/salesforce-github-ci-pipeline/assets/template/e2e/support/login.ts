@@ -106,7 +106,11 @@ export async function loginAs(
 ): Promise<{ username: string }> {
   const alias = process.env.SCRATCH_ALIAS;
   if (!alias) throw new Error("loginAs needs SCRATCH_ALIAS");
-  const org = sfJson(["org", "display", "-o", alias]);
+  // CI passes the org's id and URL: the Dev Hub is logged out before spec code runs, and `sf org display` needs it
+  const org =
+    process.env.SCRATCH_ORG_ID && process.env.SCRATCH_INSTANCE_URL
+      ? { id: process.env.SCRATCH_ORG_ID, instanceUrl: process.env.SCRATCH_INSTANCE_URL }
+      : sfJson(["org", "display", "-o", alias]);
   const orgId = String(org.id).slice(0, 15).toLowerCase();
   const sets = (persona.permsets || [])
     .filter((p) => /^[A-Za-z][A-Za-z0-9_]*$/.test(p))
