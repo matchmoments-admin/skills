@@ -2,7 +2,9 @@
 
 Review the pull request diff against the linked issue's acceptance criteria and `CLAUDE.md`.
 Before calling a Salesforce detail wrong (a report interval, a metadata value, a test annotation), check
-`docs/agents/salesforce.md` "Facts agents got wrong"; a confident false blocker costs a fix round. Check what CI's
+`docs/agents/salesforce.md` "Facts agents got wrong"; a confident false blocker costs a fix round. The Playwright spec
+(`e2e/story-<key>.spec.ts`) is written by the UI test step **after** this review, so its absence here is never a
+finding. Comments on the story and its spec since they were written win over the spec text (the story file lists them). Check what CI's
 **Salesforce tests** check run says failed: a failing test is always at least a major.
 
 ## Severity

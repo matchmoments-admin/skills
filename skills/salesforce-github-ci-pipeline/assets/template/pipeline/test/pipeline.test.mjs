@@ -1823,3 +1823,9 @@ test("review round 3: a spec revision keeps the spec and its story link; screens
     }
   }
 });
+
+test("the review rubric: the UI test spec comes after the review; answers win over the spec text", () => {
+  const r = readFileSync(new URL("../../REVIEW.md", import.meta.url), "utf8");
+  assert.match(r, /written by the UI test step \*\*after\*\* this review, so its absence here is never a\nfinding/);
+  assert.match(r, /win over the spec text/);
+});
