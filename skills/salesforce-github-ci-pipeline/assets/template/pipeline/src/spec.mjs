@@ -1,55 +1,72 @@
-// Specs and story breakdowns, on GitHub (see GLOSSARY.md: Spec, Story breakdown). The to-spec and to-tickets skills,
-// adapted to run in the pipeline: Claude writes a Spec (one comment on the spec issue, edited in place) and then a
-// breakdown into stories (JSON it writes to a file); a person approves the breakdown by ticking a box, and an
-// agent-free step creates the Story issues in the pipeline's story format, linked to the spec, blockers first.
-// Pure, except createStories(), which acts through the gh seam.
+// Specs (see GLOSSARY.md: Spec, Make it a story). The to-spec skill, adapted to run in the pipeline: Claude writes a Spec
+// (one comment on the spec issue, edited in place); a person answers its questions (/spec revises it), then ticks
+// "Make it a story": an agent-free step makes ONE Story issue from the spec, in the pipeline's story format, linked to
+// the spec. Every agent working on that story reads the spec too (pipe tracker story). Split a spec into several stories
+// by hand only when one slice cannot pass the production validation alone (docs/agents/salesforce.md, "Stories").
+// Pure, except makeStory(), which acts through the gh seam.
 import { checklist } from "./actions.mjs";
 import { planContext } from "./plan.mjs";
 
 export const SPEC_MARK = "<!-- pipeline:spec -->";
 export const SPEC_TITLE = "Spec";
-export const BREAKDOWN_MARK = "<!-- pipeline:breakdown -->";
-export const BREAKDOWN_TITLE = "Story breakdown";
-const PAYLOAD = /<!-- stories:([A-Za-z0-9+/=]+) -->/;
-const CREATED = /<!-- created:([0-9,]+) -->/;
+const MADE = /<!-- story:(\d+) -->/;
 
-/** The spec comment: Claude's spec, then what to do next (the box splits it into stories). */
+/** How many open questions the spec still has. Pure. */
+export const openQuestions = (text) => (String(text).match(/### Open questions\s*\n([\s\S]*?)(\n###\s|$)/i)?.[1] || "").split("\n").filter((l) => /^\s*\d+[.)]\s+\S/.test(l)).length;
+
+/** The spec comment: Claude's spec, then what to do next. With open questions, making the story is an explicit choice. */
 export function specComment(text) {
-  const questions = (String(text).match(/### Open questions\s*\n([\s\S]*?)(\n###\s|$)/i)?.[1] || "").split("\n").filter((l) => /^\s*\d+[.)]\s+\S/.test(l)).length;
+  const questions = openQuestions(text);
   return [SPEC_MARK, `### ${SPEC_TITLE}`, "", String(text).trim(), "",
-    questions ? `**Next:** answer the ${questions === 1 ? "question" : `${questions} questions`} in a comment, then comment **/spec** to revise it; or split it as it is.` : "**Next:** check it; if it is right, split it into stories (or reply with changes and comment **/spec**).",
-    "", ...checklist(["tickets"])].join("\n");
+    questions ? `**Next:** answer the ${questions === 1 ? "question" : `${questions} questions`} in a comment, then comment **/spec** to revise it. Or make the story now: the spec's assumed answers then stand.` : "**Next:** check it; if it is right, make it a story (or reply with changes and comment **/spec**).",
+    "", ...checklist([questions ? "story-anyway" : "story"])].join("\n");
 }
 
-/** Check the breakdown Claude wrote: [{ title, summary, criteria[], access, where, out, blockedBy[] (indexes) }]. */
-export function parseTickets(json) {
-  const list = typeof json === "string" ? JSON.parse(json) : json;
-  if (!Array.isArray(list) || !list.length) throw new Error("the breakdown has no stories");
-  if (list.length > 15) throw new Error(`${list.length} stories is too many for one spec: split the spec`);
-  return list.map((t, i) => {
-    for (const k of ["title", "summary", "where"]) if (!String(t[k] || "").trim()) throw new Error(`story ${i + 1} has no ${k}`);
-    if (!Array.isArray(t.criteria) || !t.criteria.length) throw new Error(`story ${i + 1} has no acceptance criteria`);
-    const blockedBy = (t.blockedBy || []).map(Number);
-    if (blockedBy.some((b) => !(b >= 0 && b < i))) throw new Error(`story ${i + 1} is blocked by a story that does not come before it`);
-    return { title: String(t.title).replace(/^Story:\s*/i, "").trim(), summary: String(t.summary).trim(), criteria: t.criteria.map((c) => String(c).replace(/^[-*]\s*/, "").trim()),
-      access: String(t.access || "No change").trim(), where: String(t.where).trim(), out: String(t.out || "Anything not listed above.").trim(), blockedBy };
-  });
+/** The spec's sections by heading ("### Problem" -> "Problem"). Pure. */
+export function sections(text) {
+  const out = {};
+  const parts = String(text).split(/^###\s+(.+)$/m);
+  for (let i = 1; i < parts.length; i += 2) out[parts[i].trim()] = parts[i + 1].trim();
+  return out;
 }
 
-/** The breakdown for a person to approve: a table, the stories as data (hidden), and the box that creates them. */
-export function breakdownComment(tickets) {
-  const payload = Buffer.from(JSON.stringify(tickets)).toString("base64");
-  return [BREAKDOWN_MARK, `<!-- stories:${payload} -->`, `### ${BREAKDOWN_TITLE} (${tickets.length} ${tickets.length === 1 ? "story" : "stories"})`, "",
-    "| # | Story | Acceptance criteria | Blocked by |", "|---|---|---|---|",
-    ...tickets.map((t, i) => `| ${i + 1} | **${t.title}**: ${t.summary.replace(/\|/g, "\\|").replace(/\n/g, " ")} | ${t.criteria.map((c) => c.replace(/\|/g, "\\|")).join("<br>")} | ${t.blockedBy.map((b) => b + 1).join(", ") || "none"} |`),
-    "", "Each story is a slice that deploys and passes the production validation on its own. Reply with changes and comment **/tickets** to redo it.",
-    "", ...checklist(["create-stories"])].join("\n");
+/**
+ * The one story a spec becomes, in the story format (storyBody). spec: the spec issue number; text: the spec comment;
+ * title: the spec issue's title. Criteria are the spec's user stories; the rest of the spec reaches every agent anyway
+ * (pipe tracker story adds it), so nothing is lost by keeping the story short. Pure.
+ */
+export function storyFromSpec({ spec, text, title }) {
+  const s = sections(String(text).replace(SPEC_MARK, "").replace(/\n\*\*Next:\*\*[\s\S]*$/, ""));
+  const firstPara = (t) => String(t || "").split(/\n\s*\n/)[0].replace(/\s*\n\s*/g, " ").trim();
+  const bullets = (t) => String(t || "").split("\n").map((l) => l.match(/^\s*(?:\d+[.)]|[-*])\s+(.*\S)/)?.[1]).filter(Boolean);
+  const criteria = bullets(s["User stories"]);
+  if (!criteria.length) throw new Error(`spec #${spec} has no user stories to make acceptance criteria from: revise it with /spec`);
+  const access = bullets(s.Decisions).filter((l) => /permission set|sharing|share|org-wide|OWD|access|profile/i.test(l));
+  return {
+    title: String(title).replace(/^Spec:\s*/i, "").trim(),
+    summary: firstPara(s.Problem) || `See spec #${spec}.`,
+    criteria,
+    access: access.length ? access.map((l) => `- ${l}`).join("\n") : `As decided in spec #${spec}.`,
+    where: firstPara(s.Solution) || `As described in spec #${spec}.`,
+    out: bullets(s["Out of scope"]).map((l) => `- ${l}`).join("\n") || "Anything not in the spec.",
+  };
 }
 
-/** The stories inside a breakdown comment, and whether they were already created. */
-export function readBreakdown(body) {
-  const m = String(body || "").match(PAYLOAD);
-  return { tickets: m ? JSON.parse(Buffer.from(m[1], "base64").toString("utf8")) : null, created: (String(body || "").match(CREATED)?.[1] || "").split(",").filter(Boolean) };
+/**
+ * Make the spec's story, once: a second tick (or /tickets) finds the marker and links the story already made.
+ * gh: the gh seam (as the App, so the story's card appears). Returns { number, body (the spec comment, marked), already }.
+ */
+export function makeStory({ gh, repo, spec, title, body }) {
+  const made = String(body || "").match(MADE)?.[1];
+  if (made) return { number: Number(made), body, already: true };
+  const t = storyFromSpec({ spec, text: body, title });
+  const url = String(gh(["issue", "create", "--title", `Story: ${t.title}`, "--label", "feature", "--body", storyBody(t, { spec })]) || "");
+  const n = Number(url.match(/\/issues\/(\d+)/)?.[1]);
+  if (!n) throw new Error(`the story was not created (gh said: ${url.slice(0, 120)})`);
+  const id = gh(["api", `repos/${repo}/issues/${n}`, "--jq", ".id"], { allowFail: true });   // a sub-issue of the spec, best effort
+  if (id) gh(["api", "-X", "POST", `repos/${repo}/issues/${spec}/sub_issues`, "-F", `sub_issue_id=${id}`], { allowFail: true });
+  const done = String(body).replace(/\n\*\*Do it from here:\*\*[\s\S]*$/, "") + `\n<!-- story:${n} -->\n**Story:** #${n}. Its card offers **Plan** and **Start**; everyone working on it reads this spec too.`;
+  return { number: n, body: done, already: false };
 }
 
 /** A story's issue body, in the format the pipeline reads (docs/agents/issue-tracker.md). */
@@ -59,41 +76,13 @@ export function storyBody(t, { spec, blockers = [] }) {
     "", `Part of spec #${spec}.`].join("\n");
 }
 
-/**
- * Create the stories of an approved breakdown, blockers first, once (a second tick creates nothing). gh: the gh seam
- * (as the App, so each story's card appears). Returns the new issue numbers and the comment, marked as created.
- */
-export function createStories({ gh, repo, spec, body, log = () => {} }) {
-  const { tickets, created } = readBreakdown(body);
-  if (!tickets) throw new Error("no breakdown in this comment");
-  if (created.length) return { numbers: created.map(Number), body, already: true };
-  const numbers = [];
-  for (const [i, t] of tickets.entries()) {
-    const blockers = t.blockedBy.map((b) => numbers[b]);
-    const url = gh(["issue", "create", "--title", `Story: ${t.title}`, "--label", "feature", "--body", storyBody(t, { spec, blockers })]);
-    const n = Number(String(url).match(/\/issues\/(\d+)/)?.[1]);
-    numbers.push(n);
-    log(`created #${n} ${t.title}`);
-    // GitHub's own links, best effort: a sub-issue of the spec, and "blocked by" its blockers
-    const id = gh(["api", `repos/${repo}/issues/${n}`, "--jq", ".id"], { allowFail: true });
-    if (id) gh(["api", "-X", "POST", `repos/${repo}/issues/${spec}/sub_issues`, "-F", `sub_issue_id=${id}`], { allowFail: true });
-    for (const b of blockers) {
-      const bid = gh(["api", `repos/${repo}/issues/${b}`, "--jq", ".id"], { allowFail: true });
-      if (bid) gh(["api", "-X", "POST", `repos/${repo}/issues/${n}/dependencies/blocked_by`, "-F", `issue_id=${bid}`], { allowFail: true });
-    }
-  }
-  const done = body.replace(/\n\*\*Do it from here:\*\*[\s\S]*$/, "") + `\n<!-- created:${numbers.join(",")} -->\n**Created:** ${numbers.map((n) => `#${n}`).join(", ")}. Each story's card offers Plan and Start.`;
-  return { numbers, body: done, already: false };
-}
-
-/** What Claude is doing, in the spec or breakdown comment itself (replaced when its output lands). */
+/** What Claude is doing, in the spec comment itself (replaced when its output lands). */
 export function pendingComment(mark, title, { state, what, url }) {
   return [mark, `### ${title}`, "", `${state === "failed" ? "❌ **Failed:**" : "⏳ **Now:**"} ${what}${url ? ` · **[${state === "failed" ? "see what went wrong" : "watch it live"}](${url})**` : ""}`].join("\n");
 }
 
-/** The file Claude reads to write (or revise) a spec, or to split it: the issue, the latest spec and the answers since,
- *  and for a breakdown the latest breakdown and the comments on it. */
-export async function specFile(tracker, key, { forTickets = false } = {}) {
+/** The file Claude reads to write (or revise) a spec: the issue, the latest spec and the answers since. */
+export async function specFile(tracker, key) {
   const issue = await tracker.story(key);
   const comments = await tracker.comments(key).catch(() => []);
   const spec = planContext(comments, { mark: SPEC_MARK, title: SPEC_TITLE });
@@ -102,9 +91,5 @@ export async function specFile(tracker, key, { forTickets = false } = {}) {
   if (spec.plan) parts.push("---", "", "## The current spec", "", spec.plan, "");
   if (spec.answers.length) parts.push("## Comments since the spec (they win over it)", "", ...spec.answers.map((a) => `- **${a.author}:** ${a.body.replace(/\n+/g, " ")}`), "");
   else if (!spec.plan && people.length) parts.push("## Discussion", "", ...people, "");
-  if (forTickets) {
-    const b = planContext(comments, { mark: BREAKDOWN_MARK, title: BREAKDOWN_TITLE });
-    if (b.plan) parts.push("## The previous breakdown (redo it with the comments below)", "", b.plan.replace(PAYLOAD, ""), "", ...b.answers.map((a) => `- **${a.author}:** ${a.body.replace(/\n+/g, " ")}`), "");
-  }
   return parts.join("\n");
 }

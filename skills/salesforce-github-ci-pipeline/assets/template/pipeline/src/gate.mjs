@@ -222,10 +222,7 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
   const rolledBack = ["release", "hotfix", "maintenance"].includes(r) ? (gh(["issue", "list", "--state", "open", "--search", 'in:title "Production rolled back to"', "--json", "number"], { allowFail: true }) || [])[0]?.number || null : null;
   const key = storyOf(pr.headRefName);
   const body = key && /^\d+$/.test(key) ? gh(["issue", "view", key, "--json", "body"], { allowFail: true })?.body || "" : "";
-  const blockers = [...new Set([...String(body).matchAll(/Blocked by ((?:#\d+(?:,\s*)?)+)/gi)].flatMap((m) => [...m[1].matchAll(/#(\d+)/g)].map((x) => x[1])))].map((n) => {
-    const i = gh(["issue", "view", n, "--json", "state,labels"], { allowFail: true });
-    return { number: Number(n), landed: !i || i.state === "CLOSED" || (i.labels || []).some((l) => l.name === "in-sprint") };
-  });
+  const blockers = blockersOf(body).map((n) => ({ number: n, landed: landedOf(n, gh) }));
   return { pr, reviews, checkRuns, labelEvents, comments, statuses, diffsToHead, compare, ai, uat, rolledBack, blockers };
 }
 
@@ -242,4 +239,24 @@ export function nudge(prNumber, { gh, ghPages }) {
   const signedOff = ghPages(`repos/${repo}/commits/${pr.headRefOid}/statuses?per_page=100`)
     .some((s) => s.context === STATUS.signoff && s.state === "success" && TRUSTED_STATUS_CREATORS.includes(s.creator?.login));
   return signedOff ? { action: "dispatch" } : { action: "none", why: "not signed off yet" };
+}
+
+/** The stories a story's body says block it ("Blocked by #12, #14"). Pure. */
+export const blockersOf = (body) => [...new Set([...String(body || "").matchAll(/Blocked by ((?:#\d+(?:\s*(?:,|and|&)\s*(?:and\s*)?)?)+)/gi)].flatMap((m) => [...m[1].matchAll(/#(\d+)/g)].map((x) => Number(x[1]))))];
+
+/**
+ * Has a blocking story landed? Its story PR merged (into the sprint, or main for a hotfix), or the story is closed.
+ * Started is not landed: the in-sprint label only says someone is working on it. Unknown (no access) counts as landed,
+ * so a typo never blocks forever.
+ */
+export function landedOf(n, gh) {
+  const i = gh(["issue", "view", String(n), "--json", "state"], { allowFail: true });
+  if (!i || i.state === "CLOSED") return true;
+  return (gh(["pr", "list", "--head", `issue-${n}`, "--state", "merged", "--limit", "1", "--json", "number"], { allowFail: true }) || []).length > 0;
+}
+
+/** What a story blocked at Start says (the issue comment). Pure. */
+export function blockedMessage(waiting) {
+  const one = waiting.length === 1;
+  return `⏸ Not started: this story is blocked by ${waiting.map((n) => `#${n}`).join(", ")}, which ${one ? "has" : "have"} not merged yet. Nothing was created (no branch, no scratch org). Tick **Start** again once ${one ? "it has" : "they have"} merged.`;
 }

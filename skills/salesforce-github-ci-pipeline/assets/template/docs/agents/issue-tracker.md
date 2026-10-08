@@ -8,8 +8,8 @@ are not a request surface: work starts from an issue.
 
 | Kind | Made by | Title | Label | What happens next |
 | --- | --- | --- | --- | --- |
-| **Spec** (an epic: the why and the whole shape) | the **New spec** form, then Claude (`/spec`, the to-spec skill adapted) | `Spec: <name>` | `spec` | `/tickets` proposes its stories; a ticked box creates them; the spec itself is never built or closed by the pipeline |
-| **Story** (one deliverable slice) | a ticked breakdown, the **New story** form, or a person | `Story: <name>` | `feature` | its card offers Plan / Start; the pipeline builds, tests, signs off and ships it, and closes it when it is in production |
+| **Spec** (an epic: the why and the whole shape) | the **New spec** form, then Claude (`/spec`, the to-spec skill adapted) | `Spec: <name>` | `spec` | **Make it a story** (`/story`) makes its one story (agents on it read the whole spec); the spec itself is never built or closed by the pipeline |
+| **Story** (one deliverable slice) | **Make it a story** on a spec, the **New story** form, or a person | `Story: <name>` | `feature` | its card offers Plan / Start; the pipeline builds, tests, signs off and ships it, and closes it when it is in production |
 
 ## The story body (the pipeline reads these headings; keep them exactly)
 

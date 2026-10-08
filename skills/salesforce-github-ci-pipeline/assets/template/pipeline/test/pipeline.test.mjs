@@ -1463,39 +1463,66 @@ test("every workflow that refreshes a card can read checks (the card is built fr
 });
 
 // ---------------------------------------------------------------- specs and story breakdowns (to-spec, to-tickets on GitHub)
-test("spec: the comment offers the split; a breakdown is validated, approved by a tick and created once, blockers first", () => {
-  const spec = specs.specComment("### Problem\nx\n### Open questions\n1. Which regions?\n");
-  assert.match(spec, /answer the question in a comment/);
-  assert.match(spec, /act:tickets/);
-  const raw = [{ title: "Story: Region field", summary: "Sales wants it", criteria: ["- A picklist exists"], where: "Account page", blockedBy: [] },
-    { title: "Region report", summary: "Managers report on it", criteria: ["A report groups by region"], where: "Reports", blockedBy: [0] }];
-  const t = specs.parseTickets(JSON.stringify(raw));
-  assert.deepEqual([t[0].title, t[0].criteria[0], t[0].access, t[1].blockedBy], ["Region field", "A picklist exists", "No change", [0]]);
-  assert.throws(() => specs.parseTickets([{ ...raw[0], blockedBy: [1] }, raw[1]]), /does not come before it/);
-  assert.throws(() => specs.parseTickets([{ ...raw[0], criteria: [] }]), /no acceptance criteria/);
-  const body = specs.breakdownComment(t);
-  assert.match(body, /\| 2 \| \*\*Region report\*\*/);
-  assert.match(body, /act:create-stories/);
-  assert.deepEqual(specs.readBreakdown(body).tickets[1].title, "Region report");
+test("spec: open questions make the story an explicit choice; one story from the spec (the real #125), made once", () => {
+  const withQ = specs.specComment("### Problem\nx\n### Open questions\n1. Which regions?\n");
+  assert.match(withQ, /answer the question in a comment/);
+  assert.match(withQ, /act:story-anyway/);
+  assert.doesNotMatch(withQ, /act:story -->/);
+  const clean = specs.specComment("### Problem\nx\n### User stories\n1. As a rep, I want y\n");
+  assert.match(clean, /act:story -->/);
+
+  const text = readFileSync(new URL("./fixtures/spec-125.md", import.meta.url), "utf8");
+  const t = specs.storyFromSpec({ spec: 125, text, title: "Spec: Regional reporting for sales managers" });
+  assert.equal(t.title, "Regional reporting for sales managers");
+  assert.equal(t.criteria.length, 11);
+  assert.match(t.criteria[0], /^As a sales manager, I want a report of accounts grouped by sales region/);
+  assert.match(t.summary, /^Sales managers cannot see/);
+  assert.match(t.access, /Regional_Reporting_Access/);
+  assert.match(t.out, /^- Restricting a manager to only their own territory/);
+  const body = specs.storyBody(t, { spec: 125 });
+  assert.equal(plans.criteria(body).length, 11, "the story reads like any story");
+  assert.match(body, /Part of spec #125\.$/);
+  assert.throws(() => specs.storyFromSpec({ spec: 9, text: "### Problem\nx", title: "Spec: y" }), /no user stories/);
+
   const calls = [];
-  let n = 200;
-  const gh = (a) => { calls.push(a.slice(0, 2).join(" ")); if (a[0] === "issue" && a[1] === "create") { calls.push(a[a.indexOf("--body") + 1]); return `https://github.com/o/r/issues/${++n}`; } return null; };
-  const r = specs.createStories({ gh, repo: "o/r", spec: 150, body });
-  assert.deepEqual(r.numbers, [201, 202]);
-  assert.ok(calls.some((c) => /### Acceptance criteria\n\n- A report groups by region[\s\S]*Blocked by #201\.[\s\S]*Part of spec #150/.test(c)));
-  assert.match(r.body, /\*\*Created:\*\* #201, #202/);
-  assert.doesNotMatch(r.body, /act:create-stories/, "the box is gone once created");
-  assert.equal(specs.createStories({ gh: () => { throw new Error("must not create twice"); }, repo: "o/r", spec: 150, body: r.body }).already, true);
-  assert.deepEqual(plans.criteria(specs.storyBody(t[0], { spec: 150 })), ["A picklist exists"], "a created story reads like a story");
+  const gh = (a) => { calls.push(a); if (a[0] === "issue" && a[1] === "create") return "https://github.com/o/r/issues/142"; if (a[0] === "api" && a.includes("--jq")) return 9001; return null; };
+  const r = specs.makeStory({ gh, repo: "o/r", spec: 125, title: "Spec: Regional reporting for sales managers", body: specs.specComment(text) });
+  assert.equal(r.number, 142);
+  assert.ok(calls.some((a) => a.join(" ").includes("issues/125/sub_issues")), "linked as a sub-issue of the spec");
+  assert.match(r.body, /<!-- story:142 -->\n\*\*Story:\*\* #142/);
+  assert.doesNotMatch(r.body, /act:story/, "the box is gone once made");
+  assert.deepEqual(specs.makeStory({ gh: () => { throw new Error("must not create twice"); }, repo: "o/r", spec: 125, title: "x", body: r.body }), { number: 142, body: r.body, already: true });
+  assert.throws(() => specs.makeStory({ gh: () => "rate limited", repo: "o/r", spec: 125, title: "x", body: specs.specComment(text) }), /was not created/);
+});
+
+test("a story made from a spec carries the whole spec to every agent; blockers mean merged, and are checked at Start", () => {
+  const sc = plans.planContext([{ author: "app/pipeline", body: `${specs.SPEC_MARK}\n### Spec\n\n### Decisions\n- No new fields`, created: "1" }, { author: "pm", body: "3. calendar year", created: "2" }], { mark: specs.SPEC_MARK, title: specs.SPEC_TITLE });
+  const md = plans.specSection("125", sc);
+  assert.match(md, /## The spec \(#125\): this story builds all of it/);
+  assert.match(md, /- No new fields/);
+  assert.match(md, /- \*\*pm:\*\* 3\. calendar year/);
+  const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  assert.match(src, /Part of spec #\(\\d\+\)/, "pipe tracker story adds the spec");
+
+  assert.deepEqual(gate.blockersOf("Blocked by #12, #14 and #3.\nBlocked by #12"), [12, 14, 3]);
+  const gh = (state, merged) => (a) => (a[0] === "issue" ? { state } : a[0] === "pr" ? (merged ? [{ number: 1 }] : []) : null);
+  assert.equal(gate.landedOf(12, gh("OPEN", false)), false, "started (in-sprint) is not landed");
+  assert.equal(gate.landedOf(12, gh("OPEN", true)), true, "its story PR merged");
+  assert.equal(gate.landedOf(12, gh("CLOSED", false)), true);
+  assert.match(gate.blockedMessage([12]), /blocked by #12, which has not merged yet\. Nothing was created/);
+  const wf = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
+  assert.match(wf, /start:\n\s+needs: blockers\n\s+if: needs\.blockers\.outputs\.ok == 'true'/);
 });
 
 test("spec wiring: the agents' prompts, the spec issue form and the boxes", () => {
   assert.match(verdict.instructions("spec"), /### One-way doors/);
-  assert.match(verdict.instructions("tickets"), /JSON array, blockers first/);
-  assert.equal(verdict.modelFor("tickets", ""), "claude-sonnet-5-5");
+  assert.throws(() => verdict.modelFor("tickets", ""), /Unknown AI role/, "no AI split any more");
   assert.match(newStoryCard({ key: "150", ai: { plan: true }, spec: true }), /act:spec/);
-  assert.deepEqual(actions.command("/tickets"), { id: "tickets", arg: "" });
-  assert.match(readFileSync(new URL("../../.github/workflows/ai-spec.yml", import.meta.url), "utf8"), /spec breakdown "\$KEY"/);
+  assert.deepEqual(actions.command("/tickets"), { id: "story", arg: "" }, "the old command makes the story");
+  assert.deepEqual(actions.command("/story"), { id: "story", arg: "" });
+  const wf = readFileSync(new URL("../../.github/workflows/ai-spec.yml", import.meta.url), "utf8");
+  assert.doesNotMatch(wf, /tickets|breakdown/);
+  assert.match(wf, /User stories" become the story's acceptance criteria/);
 });
 
 test("labels follow conventions.mjs on main; specs read the open sprint like /plan", () => {
@@ -1552,8 +1579,8 @@ test("completion fixes: a ticked sign-off re-runs the gate later; UAT failure of
   const st = { sha: "h", context: gate.STATUS.uat, state: "failure", description: "totals wrong", created_at: "2026-10-06T10:00:00Z", creator: { login: "github-actions[bot]" } };
   const failedUat = releaseCard({ repoUrl: "https://github.com/o/r", pr, uat: true, facts: { checkRuns: [], statuses: [st], reviews: [] } });
   assert.match(failedUat, /act:uat-pass[\s\S]*act:uat\b/);
-  assert.match(newStoryCard({ key: "125", spec: true, stage: "breakdown" }), /tick \*\*Create these stories\*\*/);
-  assert.match(newStoryCard({ key: "125", spec: true, stage: "created", stories: [130, 131] }), /Done: the stories are created \(#130, #131\)/);
+  assert.match(newStoryCard({ key: "125", spec: true, stage: "spec" }), /tick \*\*Make it a story\*\*/);
+  assert.match(newStoryCard({ key: "125", spec: true, stage: "story", stories: [142] }), /Done: the spec is story #142/);
   assert.equal(names.nextSprint(["2026-w45", "2026-w44"]), "2026-w46");
   assert.equal(names.nextSprint(["2026-w52"]), "2027-w01");
   assert.match(names.nextSprint([]), /^\d{4}-w\d{2}$/);

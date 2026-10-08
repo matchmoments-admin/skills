@@ -8,7 +8,7 @@ body:
       value: |
         Write it the way a user would check it. A **Pipeline status** card appears on the story at once: tick
         **Plan it with Claude** (bigger stories: Claude proposes the build and asks its questions) or **Start** (small
-        stories: the branch and a scratch org). Bigger pieces of work: write a spec with `/to-spec`, then `/to-tickets`.
+        stories: the branch and a scratch org). Bigger pieces of work: open a **New spec** instead, then tick **Make it a story** on it.
   - type: textarea
     id: summary
     attributes:

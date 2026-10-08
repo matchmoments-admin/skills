@@ -267,10 +267,17 @@ Every entry happened in a real run. Search this file for the error text you see.
 ## Skills on GitHub
 
 - **Local skills do not help a team that works from GitHub.** → The useful ones run in the pipeline, adapted: to-spec and
-  to-tickets as `/spec` and `/tickets` (Claude writes; a person approves the breakdown with a tick; an agent-free step
-  creates the issues), pr / code-review / diagnosing-bugs / tdd inside the build, review and fix prompts.
-- **Never let the agent create issues itself**: it writes a JSON breakdown; `parseTickets` validates it (criteria,
-  blockers point backwards, at most 15) and only a person's tick creates them, once.
+  to-tickets as `/spec` then **Make it a story** (agent-free, one story), pr / code-review / diagnosing-bugs / tdd inside
+  the build, review and fix prompts.
+- **An AI split of every spec into stories did not pay.** → On spec #125 (reporting metadata only) the split made four
+  stories: four orgs of six a day, four CI runs, four reviews, and a blocker chain so almost nothing ran in parallel on a
+  3-org Dev Hub. Worse, the stories never saw the spec (decisions, out of scope, open questions were lost), questions
+  were "answered" by assumption inside the stories, and a failed creation re-ticked made duplicates. → One story per
+  spec, made agent-free and idempotently (`<!-- story:N -->`); the story's agents read the whole spec; with open
+  questions the box says **Make it a story anyway**. Split by hand only for expand-contract work.
+- **"Blocked by" counted a blocker as landed once it was started** (the `in-sprint` label). → Landed means its story
+  PR merged (or the story is closed): `gate.landedOf`. Checked at merge (gate) and at Start (`issue-start` `blockers`
+  job: nothing is created, the card offers Start again).
 
 ## Ticks on pull requests did nothing ("@null cannot act here")
 
@@ -295,7 +302,7 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Rollback left stories "Done" and did not stop the next release.** → It reopens the stories it took out; the gate
   refuses routes into main while a "Production rolled back" issue is open.
 - **"Blocked by" was decoration.** → The gate holds a story until its blockers are merged into the sprint or shipped.
-- **The spec issue's card never moved on.** → It follows the spec: written, breakdown proposed, stories created.
+- **The spec issue's card never moved on.** → It follows the spec: written, then made into a story (linked).
 
 ## UAT access
 

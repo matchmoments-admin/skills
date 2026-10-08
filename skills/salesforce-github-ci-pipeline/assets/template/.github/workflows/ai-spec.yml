@@ -1,14 +1,11 @@
 name: ai-spec
 # FLAG: repository variable AI_PLAN=true (the same switch as /plan: planning, before any build). BUTTONS on a spec issue
-# (bigger work; the "New spec" form): tick "Write the spec with Claude" (or comment /spec), then "Split it into
-# stories" (/tickets). The to-spec and to-tickets skills, adapted to Salesforce and to running here
-# (docs/agents/salesforce.md):
-#   spec     Claude writes the Spec (problem, solution, user stories, decisions, testing, one-way doors, questions) as
-#            one comment, edited in place; /spec again revises it with the comments since.
-#   tickets  Claude splits it into vertical-slice stories (JSON); an agent-free step posts the breakdown with a box. A
-#            person ticks "Create these stories" and card-actions creates the Story issues (pipe act create-stories).
+# (bigger work; the "New spec" form): tick "Write the spec with Claude" (or comment /spec). The to-spec skill, adapted
+# to Salesforce and to running here (docs/agents/salesforce.md): Claude writes the Spec (problem, solution, user
+# stories, decisions, testing, one-way doors, questions) as one comment, edited in place; /spec again revises it with
+# the comments since. A person then ticks "Make it a story" on it: agent-free, in card-actions (pipe act).
 # No scratch org, no push: Claude reads the issue and the repo and writes one file.
-run-name: "${{ format('ai-spec #{0} ({1})', github.event.issue.number, github.event.label.name) }}"
+run-name: "${{ format('ai-spec #{0}', github.event.issue.number) }}"
 on:
   issues:
     types: [labeled]
@@ -22,7 +19,7 @@ env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   off:
-    if: (github.event.label.name == 'ai:spec' || github.event.label.name == 'ai:tickets') && vars.AI_PLAN != 'true'
+    if: github.event.label.name == 'ai:spec' && vars.AI_PLAN != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
@@ -30,20 +27,19 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - run: |
-          gh issue comment "${{ github.event.issue.number }}" --body "AI planning is off (repository variable \`AI_PLAN\`). Write the spec and the stories yourself, or turn it on in Settings > Secrets and variables > Actions > Variables."
+          gh issue comment "${{ github.event.issue.number }}" --body "AI planning is off (repository variable \`AI_PLAN\`). Write the spec yourself, or turn it on in Settings > Secrets and variables > Actions > Variables."
           gh issue edit "${{ github.event.issue.number }}" --remove-label "${{ github.event.label.name }}" || true
   write:
-    if: (github.event.label.name == 'ai:spec' || github.event.label.name == 'ai:tickets') && vars.AI_PLAN == 'true'
+    if: github.event.label.name == 'ai:spec' && vars.AI_PLAN == 'true'
     runs-on: ubuntu-latest
     concurrency:
       group: spec-${{ github.event.issue.number }}
-      cancel-in-progress: true   # a newer /spec or /tickets replaces an older one
+      cancel-in-progress: true   # a newer /spec replaces an older one
     timeout-minutes: 25
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       KEY: ${{ github.event.issue.number }}
-      ROLE: ${{ github.event.label.name == 'ai:spec' && 'spec' || 'tickets' }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, fetch-depth: 0 }
@@ -51,7 +47,7 @@ jobs:
         uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
-      - name: The code the stories will be built on (the open sprint, else main), as /plan reads it
+      - name: The code the story will be built on (the open sprint, else main), as /plan reads it
         run: |
           REL=$(node .pipeline/pipeline/bin/pipe.mjs context | sed -n 's/^RELEASE_BRANCH=//p')
           if [ -n "$REL" ] && git fetch -q origin "$REL"; then git checkout -q "origin/$REL"; echo "reading $REL"; else echo "no open sprint: reading main"; fi
@@ -61,12 +57,12 @@ jobs:
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Show that Claude is on it, with a link
-        run: node .pipeline/pipeline/bin/pipe.mjs spec pending "$KEY" --for "$ROLE" --now "${{ github.event.label.name == 'ai:spec' && 'Claude is writing the spec (3 to 6 minutes)' || 'Claude is splitting the spec into stories (3 to 6 minutes)' }}"
+        run: node .pipeline/pipeline/bin/pipe.mjs spec pending "$KEY" --now "Claude is writing the spec (3 to 6 minutes)"
       - name: The issue, the spec so far, the comments, and the context pack
-        run: node .pipeline/pipeline/bin/pipe.mjs spec context "$KEY" --for "$ROLE" --out "$RUNNER_TEMP/spec-input.md"
+        run: node .pipeline/pipeline/bin/pipe.mjs spec context "$KEY" --out "$RUNNER_TEMP/spec-input.md"
       - uses: ./.pipeline/.github/actions/claude-agent
         with:
-          role: ${{ env.ROLE }}
+          role: spec
           key: ${{ env.KEY }}
           model: ${{ vars.AI_MODEL }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -75,20 +71,15 @@ jobs:
           max-turns: "30"
           allowed-tools: "Read,Glob,Grep,Write"
           prompt: |
-            ${{ github.event.label.name == 'ai:spec' && 'Write the spec for issue' || 'Split the spec on issue' }} #${{ env.KEY }}. Everything known so far is in ${{ runner.temp }}/spec-input.md (read it with the Read tool); it ends with "The codebase today" (what exists for the objects it names, and production's org-wide defaults). Look further in force-app/ with Glob, Grep and Read; follow CLAUDE.md and docs/agents/salesforce.md.
-            ${{ github.event.label.name == 'ai:spec' && format('Write the spec to {0}/spec.md with the Write tool. Do not write any other file.', runner.temp) || format('Write the stories as JSON to {0}/tickets.json with the Write tool. Do not write any other file.', runner.temp) }}
+            Write the spec for issue #${{ env.KEY }}. Everything known so far is in ${{ runner.temp }}/spec-input.md (read it with the Read tool); it ends with "The codebase today" (what exists for the objects it names, and production's org-wide defaults). Look further in force-app/ with Glob, Grep and Read; follow CLAUDE.md and docs/agents/salesforce.md.
+            Its "User stories" become the story's acceptance criteria word for word, so write each one testable on its own. Write the spec to ${{ runner.temp }}/spec.md with the Write tool. Do not write any other file.
       - name: Post it (agent-free)
         run: |
-          if [ "$ROLE" = spec ]; then
-            [ -s "$RUNNER_TEMP/spec.md" ] || { echo "::error::no spec written"; exit 1; }
-            node .pipeline/pipeline/bin/pipe.mjs spec post "$KEY" --file "$RUNNER_TEMP/spec.md"
-          else
-            [ -s "$RUNNER_TEMP/tickets.json" ] || { echo "::error::no stories written"; exit 1; }
-            node .pipeline/pipeline/bin/pipe.mjs spec breakdown "$KEY" --file "$RUNNER_TEMP/tickets.json"
-          fi
+          [ -s "$RUNNER_TEMP/spec.md" ] || { echo "::error::no spec written"; exit 1; }
+          node .pipeline/pipeline/bin/pipe.mjs spec post "$KEY" --file "$RUNNER_TEMP/spec.md"
       - name: A failed run says so (never left saying "writing")
         if: failure()
-        run: node .pipeline/pipeline/bin/pipe.mjs spec pending "$KEY" --for "$ROLE" --failed --now "Claude could not ${{ github.event.label.name == 'ai:spec' && 'write the spec' || 'split the spec' }}; tick the box again or comment /${{ github.event.label.name == 'ai:spec' && 'spec' || 'tickets' }}"
+        run: node .pipeline/pipeline/bin/pipe.mjs spec pending "$KEY" --failed --now "Claude could not write the spec; tick the box again or comment /spec"
       - name: Remove the button label
         if: always()
         run: gh issue edit "$KEY" --remove-label "${{ github.event.label.name }}" || true

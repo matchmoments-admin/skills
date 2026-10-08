@@ -93,16 +93,15 @@ function storyActions(rows, { ai, base, ci }) {
   return allowed([...new Set(ids)], ai);
 }
 
-/** The card on a story before /start (or a spec issue: where the spec stands; stage: new | spec | breakdown | created). */
+/** The card on a story before /start (or a spec issue: where the spec stands; stage: new | spec | story). */
 export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [] }) {
   if (spec) {
+    const story = stories[0];
     const rows = [[stage === "new" ? "waiting" : "done", "Spec", stage === "new" ? "not written yet" : "written: the **Spec** comment below"],
-      [["breakdown", "created"].includes(stage) ? "done" : "waiting", "Story breakdown", ["breakdown", "created"].includes(stage) ? "proposed: the **Story breakdown** comment below" : "after the spec"],
-      [stage === "created" ? "done" : "waiting", "Stories", stage === "created" ? stories.map((n) => `#${n}`).join(", ") : "created when you approve the breakdown"]];
-    const next = { new: ai.plan ? "Tick **Write the spec with Claude**; answer its questions, then split it into stories." : "Write the spec in a comment, then open a story for each slice.",
-      spec: "Read the **Spec** below: answer its questions (then /spec revises it), or tick **Split it into stories** on it.",
-      breakdown: "Check the **Story breakdown** below; tick **Create these stories** on it (or reply with changes and /tickets).",
-      created: `Done: the stories are created (${stories.map((n) => `#${n}`).join(", ")}); each one's card offers Plan and Start.` }[stage];
+      [stage === "story" ? "done" : "waiting", "Story", stage === "story" ? `#${story}: its card offers **Plan** and **Start**` : "made from the spec with one tick, when it is right"]];
+    const next = { new: ai.plan ? "Tick **Write the spec with Claude** below; then answer its questions." : "Write the spec in a comment (problem, solution, user stories, decisions), then open a story for it.",
+      spec: "Read the **Spec** below: answer its questions in a comment (then /spec revises it), or tick **Make it a story** on it.",
+      story: `Done: the spec is story #${story}. Work on it there (Plan, Start, Build).` }[stage];
     return render(key, next, rows, null, stage === "new" ? allowed(["spec"], ai) : []);
   }
   return render(key, ai.plan ? "Bigger story? Tick **Plan it with Claude** first. Small story? Tick **Start**." : "Tick **Start** when you are ready to work on it.",

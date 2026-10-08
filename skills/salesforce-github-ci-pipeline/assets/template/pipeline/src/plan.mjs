@@ -36,6 +36,13 @@ export function storyFile(story, { plan, answers }) {
   return parts.join("\n") + "\n";
 }
 
+/** The parent spec, for a story made from one (planContext() of the spec comment): everything the story builds. */
+export function specSection(key, { plan, answers }) {
+  if (!plan) return "";
+  return ["", "---", "", `## The spec (#${key}): this story builds all of it; its decisions and out of scope bind`, "", plan,
+    ...(answers.length ? ["", "## Answers since the spec (these win where they differ; an open question without an answer keeps the spec's assumption)", "", ...answers.map((a) => `- **${a.author}:** ${a.body.replace(/\n+/g, " ")}`)] : [])].join("\n") + "\n";
+}
+
 /** The acceptance criteria: the bullet lines under "### Acceptance criteria". */
 export function criteria(body) {
   const m = String(body || "").match(/###\s*Acceptance criteria\s*\n([\s\S]*?)(\n###\s|\s*$)/i);

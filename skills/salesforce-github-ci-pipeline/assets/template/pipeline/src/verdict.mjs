@@ -28,7 +28,6 @@ export const MODELS = {
   fix: "claude-sonnet-5-5",
   plan: "claude-sonnet-5-5",
   spec: "claude-sonnet-5-5",
-  tickets: "claude-sonnet-5-5",
   review: "claude-haiku-4-5-20251001",
   "ui-test": "claude-haiku-4-5-20251001",
 };
@@ -59,8 +58,6 @@ export function instructions(role, { key = "N" } = {}) {
       return `${common}\nDo not change any file except the plan file named in the prompt. Do not commit, push or comment. Write the plan in markdown with these sections, in order: \`### Proposed build\` (objects and fields, Flows, Apex, permission sets, layouts and pages; say what you would reuse), \`### Access\` (who must see and change what: the permission set to add or extend, each touched object's org-wide default from the story file and whether the change relies on it, and whether each Flow or class runs as the user or the system, and why), \`### Tests\` (Apex, Flow and UI tests, by acceptance criterion, including the permission test: a user without the access is refused), \`### Risks\`, \`### Open questions\` (numbered; only what you cannot decide from the story and the repo; none if there are none). End with one line: \`PLAN-SIZE: S\`, \`PLAN-SIZE: M\` or \`PLAN-SIZE: L\`.`;
     case "spec":
       return `${common}\nDo not change any file except the spec file named in the prompt. Do not commit, push or comment. Read docs/agents/salesforce.md ("Specs") and docs/org/GLOSSARY.md first and use the org's words. Write markdown with these sections, in order: \`### Problem\` (the user's side), \`### Solution\` (the user's side), \`### User stories\` (numbered: "As a <Salesforce persona>, I want ..., so that ..."; cover every case), \`### Decisions\` (per object touched: new fields, the automation (record-triggered Flow before/after save, or a trigger handler), the permission set, the page or layout, and the Access decision; no file paths), \`### Testing\` (the seams from docs/agents/salesforce.md and the prior art in the repo), \`### One-way doors\` (field deletes or retypes, org-wide default changes, production data changes; "none" if none), \`### Out of scope\`, \`### Open questions\` (numbered; only what the issue and the repo cannot answer).`;
-    case "tickets":
-      return `${common}\nDo not change any file except the JSON file named in the prompt. Do not commit, push or comment. Read docs/agents/salesforce.md ("Stories") first. Split the spec into vertical slices: each story deploys on its own with its field, permission set entry, automation, page or layout and tests, and passes the production validation alone; prefactoring first; expand-contract for a rename. Write a JSON array, blockers first: [{"title": "...", "summary": "who wants what and why", "criteria": ["one testable outcome per line"], "access": "who may see or change it", "where": "where a person sees it work", "out": "out of scope", "blockedBy": [indexes of earlier stories]}]. At most 15 stories.`;
     case "ui-test":
       return `${common}\nCommit the spec as \`${COMMIT.uiTest(key)}\` and push. Never print or commit login URLs.`;
     default:

@@ -10,8 +10,8 @@ import { storyOf, nextSprint, sprintOfMilestoneTitle } from "./conventions.mjs";
 
 export const ACTIONS = {
   spec: { label: "📝 Write the spec with Claude: the problem, the solution, user stories, decisions, open questions", on: "issue", adds: ["ai:spec"], flag: "plan" },
-  tickets: { label: "🧩 Split it into stories with Claude (you approve the breakdown before anything is created)", on: "issue", adds: ["ai:tickets"], flag: "plan" },
-  "create-stories": { label: "✅ Create these stories", on: "issue" },
+  story: { label: "📌 Make it a story (one story with this spec's user stories as its criteria; no AI)", on: "issue" },
+  "story-anyway": { label: "📌 Make it a story anyway (the spec's assumed answers stand)", on: "issue" },
   plan: { label: "🧭 Plan it with Claude: it proposes the build and asks its questions", on: "issue", adds: ["ai:plan"], flag: "plan" },
   start: { label: "▶️ Start: create the branch and a production-shaped scratch org", on: "issue", adds: ["start"] },
   build: { label: "🤖 Build it with Claude", on: "issue", adds: ["ai:implement"], flag: "implement" },
@@ -33,7 +33,7 @@ export const ACTIONS = {
   uat: { label: "🔁 Deploy this commit to UAT again", on: "pr" },
 };
 // the comment commands, and the action each one is
-const COMMANDS = { "/spec": "spec", "/tickets": "tickets", "/plan": "plan", "/start": "start", "/build": "build", "/hotfix": "hotfix", "/review": "review", "/fix": "fix",
+const COMMANDS = { "/spec": "spec", "/story": "story", "/tickets": "story", "/plan": "plan", "/start": "start", "/build": "build", "/hotfix": "hotfix", "/review": "review", "/fix": "fix",
   "/test": "test", "/ui-test": "ai-test", "/ship": "ship", "/uat-pass": "uat-pass", "/uat-fail": "uat-fail", "/gate": "gate", "/ci": "ci",
   "/staging": "staging", "/uat": "uat", "/fix-story": "fix-story", "/login": "org-login", "/sprint-start": "sprint", "/release-cut": "release-cut", "/help": "help" };
 
@@ -124,7 +124,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
 export function help(isPr) {
   return isPr
     ? "**On a pull request:** `/review` AI review · `/fix` AI fixes the findings · `/test` runs the UI test (`/ui-test`: Claude writes it) · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/gate` checks again · `/ci` re-runs CI · on a release PR `/uat-pass`, `/uat-fail <why>`, `/uat`, `/staging`. Or tick the boxes on the card."
-    : "**On a story:** `/plan` Claude proposes the build and asks its questions · `/start` creates its branch and scratch org · `/build` has Claude build it · `/hotfix` starts it as an urgent production fix. **On a spec (bigger work):** `/spec` Claude writes the spec · `/tickets` splits it into stories for you to approve. Or tick the boxes on the card.";
+    : "**On a story:** `/plan` Claude proposes the build and asks its questions · `/start` creates its branch and scratch org · `/build` has Claude build it · `/hotfix` starts it as an urgent production fix. **On a spec (bigger work):** `/spec` Claude writes (or revises) the spec · `/story` makes it a story. Or tick the boxes on the card.";
 }
 
 /**
@@ -132,7 +132,7 @@ export function help(isPr) {
  * ticked between two versions of the card), do it, say anything that needs saying, and refresh the card (clearing the
  * box). deps: { io, host, cards, log, appToken }. Returns a one-line summary.
  */
-export async function act({ number, isPr, who, whoType, command: text = null, before = null, after = null, commentId = null }, { io, host, cards, log = () => {}, appToken, createStories = null }) {
+export async function act({ number, isPr, who, whoType, command: text = null, before = null, after = null, commentId = null }, { io, host, cards, log = () => {}, appToken, makeStory = null, specMark = "<!-- pipeline:spec -->" }) {
   const permission = host.api("GET", `repos/${host.repo}/collaborators/${who}/permission`)?.permission;
   if (!mayAct({ login: who, type: whoType, permission })) return `@${who} cannot act here (${permission || "no access"})`;
   const requested = text !== null ? [command(text)].filter(Boolean) : ticked(before, after).map((id) => ({ id, arg: "" }));
@@ -144,11 +144,19 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
     .some((s) => s.context === STATUS.uat && s.creator?.login === "github-actions[bot]" && String(s.description || "").startsWith("In UAT"));
   for (const { id, arg } of requested) {
     if (id === "help") { io.gh(["issue", "comment", String(number), "--body", help(isPr)]); continue; }
-    if (id === "create-stories") {   // agent-free: the approved breakdown (this comment) becomes Story issues
-      const r = createStories({ gh: appGh, repo: host.repo, spec: number, body: after, log });
-      io.gh(["api", "-X", "PATCH", `repos/${host.repo}/issues/comments/${commentId}`, "-f", `body=${r.body}`]);
-      host.record("stage", { story: String(number), what: r.already ? "stories already created" : `created stories ${r.numbers.map((n) => `#${n}`).join(" ")} by @${who}`, state: "running" });
-      await cards.newStory(String(number), { spec: true, stage: "created", stories: r.numbers });
+    if (id === "story" || id === "story-anyway") {   // agent-free: the spec becomes one Story issue (once)
+      if (isPr) { io.gh(["issue", "comment", String(number), "--body", "`/story` works on a spec (the issue)."]); continue; }
+      // the spec comment: the one ticked, or (for /story) the latest one on the issue
+      const spec = after && after.includes(specMark) ? { id: commentId, body: after }
+        : [...(io.ghPages(`repos/${host.repo}/issues/${number}/comments?per_page=100`) || [])].reverse().find((c) => String(c.body || "").includes(specMark));
+      if (!spec) { io.gh(["issue", "comment", String(number), "--body", "There is no spec on this issue yet: tick **Write the spec with Claude** (or comment `/spec`) first."]); continue; }
+      const title = io.gh(["issue", "view", String(number), "--json", "title"])?.title || "";
+      let r;
+      try { r = makeStory({ gh: appGh, repo: host.repo, spec: number, title, body: spec.body }); }
+      catch (e) { io.gh(["issue", "comment", String(number), "--body", `The story was not made: ${e.message}`]); continue; }
+      io.gh(["api", "-X", "PATCH", `repos/${host.repo}/issues/comments/${spec.id}`, "-f", `body=${r.body}`]);
+      host.record("stage", { story: String(number), what: r.already ? `story #${r.number} already made` : `made story #${r.number} by @${who}`, state: "running" });
+      await cards.newStory(String(number), { spec: true, stage: "story", stories: [r.number] });
       continue;
     }
     const r = perform(id, arg, { number, isPr, pr, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat });
@@ -157,9 +165,10 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
   }
   // the card again (the box cleared, the action's workflow takes over the Now line); a spec's comments are not cards
   const onCard = (after || "").includes("<!-- pipeline:story-card -->") || text !== null;
-  if (onCard && !requested.every((r) => ["spec", "tickets", "create-stories"].includes(r.id))) {
+  const specActions = ["spec", "story", "story-anyway"];
+  if (onCard && !requested.every((r) => specActions.includes(r.id))) {
     if (isPr) await cards.refreshPr(number); else await cards.refresh(String(number)).catch(() => {});
-  } else if (commentId && after && !requested.some((r) => r.id === "create-stories")) {
+  } else if (commentId && after && !requested.some((r) => r.id.startsWith("story"))) {
     io.gh(["api", "-X", "PATCH", `repos/${host.repo}/issues/comments/${commentId}`, "-f", `body=${after.replace(/^- \[[xX]\]/gm, "- [ ]")}`]);   // untick: the workflow said what it does
   }
   return requested.map((r) => r.id).join(", ");

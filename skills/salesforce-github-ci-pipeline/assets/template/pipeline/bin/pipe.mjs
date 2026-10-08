@@ -27,9 +27,8 @@
 //   act       --number N [--is-pr] --by LOGIN [--by-type T] (--command "/x ..." | --before F --after F)   a person's
 //             action from a comment command or a ticked card box (pipeline/src/actions.mjs)
 //   pr        card <n> | --sha S [--now "what" [--failed]] [--tag T]   the release card, or the story card of a story PR
-//   story     new <key>                                  the card of a story not started yet (boxes: plan, start)
-//   spec      context <n> --out F [--for tickets] · pending <n> --now W [--for tickets] [--failed] · post <n> --file F
-//             breakdown <n> --file F                    bigger work: the spec, and its stories for approval
+//   story     new <key>                                  the card of a story not started yet (boxes: plan, start) · blockers <key> (merged?)
+//   spec      context <n> --out F · pending <n> --now W [--failed] · post <n> --file F   bigger work (then "Make it a story")
 //   evidence  publish --key K --pr N --sha S --dir D [--org-url U] · squash   UI evidence screenshots (UI_EVIDENCE)
 import { appendFileSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -275,6 +274,8 @@ const commands = {
     const s = await tracker.story(arg(0));
     const ctx = plans.planContext(await tracker.comments(arg(0)).catch(() => []));
     let md = plans.storyFile(s, ctx);
+    const spec = String(s.body || "").match(/Part of spec #(\d+)/)?.[1];   // made from a spec: all of it reaches every agent
+    if (spec) md += plans.specSection(spec, plans.planContext(await tracker.comments(spec).catch(() => []), { mark: specs.SPEC_MARK, title: specs.SPEC_TITLE }));
     if (has("pack")) md += "\n" + pack.packForCheckout(io, { text: `${s.title}\n${s.body}\n${ctx.plan || ""}`, base: flag("base"), log });
     if (flag("out")) writeFileSync(flag("out"), md);
     output({ planned: Boolean(ctx.plan), title: s.title, state: s.state, url: s.url });
@@ -294,10 +295,19 @@ const commands = {
   },
   "story base": async () => say(names.baseFor({ labels: (await tracker.story(arg(0))).labels, openReleaseBranch: host.openRelease() })),   // as /start: hotfix -> main, else the sprint
   // ---- specs (bigger work): Claude writes the spec, splits it, a person approves the breakdown (pipeline/src/spec.mjs)
-  "spec context": async () => { writeFileSync(flag("out"), await specs.specFile(tracker, arg(0), { forTickets: flag("for") === "tickets" }) + "\n" + pack.packForCheckout(io, { text: (await tracker.story(arg(0))).body, log })); return say(`wrote ${flag("out")}`); },
-  "spec pending": async () => { const t = flag("for") === "tickets"; await tracker.card(arg(0), specs.pendingComment(t ? specs.BREAKDOWN_MARK : specs.SPEC_MARK, t ? specs.BREAKDOWN_TITLE : specs.SPEC_TITLE, { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl }), t ? specs.BREAKDOWN_MARK : specs.SPEC_MARK); return say("pending"); },
+  "spec context": async () => { writeFileSync(flag("out"), await specs.specFile(tracker, arg(0)) + "\n" + pack.packForCheckout(io, { text: (await tracker.story(arg(0))).body, log })); return say(`wrote ${flag("out")}`); },
+  "spec pending": async () => { await tracker.card(arg(0), specs.pendingComment(specs.SPEC_MARK, specs.SPEC_TITLE, { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl }), specs.SPEC_MARK); return say("pending"); },
   "spec post": async () => { await tracker.card(arg(0), specs.specComment(readFileSync(flag("file"), "utf8")), specs.SPEC_MARK); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true }); await cards.newStory(arg(0), { spec: true, stage: "spec" }); return say(`spec on #${arg(0)}`); },
-  "spec breakdown": async () => { const t = specs.parseTickets(readFileSync(flag("file"), "utf8")); await tracker.card(arg(0), specs.breakdownComment(t), specs.BREAKDOWN_MARK); await cards.newStory(arg(0), { spec: true, stage: "breakdown" }); return say(`${t.length} stories proposed on #${arg(0)}`); },
+  "story blockers": async () => {
+    // before a story's branch and org exist: have the stories blocking it merged? If not, nothing is created
+    const waiting = gate.blockersOf((await tracker.story(arg(0))).body).filter((n) => !gate.landedOf(n, io.gh));
+    output({ ok: !waiting.length, waiting: waiting.join(" ") });
+    if (!waiting.length) return say("no unmerged blockers");
+    io.gh(["issue", "edit", arg(0), "--remove-label", "start"], { allowFail: true });
+    io.gh(["issue", "comment", arg(0), "--body", gate.blockedMessage(waiting)]);
+    await cards.newStory(arg(0));   // the card offers Start again
+    return say(`blocked by ${waiting.join(", ")}`);
+  },
   "story new": async () => { await cards.newStory(arg(0), { spec: has("spec") }); return say(`card for new ${has("spec") ? "spec" : "story"} ${arg(0)}`); },
   "pr card": async () => {
     // the card of a pull request (release card or its story's); --sha: of the PR a commit was merged by
@@ -309,7 +319,7 @@ const commands = {
     // a person's action from a comment command (--command) or a ticked card box (--before/--after the edit)
     const said = await actions.act({ number: flag("number"), isPr: has("is-pr"), who: flag("by"), whoType: flag("by-type"),
       command: flag("command"), before: flag("before") && readFileSync(flag("before"), "utf8"), after: flag("after") && readFileSync(flag("after"), "utf8"), commentId: flag("comment") },
-      { io, host, cards, log, appToken: process.env.APP_TOKEN, createStories: specs.createStories });
+      { io, host, cards, log, appToken: process.env.APP_TOKEN, makeStory: specs.makeStory, specMark: specs.SPEC_MARK });
     return say(said);
   },
   "story plan-pending": async () => {

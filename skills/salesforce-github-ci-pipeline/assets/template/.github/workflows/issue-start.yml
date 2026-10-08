@@ -16,8 +16,28 @@ permissions:
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
-  start:
+  blockers:
+    # A story "Blocked by #N" starts only once #N has merged: otherwise nothing is created (no branch, no scratch org,
+    # none of the Dev Hub's daily org allowance), the story says why, and its card offers Start again.
     if: github.event_name == 'repository_dispatch' || github.event.label.name == 'start'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KEY: ${{ github.event.client_payload.key || github.event.issue.number }}
+    outputs:
+      ok: ${{ steps.b.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - id: b
+        run: |
+          [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
+          node pipeline/bin/pipe.mjs story blockers "$KEY"
+  start:
+    needs: blockers
+    if: needs.blockers.outputs.ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 70   # 45 of them may be waiting for the org's lane
     env:

@@ -34,7 +34,9 @@ Publish a **Spec** issue (`docs/agents/issue-tracker.md`). In its template:
 
 ## Stories (`to-tickets`)
 
-Each story is a **vertical slice that deploys on its own and passes the production validation**: the field, its
+**One story per spec by default** ("Make it a story" on the spec; every agent on the story reads the whole spec). Split
+only when one slice cannot pass the production validation alone, by hand, with `Blocked by #N` (the pipeline will not
+start, or merge, a story before #N has merged). When you do split, each story is a **vertical slice that deploys on its own and passes the production validation**: the field, its
 permission set entry, the automation, the layout or page, and its tests together. Never a "fields first, tests later"
 slice: production rejects a deploy whose tests do not cover it. Write each in the story body format
 (`docs/agents/issue-tracker.md`), label `feature`, link blockers natively. Expand-contract for a field rename or retype:
