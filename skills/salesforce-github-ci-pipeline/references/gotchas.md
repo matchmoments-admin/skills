@@ -5,6 +5,8 @@ Every entry happened in a real run. Search this file for the error text you see.
 ## Salesforce and scratch orgs
 
 - **`sfdxAuthUrl` is null; later jobs cannot reach orgs earlier jobs created** → a Dev Hub logged in by JWT has no refresh token, so there is no auth URL to save. → Later jobs log in to the scratch org by JWT with the *same* connected app and key. The registry is the Dev Hub's own `ScratchOrgInfo` (matched on Description), never a saved login.
+- **"Bring my Setup changes" finds hundreds of changes nobody made** → in an org made from a snapshot (and in any new org) `SourceMember` holds rows by system users and the snapshot's build, and `ChangedBy` is a **15-character** id (an 18-character comparison never matches). → Count only rows changed by the logins the pipeline gave people (`*.pipeline` users, not `persona.*`), comparing 15-character ids; skip `LightningComponentResource`/`AuraDefinition` (the CLI registry cannot retrieve them; their bundles are listed too).
+- **A step "succeeds" after its command failed** → `cmd | tee file` returns tee's status: Actions' bash has `-e` but not `pipefail`. → `set -o pipefail` in any step that pipes a command whose failure matters.
 - **`field 'Description' can not be filtered in a query call`** → it is long text. → Query `ScratchOrgInfo` by `Status`, filter Description in code.
 - **`LIMIT_EXCEEDED` … daily scratch org signup limit** → Developer Edition Dev Hub: 3 active, 6 created per day. The daily count resets at **00:00 UTC**, not rolling. Deleting an org frees an *active* slot only. A refused signup costs nothing; a failed creation after signup does. → Story orgs are deleted at merge; org-creating jobs share one lane.
 - **Deploy from CI: "There are changes in the org that conflict"** → a fresh runner has no source-tracking history for an org it did not create. → Every scratch deploy uses `--ignore-conflicts` (git is the source of truth).
@@ -96,6 +98,8 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **PR code can forge a verdict** if it runs on the same runner as the step that posts the status (it can edit `.pipeline/`). → Run specs in their own read-only job; post statuses from a fresh runner, from the step `outcome`.
 - **`no JSON in command output`** after `gh issue comment` → it prints a URL. → `io.gh` returns text when the output is not JSON.
 - **Stale `origin/release/*` refs locally** → fetch without `--prune`. → `pipe` always prunes.
+- **Every `gh api` 404 reads as a 500 (the lane "could not read the lock")** → an error message built only from the `--json` body (`{"message":"Not Found","status":"404"}`) drops gh's stderr `(HTTP 404)`, which `codeHost.api` reads the status from. → `failureDetail` keeps the JSON reason *and* the filtered stderr lines.
+- **A CLI failure shows only "update available"** → the warning is on stderr; the reason is in the `--json` stdout. → `failureDetail` reads the JSON name and message first, and `SF_SKIP_NEW_VERSION_CHECK=true` stops the warning.
 
 ## Scaling
 
