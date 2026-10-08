@@ -2141,3 +2141,9 @@ test("persona lines with an explanation after them still give the role and the p
     { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] });
   assert.deepEqual(orgPersonaOf("Persona: `WesternSalesTeam` role (a rep)"), { role: "WesternSalesTeam", permsets: [] });
 });
+
+test("a story that has not started keeps its Start card when something refreshes it (story #166 showed 'branch and org' it did not have)", () => {
+  const src = readFileSync(new URL("../src/card.mjs", import.meta.url), "utf8");
+  assert.match(src, /not started \(no PR, no branch\): the card offers Plan and Start/);
+  assert.match(newStoryCard({ key: "166", ai: { plan: true } }), /act:start/);
+});

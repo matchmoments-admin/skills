@@ -249,6 +249,12 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
       try {
         let c = light ? seen.get(key) : null;
         if (!c) { c = await facts(key, base); seen.set(key, c); }
+        // not started (no PR, no branch): the card offers Plan and Start, never "branch and org" it does not have
+        if (!c.pr && !tag && !activity && host.api("GET", `repos/${host.repo}/branches/${encodeURIComponent(c.branch)}`)?.status === 404) {
+          const s = await tracker.story(key).catch(() => null);
+          if (!(s?.labels || []).includes("spec")) await tracker.card(key, newStoryCard({ key, ai: aiFeatures() }), CARD_MARK, CARD_TITLE);
+          return;
+        }
         const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, base: c.base, releasePr: c.releasePr,
           shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null, activity });
         await tracker.card(key, body, CARD_MARK, CARD_TITLE);
