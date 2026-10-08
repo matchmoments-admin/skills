@@ -2135,3 +2135,9 @@ test("Org Shape roles are rebuilt so they can be assigned; personas log in throu
   assert.match(readFileSync(new URL("../../pipeline/src/org.mjs", import.meta.url), "utf8"), /enableAdminLoginAsAnyUser>true/);
   assert.match(readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8"), /loginAs\(page, \{ role, permsets \}\)/);
 });
+
+test("persona lines with an explanation after them still give the role and the permission sets (story #166)", () => {
+  assert.deepEqual(orgPersonaOf("### Access\n\n- Persona: DirectorDirectSales role, Regional_Reporting_Access. (One of the five manager roles the report folder is shared with; reps, who have no such role or set, must not see it.)\n"),
+    { role: "DirectorDirectSales", permsets: ["Regional_Reporting_Access"] });
+  assert.deepEqual(orgPersonaOf("Persona: `WesternSalesTeam` role (a rep)"), { role: "WesternSalesTeam", permsets: [] });
+});

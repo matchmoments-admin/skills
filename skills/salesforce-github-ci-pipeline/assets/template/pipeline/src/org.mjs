@@ -78,7 +78,7 @@ export function expandSeed(files, { today = new Date(), marker }) {
 export function personaOf(body) {
   const line = String(body || "").match(/^\s*[-*]?\s*\**Persona:?\**:?\s*(.+)$/im)?.[1];
   if (!line) return null;
-  const items = line.split(/[,;+]|\band\b/).map((s) => s.replace(/[`*.]/g, "").trim()).filter(Boolean);
+  const items = line.split(/\s\(|\.(\s|$)/)[0].split(/[,;+]|\band\b/).map((s) => s.replace(/[`*.]/g, "").trim()).filter(Boolean);   // stop at an explanation
   const role = items.find((i) => /\s+role$/i.test(i))?.replace(/\s+role$/i, "").trim() || null;
   const permsets = items.filter((i) => !/\s+role$/i.test(i) && /^[A-Za-z][A-Za-z0-9_]*$/.test(i));
   return role || permsets.length ? { role, permsets } : null;
