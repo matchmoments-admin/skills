@@ -1771,3 +1771,13 @@ test("a fix round counts only when Claude ran in it (PR #144's runs that failed 
   assert.equal(verdict.ranAgent([{ steps: [{ name: "Enforce the round limit", conclusion: "failure" }, { name: "Run ./.pipeline/.github/actions/claude-agent", conclusion: "skipped" }] }]), false);
   assert.equal(verdict.ranAgent([{ steps: [{ name: "Run ./.pipeline/.github/actions/claude-agent", conclusion: "failure" }] }]), true);
 });
+
+test("reports, report types and dashboards are UI-facing; a review the agent only wrote is still posted (PR #144)", () => {
+  assert.deepEqual(names.uiFacing(["force-app/main/default/reports/Regional_Reporting/Accounts_by_Sales_Region.report-meta.xml",
+    "force-app/main/default/dashboards/Regional_Reporting/Regional_Sales.dashboard-meta.xml", "force-app/main/default/reportTypes/Opps.reportType-meta.xml",
+    "force-app/main/default/classes/X.cls"]).length, 3);
+  const wf = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
+  assert.match(wf, /verdict review "\$PR" --since "\$SINCE"\)" = none \] \|\| exit 0/);
+  assert.match(wf, /GH_TOKEN: \$\{\{ steps\.id\.outputs\.token \}\}   # the pipeline's identity/);
+  assert.match(wf, /grep -qE 'AI-REVIEW: \(PASS\|CHANGES\)'/);
+});

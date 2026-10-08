@@ -53,7 +53,8 @@ export const touchesPipeline = (files) => files.filter((f) => PIPELINE_PATHS.som
 
 /** Metadata a user sees in the UI: a change touching any of these needs a UI test; others do not. */
 const UI_FACING = [/\/lwc\//, /\/aura\//, /\/flexipages\//, /\/layouts\//, /\/objects\/[^/]+\/fields\//, /\/quickActions\//,
-  /\/tabs\//, /\/applications\//, /\/flows\//, /\/validationRules\//, /\/listViews\//, /\/compactLayouts\//, /\/pages\//, /\/triggers\//];
+  /\/tabs\//, /\/applications\//, /\/flows\//, /\/validationRules\//, /\/listViews\//, /\/compactLayouts\//, /\/pages\//, /\/triggers\//,
+  /\/reports\//, /\/reportTypes\//, /\/dashboards\//];   // a reporting story is seen in the UI too (spec #125 got "not needed")
 export const uiFacing = (files) => files.filter((f) => f.startsWith("force-app/") && UI_FACING.some((re) => re.test(f)));
 
 // ---- settings and AI feature flags ---------------------------------------------------------------------------

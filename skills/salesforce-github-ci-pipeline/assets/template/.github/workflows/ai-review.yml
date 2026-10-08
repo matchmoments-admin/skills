@@ -147,6 +147,18 @@ jobs:
             Leave an inline comment for each finding (the inline comment tool, or if it is not available:
             gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments -f commit_id="${{ steps.pr.outputs.head }}" -f path=<file> -F line=<line in the new file> -f side=RIGHT -f body="[minor] ..."),
             then post one summary comment with `gh pr comment ${{ env.PR }}`.
+      - name: The review's verdict is posted even if the agent only wrote it as its final message (PR #144)
+        if: always() && steps.id.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.id.outputs.token }}   # the pipeline's identity, the one the verdict job trusts
+          SINCE: ${{ steps.pr.outputs.since }}
+          OUT: ${{ runner.temp }}/claude-execution-output.json
+        run: |
+          [ "$(node .pipeline/pipeline/bin/pipe.mjs verdict review "$PR" --since "$SINCE")" = none ] || exit 0
+          [ -s "$OUT" ] && jq -r '[.[] | select(.type == "result")] | last | .result // empty' "$OUT" > "$RUNNER_TEMP/review.md" || exit 0
+          if grep -qE 'AI-REVIEW: (PASS|CHANGES)' "$RUNNER_TEMP/review.md"; then
+            gh pr comment "$PR" --body-file "$RUNNER_TEMP/review.md" && echo "posted the review's own summary (the agent did not)"
+          fi
   verdict:
     # Agent-free: reads only the pipeline's comment from this run and posts the trusted status.
     needs: review
