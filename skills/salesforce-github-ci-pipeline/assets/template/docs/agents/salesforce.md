@@ -87,6 +87,9 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   production validation use `RunRelevantTests` (Salesforce beta, API 66+): the platform picks the tests a change
   affects, and each deployed class still needs 75% coverage on its own. It can run 0 tests and pass; the pipeline
   then runs its own selection (CI) or every test class (production). Flow tests are never part of it.
+- **Dashboards and report charts render inside an iframe in Lightning:** `page.getByText(...)` finds nothing on a
+  dashboard page. Reach into it: `const dash = page.frameLocator("iframe").first();` then
+  `dash.getByText("Closed Won amount by Sales region")`, and pass that locator to `evidence()` (story #166).
 - **Reports in Apex tests** need `@IsTest(SeeAllData=true)` to find the org's report definitions; suppress
   `PMD.ApexUnitTestShouldNotUseSeeAllDataTrue` on exactly those methods and keep the data assertions in SOQL tests
   without SeeAllData.

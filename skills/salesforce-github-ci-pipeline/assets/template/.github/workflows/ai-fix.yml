@@ -78,8 +78,13 @@ jobs:
         with: { ref: "${{ steps.pr.outputs.branch }}", fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
+      - name: Agent guidance from main (docs/agents: facts agents got wrong, conventions), not the branch's copy
+        run: |   # hidden from git, so an agent's commit never carries main's copy onto the story branch
+          git ls-files -z docs/agents | xargs -0 -r git update-index --skip-worktree
+          echo "docs/agents/" >> .git/info/exclude
+          rm -rf docs/agents && mkdir -p docs && cp -R .pipeline/docs/agents docs/agents
       - id: id
         uses: ./.pipeline/.github/actions/pipeline-identity
         with:

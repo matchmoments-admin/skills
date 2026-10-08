@@ -2426,3 +2426,13 @@ test("UI tests run main's harness (e2e/support), never a story branch's older co
   assert.equal((wf.match(/cp -R \.pipeline\/e2e\/support e2e\/support/g) || []).length, 2);
   assert.equal((wf.match(/data\/seed\\ne2e\/support"/g) || []).length, 2);
 });
+
+test("agents read main's docs/agents, hidden from git (story #166: the branch's copy lacked the dashboard-iframe fact)", () => {
+  for (const f of ["ai-fix", "ai-implement", "ui-test"]) {
+    const wf = readFileSync(new URL(`../../.github/workflows/${f}.yml`, import.meta.url), "utf8");
+    const i = wf.indexOf("cp -R .pipeline/docs/agents docs/agents");
+    assert.ok(i > 0, f);
+    assert.ok(wf.indexOf("update-index --skip-worktree") < i && wf.indexOf('echo "docs/agents/" >> .git/info/exclude') < i, `${f}: hidden from git before the copy`);
+  }
+  assert.match(readFileSync(new URL("../../docs/agents/salesforce.md", import.meta.url), "utf8"), /frameLocator\("iframe"\)/);
+});
