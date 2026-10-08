@@ -82,7 +82,7 @@ jobs:
         with: { ref: "${{ steps.pr.outputs.branch }}", fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ne2e/support", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
       - id: id
         uses: ./.pipeline/.github/actions/pipeline-identity
@@ -113,6 +113,8 @@ jobs:
           # loginAs reads these: once the Dev Hub is logged out (before any agent or spec code), `sf org display` fails
           sf org display -o "$ALIAS" --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --out "$RUNNER_TEMP/story.md"
+      - name: The test harness from main (login, personas, evidence), not the story branch's copy
+        run: rm -rf e2e/support && cp -R .pipeline/e2e/support e2e/support
       - uses: ./.pipeline/.github/actions/playwright
       - uses: ./.pipeline/.github/actions/claude-agent
         env:
@@ -191,7 +193,7 @@ jobs:
         with: { ref: "${{ steps.head.outputs.sha }}", persist-credentials: false }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ne2e/support", persist-credentials: false }
       - name: Which spec?
         id: spec
         run: |
@@ -226,6 +228,8 @@ jobs:
         run: |
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}" "$RUNNER_TEMP/ci.key"
+      - name: The test harness from main (login, personas, evidence), not the story branch's copy
+        run: rm -rf e2e/support && cp -R .pipeline/e2e/support e2e/support
       - uses: ./.pipeline/.github/actions/playwright
         if: steps.spec.outputs.exists == 'true'
       - name: Run the committed spec

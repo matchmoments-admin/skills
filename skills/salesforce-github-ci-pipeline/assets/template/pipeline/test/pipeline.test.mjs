@@ -2420,3 +2420,9 @@ test("UI tests log in as a persona after the Dev Hub is logged out (story #166: 
   assert.ok(wf.indexOf("SCRATCH_INSTANCE_URL") < wf.indexOf("sf org logout -o devhub"), "before production access is dropped");
   assert.match(readFileSync(new URL("../../e2e/support/login.ts", import.meta.url), "utf8"), /process\.env\.SCRATCH_ORG_ID && process\.env\.SCRATCH_INSTANCE_URL/);
 });
+
+test("UI tests run main's harness (e2e/support), never a story branch's older copy", () => {
+  const wf = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
+  assert.equal((wf.match(/cp -R \.pipeline\/e2e\/support e2e\/support/g) || []).length, 2);
+  assert.equal((wf.match(/data\/seed\\ne2e\/support"/g) || []).length, 2);
+});
