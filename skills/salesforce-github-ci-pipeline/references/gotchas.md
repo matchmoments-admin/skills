@@ -52,6 +52,8 @@ Every entry happened in a real run. Search this file for the error text you see.
 
 - **sprint-start fails with GH013 "Required status check pipeline/gate is expected" when pushing `release/<sprint>`** → a required status check also applies when a branch is *created*, and main's commit never carries `pipeline/gate` (only PR heads do). → The release ruleset sets `do_not_enforce_on_create: true`: creating the sprint branch from a green main is allowed, every merge into it is still gated.
 
+- **"Claude reported a successful result after 69 turns, exceeding the configured maximum of 60" failed a build that had opened its PR** → claude-code-action fails a finished run that went past `--max-turns`, so the card said the build failed and the follow-ups were skipped. → The wrapper runs the action with `continue-on-error` and judges the transcript's last `result`: `success` with `is_error false` passes (with a warning). In jq print `.is_error | tostring`: `// ""` swallows `false`. A whole spec as one story needs about 70 turns: the build's cap is 100.
+
 ## Playwright against Lightning
 
 - **`JSON.parse` fails on `sf org open --json` inside Playwright** → Playwright sets `FORCE_COLOR`, so the CLI colours its JSON. → `login.ts` sets `FORCE_COLOR=0` for the CLI call.

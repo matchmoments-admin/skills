@@ -1746,3 +1746,13 @@ test("UI evidence is in the event log and the weekly metrics", () => {
   assert.match(events.toMarkdown(s), /\| UI evidence \| 1 posts, 2 screenshots \(3 refused\); median 14 KB each, 28 KB in all \|/);
   assert.doesNotThrow(() => events.event("evidence", { story: "1", shots: 1 }));
 });
+
+test("an agent run that finished successfully past its turn cap counts as success (story #143: 69 of 60, PR opened)", () => {
+  const a = readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8");
+  assert.match(a, /id: claude\n\s+uses: anthropics\/claude-code-action@v1\n\s+continue-on-error: true/);
+  assert.match(a, /if \[ "\$R" = "success false" \]; then echo "::warning::/);
+  assert.match(a, /\\\(\.is_error \| tostring\)/, "false must print as false, not vanish under //");
+  assert.match(readFileSync(new URL("../../.github/workflows/ai-implement.yml", import.meta.url), "utf8"), /max-turns: "100"/);
+  const plan = plans.storyFile({ key: "143", title: "Story: Regional reporting", url: "u", body: "b" }, { plan: null, answers: [] });
+  assert.match(plan, /^# Story 143: Regional reporting\n/, "no doubled 'Story:'");
+});

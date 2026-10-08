@@ -28,7 +28,7 @@ export function planContext(comments, { mark = PLAN_MARK, title = PLAN_TITLE } =
 
 /** The story file every agent reads: the story, then (when there is one) the agreed plan and the answers to it. */
 export function storyFile(story, { plan, answers }) {
-  const parts = [`# Story ${story.key}: ${story.title}`, "", `Tracker: ${story.url}`, "", story.body || "(no description)"];
+  const parts = [`# Story ${story.key}: ${String(story.title).replace(/^Story:\s*/i, "")}`, "", `Tracker: ${story.url}`, "", story.body || "(no description)"];
   if (plan) {
     parts.push("", "---", "", "## Agreed plan (part of the spec: build what it says, unless an answer below changes it)", "", plan);
     if (answers.length) parts.push("", "## Answers to the plan's questions (these win over the plan where they differ)", "", ...answers.map((a) => `- **${a.author}:** ${a.body.replace(/\n+/g, " ")}`));

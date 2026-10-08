@@ -35,7 +35,9 @@ runs:
           echo '__RULES__'
           echo "model=$(AI_MODEL="${{ inputs.model }}" node .pipeline/pipeline/bin/pipe.mjs verdict model "${{ inputs.role }}")"
         } >> "$GITHUB_OUTPUT"
-    - uses: anthropics/claude-code-action@v1
+    - id: claude
+      uses: anthropics/claude-code-action@v1
+      continue-on-error: true   # judged below from the transcript: a finished run that went past the turn cap is a success
       env:
         CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"   # agents ran tests in the background and ended before committing (F22, story #54)
       with:
@@ -49,6 +51,18 @@ runs:
           --model ${{ steps.rules.outputs.model }}
           --max-turns ${{ inputs.max-turns }}
           --allowedTools "${{ inputs.allowed-tools }}"
+    - name: Did the agent finish? (its own result, not the turn cap)
+      shell: bash
+      env:
+        OUTCOME: ${{ steps.claude.outcome }}
+        OUT: ${{ runner.temp }}/claude-execution-output.json
+      run: |
+        [ "$OUTCOME" = success ] && exit 0
+        # the action fails a run that ended with a success result after more turns than --max-turns (story #143 took
+        # 69 of 60 and opened its PR); that is a finished run. Anything else (an error result, no result) still fails.
+        R=$( [ -s "$OUT" ] && jq -r '[.[] | select(.type == "result")] | last | "\(.subtype // "") \(.is_error | tostring)"' "$OUT" 2>/dev/null || echo "")
+        if [ "$R" = "success false" ]; then echo "::warning::The agent finished successfully but used more turns than ${{ inputs.max-turns }}: counted as success. Raise max-turns for this role if it keeps happening."; exit 0; fi
+        echo "::error::The agent did not finish (result: ${R:-none})"; exit 1
     - name: Record the agent's cost and turns in the event log (needs contents write on the job's token)
       if: always()
       shell: bash
