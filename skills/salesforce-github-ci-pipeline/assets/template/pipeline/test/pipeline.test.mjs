@@ -2424,7 +2424,7 @@ test("UI tests log in as a persona after the Dev Hub is logged out (story #166: 
 test("UI tests run main's harness (e2e/support), never a story branch's older copy", () => {
   const wf = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
   assert.equal((wf.match(/cp -R \.pipeline\/e2e\/support e2e\/support/g) || []).length, 2);
-  assert.equal((wf.match(/data\/seed\\ne2e\/support"/g) || []).length, 2);
+  assert.equal((wf.match(/sparse-checkout: "[^"]*\\ne2e\/support[^"]*"/g) || []).length, 2, "both jobs check out main's e2e/support");
 });
 
 test("agents read main's docs/agents, hidden from git (story #166: the branch's copy lacked the dashboard-iframe fact)", () => {
