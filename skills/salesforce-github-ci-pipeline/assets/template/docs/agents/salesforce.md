@@ -53,6 +53,19 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
 - Mocks: `Test.setMock` for callouts, `Test.loadData` or small factories for data; never mock the database.
 - Flows: a Flow test per path whose triggering record meets the entry criteria; "the Flow does not run" is an Apex test.
 
+## Facts agents got wrong (check these before flagging or "fixing" them)
+
+- **Report date intervals** (`<timeFrameFilter><interval>`): `INTERVAL_CURY` is the current **calendar** year,
+  `INTERVAL_CURFY` the current **fiscal** year (`INTERVAL_PREVY`/`INTERVAL_NEXTY` likewise). `INTERVAL_CALYEAR` does
+  not exist. `describeReport` reports `INTERVAL_CURY` as the duration `THIS_YEAR`. (PR #144's review called it fiscal.)
+- **Tests run as production's CI user, without the story's permission sets** (`asProductionUser`). Anything that
+  depends on field access, such as `describeReport` groupings on a custom field, `Schema...isAccessible()` or a query
+  `WITH USER_MODE`, must run inside `System.runAs` a user who holds the permission set. Otherwise it passes in your
+  story org and fails in CI (PR #144: `List index out of bounds: 0` on `getGroupingsDown()[0]`).
+- **Reports in Apex tests** need `@IsTest(SeeAllData=true)` to find the org's report definitions; suppress
+  `PMD.ApexUnitTestShouldNotUseSeeAllDataTrue` on exactly those methods and keep the data assertions in SOQL tests
+  without SeeAllData.
+
 ## Debugging (`diagnosing-bugs`)
 
 The tight loop is **one test method** in the story's org: `sf apex run test -o <alias> --tests Class.method --synchronous`

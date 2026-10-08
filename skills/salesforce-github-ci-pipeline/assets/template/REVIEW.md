@@ -1,6 +1,9 @@
 # Review rubric
 
 Review the pull request diff against the linked issue's acceptance criteria and `CLAUDE.md`.
+Before calling a Salesforce detail wrong (a report interval, a metadata value, a test annotation), check
+`docs/agents/salesforce.md` "Facts agents got wrong"; a confident false blocker costs a fix round. Check what CI's
+**Salesforce tests** check run says failed: a failing test is always at least a major.
 
 ## Severity
 - **blocker**: wrong behaviour, security issue (missing sharing or FLS, injection, hard-coded secret), data loss, missing bulk safety, tests that cannot fail.
