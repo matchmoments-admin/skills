@@ -2061,3 +2061,9 @@ test("baseline in orgs: one combined deploy; soft falls back to force-app alone;
   assert.match(rel, /gh workflow run snapshot-refresh\.yml --ref main/);
   assert.match(readFileSync(new URL("../../.github/workflows/prod-baseline.yml", import.meta.url), "utf8"), /github\.event_name != 'schedule' \|\| vars\.BASELINE_NIGHTLY == 'true'/);
 });
+
+test("prod-baseline checks out main before the identity action re-clones it (a .pipeline checkout first was wiped)", () => {
+  const wf = readFileSync(new URL("../../.github/workflows/prod-baseline.yml", import.meta.url), "utf8");
+  assert.match(wf, /uses: actions\/checkout@v4\n\s+with: \{ ref: main \}[^\n]*\n\s+- id: id\n\s+uses: \.\/\.github\/actions\/pipeline-identity/);
+  assert.doesNotMatch(wf, /\.pipeline\//);
+});

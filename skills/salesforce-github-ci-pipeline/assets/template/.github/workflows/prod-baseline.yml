@@ -29,14 +29,14 @@ jobs:
       BRANCH: prod-baseline-refresh
     steps:
       - uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline", persist-credentials: false }
+        with: { ref: main }   # main's own code: this job reads production and writes only baseline/
       - id: id
-        uses: ./.pipeline/.github/actions/pipeline-identity
+        uses: ./.github/actions/pipeline-identity   # re-checks out main as the App, so the PR it opens starts CI
         with:
           app-id: ${{ secrets.PIPELINE_APP_ID }}
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           ref: main
-      - uses: ./.pipeline/.github/actions/sf-auth   # read-only use of production: list, retrieve
+      - uses: ./.github/actions/sf-auth   # read-only use of production: list, retrieve
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
