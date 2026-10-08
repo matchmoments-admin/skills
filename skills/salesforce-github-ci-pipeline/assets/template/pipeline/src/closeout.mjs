@@ -1,6 +1,6 @@
 // Close-out after a production release (see GLOSSARY.md). plan() is pure; gather() reads GitHub and git;
 // apply() acts through the tracker and the org registry.
-import { storyOf, sprintOf, releaseBranch } from "./conventions.mjs";
+import { storyOf, sprintOf, releaseBranch, setting } from "./conventions.mjs";
 
 /**
  * Inputs:
@@ -60,7 +60,7 @@ export async function gather({ gh, git }, tracker, { sha = "HEAD", previous = nu
 }
 
 /** Safe to run again after a partial failure: closed stories, deleted orgs and branches are skipped. */
-export async function apply(p, { tag, tracker, orgs, git, gh, log = console.error }) {
+export async function apply(p, { tag, tracker, orgs, git, gh, cards = null, log = console.error }) {
   for (const key of p.ship) if ((await tracker.story(key)).state === "OPEN") await tracker.done(key, `Shipped in release ${p.sprint} (${tag}).`);
   for (const key of p.carry) await tracker.carry(key, p.sprint, `Not finished in sprint ${p.sprint}; carried over to the next sprint.`);
   // PRs still aimed at the release branch would be closed or retargeted at main by GitHub when it is deleted.
@@ -74,6 +74,16 @@ export async function apply(p, { tag, tracker, orgs, git, gh, log = console.erro
     const s = await tracker.story(key);
     if (s.state === "OPEN") await tracker.done(key, `Hotfix released in ${tag} (PR #${pr}).`);
     else await tracker.comment(key, `Hotfix released in ${tag} (PR #${pr}).`);   // closed early by an old "Closes #" PR: still say so
+  }
+  // a spec is done when its stories are: close it, say where it shipped (its card would otherwise say "work on it")
+  const done = new Set([...p.ship, ...p.hotfix.map((h) => h.key)].map(String));
+  const specs = new Map();   // spec -> its stories that shipped now
+  for (const key of done) { const m = String((await tracker.story(key).catch(() => ({})))?.body || "").match(/Part of spec #(\d+)/); if (m) specs.set(m[1], [...(specs.get(m[1]) || []), key]); }
+  for (const [n, mine] of specs) {
+    const open = (gh?.(["issue", "list", "--state", "open", "--search", `"Part of spec #${n}" in:body`, "--json", "number"], { allowFail: true }) || []).map((i) => String(i.number)).filter((k) => !done.has(k));
+    if (open.length) { log(`spec #${n} stays open: stories ${open.map((k) => `#${k}`).join(", ")} have not shipped`); continue; }
+    if ((await tracker.story(n)).state === "OPEN") await tracker.done(n, `Shipped: every story of this spec is in production (${tag}).`);
+    await cards?.newStory(n, { spec: true, stage: "shipped", stories: mine, tag });
   }
   if (p.sprint) await tracker.closeSprint(p.sprint);
   for (const target of p.deleteOrgs) {
@@ -98,9 +108,10 @@ export async function releaseNotes({ gh }, tracker, sprint) {
   return [
     `## Release ${sprint}`, "", "### Merged changes",
     ...(merged.length ? merged.map((p) => `- #${p.number} ${p.title} (@${p.author.login})`) : ["none"]), "",
-    "### Sprint stories", ...(stories.length ? stories.map((s) => `- ${s.key} ${s.title} [${s.state}]`) : ["none"]), "",
+    "### Sprint stories", ...(stories.length ? stories.map((s) => `- #${s.key} ${s.title}${s.state === "CLOSED" ? " (closed)" : ""}`) : ["none"]), "",
     "### How this ships",
     "- CI and the staging regression must be green on the release branch.",
+    ...(String(setting("UAT_ENABLED")).toLowerCase() === "true" ? ["- It deploys to UAT: test it there (the card links it and can email you a login), then tick **UAT passed** on the card."] : []),
     "- Approve this PR (Files changed > Review changes > Approve). The gate validates it against production, merges it, and the release job quick-deploys exactly what was validated.",
   ].join("\n");
 }

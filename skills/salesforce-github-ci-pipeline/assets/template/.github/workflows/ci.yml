@@ -207,6 +207,9 @@ jobs:
           BRANCH: ${{ github.head_ref }}
         run: |
           [[ "$BRANCH" =~ ^(issue-[0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "not a story branch"; exit 0; }
+          # never past the round limit: a PR a person has to look at (label blocked) gets no more AI fixes (PR #144
+          # got "Already ran 2 AI fix rounds" six times)
+          if gh pr view "$PR" --json labels --jq '[.labels[].name] | index("blocked")' | grep -q '[0-9]'; then echo "blocked: a person is on it"; exit 0; fi
           gh pr edit "$PR" --add-label ai:fix
   nudge:
     # After both required checks have finished (a separate job, so the checks are complete when the gate reads them).

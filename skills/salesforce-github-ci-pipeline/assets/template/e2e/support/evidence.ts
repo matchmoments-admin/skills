@@ -90,6 +90,22 @@ export async function evidence(
     if (target) {
       if ((await target.count()) > 1) target = target.first();
       await target.scrollIntoViewIfNeeded(WAIT);
+      // the page header (app name, tabs, global search) never shows a criterion: refuse a box there (story #143's
+      // screenshots boxed the app name because a heading locator matched it first)
+      const inHeader = await target.evaluate(
+        (el: HTMLElement) =>
+          !!el.closest(
+            'header, [role="banner"], one-appnav, .slds-global-header, .slds-context-bar, nav'
+          ),
+        undefined,
+        WAIT
+      );
+      if (inHeader) {
+        console.warn(
+          `evidence: "${caption}" skipped: its locator points into the page header, not at the result. Use the table, row or field that shows it.`
+        );
+        return;
+      }
       // a box drawn over it, not a style on it: the page's own styles (Lightning's included) cannot hide a box
       await target.evaluate(
         (el: HTMLElement) => {

@@ -49,7 +49,7 @@ export function storyFromSpec({ spec, text, title }) {
     summary: firstPara(s.Problem) || `See spec #${spec}.`,
     criteria,
     access: access.length ? access.map((l) => `- ${l}`).join("\n") : `As decided in spec #${spec}.`,
-    where: firstPara(s.Solution) || `As described in spec #${spec}.`,
+    where: String(s.Solution || "").trim().slice(0, 1500) || `As described in spec #${spec}.`,   // the whole section: a paragraph ending in ":" lists the rest
     out: bullets(s["Out of scope"]).map((l) => `- ${l}`).join("\n") || "Anything not in the spec.",
   };
 }
@@ -87,6 +87,9 @@ export function pendingComment(existing, { state, what, url }) {
     ? String(existing).replace(SPEC_MARK, "").replace(/^(⏳ \*\*Now:\*\*|❌ \*\*Failed:\*\*).*\n*/m, "").trim() : null;
   return current ? [SPEC_MARK, line, "", current].join("\n") : [SPEC_MARK, PENDING, `### ${SPEC_TITLE}`, "", line].join("\n");
 }
+
+/** What a story hears when its spec is revised after it was made (its criteria are a copy; the spec binds). Pure. */
+export const revisedNote = (spec) => `📝 Spec #${spec} was revised. Its decisions bind this story (every agent reads the latest spec): where a criterion above disagrees with it, the spec wins. Builders: bring the pull request's title and description in line with what is built.`;
 
 /** The spec comment's body now (the latest one with the marker), from the issue's comments. */
 export const currentSpec = (comments) => [...comments].reverse().find((c) => String(c.body || "").includes(SPEC_MARK))?.body || null;

@@ -94,14 +94,17 @@ function storyActions(rows, { ai, base, ci }) {
 }
 
 /** The card on a story before /start (or a spec issue: where the spec stands; stage: new | spec | story). */
-export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [] }) {
+export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [], tag = null }) {
   if (spec) {
     const story = stories[0];
+    const made = ["story", "shipped"].includes(stage);
     const rows = [[stage === "new" ? "waiting" : "done", "Spec", stage === "new" ? "not written yet" : "written: the **Spec** comment below"],
-      [stage === "story" ? "done" : "waiting", "Story", stage === "story" ? `#${story}: its card offers **Plan** and **Start**` : "made from the spec with one tick, when it is right"]];
+      [made ? "done" : "waiting", "Story", made ? `#${story}${stage === "story" ? ": its card offers **Plan** and **Start**" : ""}` : "made from the spec with one tick, when it is right"],
+      ...(stage === "shipped" ? [["done", "In production", `released in ${tag}`]] : [])];
     const next = { new: ai.plan ? "Tick **Write the spec with Claude** below; then answer its questions." : "Write the spec in a comment (problem, solution, user stories, decisions), then open a story for it.",
       spec: "Read the **Spec** below: answer its questions in a comment (then /spec revises it), or tick **Make it a story** on it.",
-      story: `Done: the spec is story #${story}. Work on it there (Plan, Start, Build).` }[stage];
+      story: `Done: the spec is story #${story}. Work on it there (Plan, Start, Build).`,
+      shipped: `Done: shipped in ${tag} (story ${stories.map((n) => `#${n}`).join(", ")}).` }[stage];
     return render(key, next, rows, null, stage === "new" ? allowed(["spec"], ai) : []);
   }
   return render(key, ai.plan ? "Bigger story? Tick **Plan it with Claude** first. Small story? Tick **Start**." : "Tick **Start** when you are ready to work on it.",
@@ -257,8 +260,8 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
       await tracker.card(key, startingCard({ key, activity }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
     },
     /** A new story's card (before /start): what to do first, with the boxes to do it. */
-    async newStory(key, { spec = false, stage = "new", stories = [] } = {}) {
-      await tracker.card(key, newStoryCard({ key, ai: aiFeatures(), spec, stage, stories }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
+    async newStory(key, { spec = false, stage = "new", stories = [], tag = null } = {}) {
+      await tracker.card(key, newStoryCard({ key, ai: aiFeatures(), spec, stage, stories, tag }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
     },
     /** The card of the pull request a commit was merged by (the release workflow knows only the SHA). */
     async refreshCommit(sha, opts) {

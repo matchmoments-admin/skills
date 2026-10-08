@@ -20,7 +20,7 @@ export const ACTIONS = {
   fix: { label: "🛠 Fix the review findings and failed checks with Claude", on: "pr", adds: ["ai:fix"], flag: "fix" },
   "ai-test": { label: "🧪 Have Claude write and run the UI test", on: "pr", adds: ["ai:test"], flag: "uiTest" },
   test: { label: "🧪 Run the committed UI test", on: "pr", adds: ["test"] },
-  "review-ok": { label: "✋ Accept the change anyway: the AI review is wrong (comment /review-ok <why>, so the reason is on record)", on: "pr" },
+  "review-ok": { label: "✋ The AI review is wrong? Comment /review-ok <why> to accept the change anyway (the reason goes on record)", on: "pr" },
   ship: { label: "🚀 Sign off: merge it into the sprint when everything is green", on: "pr" },
   "uat-pass": { label: "✅ UAT passed: tested in UAT, ready for production", on: "pr" },
   "uat-login": { label: "🔑 Send me a UAT login (Salesforce emails you a link to set a password)", on: "pr" },
@@ -98,9 +98,10 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat }) {
   }
   if (id === "review-ok") {   // a person overrules the AI review on this exact commit; the reason goes on the status and the PR
     const pr = where.pr;
+    if (!arg) return { said: `@${who}: to accept the change over the AI review, say why in a comment: \`/review-ok <why>\` (for example \`/review-ok THIS_YEAR is valid SOQL and CI passed\`). The reason goes on the PR's record.` };
     host.status(pr.headRefOid, STATUS.review, "success", `AI review overruled by @${who}${arg ? `: ${arg}` : ""}`.slice(0, 139));
     host.dispatch("gate.yml", { pr: where.number });
-    return { done: `AI review overruled by @${who} on ${pr.headRefOid.slice(0, 7)}`, said: `✋ @${who} accepted this change over the AI review on \`${pr.headRefOid.slice(0, 7)}\`${arg ? `: ${arg}` : " (no reason given: comment `/review-ok <why>` next time)"}. A new push needs a review again.` };
+    return { done: `AI review overruled by @${who} on ${pr.headRefOid.slice(0, 7)}`, said: `✋ @${who} accepted this change over the AI review on \`${pr.headRefOid.slice(0, 7)}\`: ${arg}. A new push needs a review again.` };
   }
   if (id === "gate") { host.dispatch("gate.yml", { pr: where.number }); return { done: "re-running the gate" }; }
   if (id === "ci") { host.dispatch("ci.yml", { ref: where.pr.headRefName }, where.pr.headRefName); return { done: "re-running CI" }; }

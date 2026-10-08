@@ -8,7 +8,7 @@ name: ai-review
 run-name: "${{ inputs.pr && format('ai-review PR #{0}', inputs.pr) || format('ai-review (PR #{0} event)', github.event.pull_request.number) }}"
 on:
   pull_request_target:   # runs the base branch's own copy of this file (never the PR's code), so routing is never stale
-    types: [opened, ready_for_review, labeled]
+    types: [opened, ready_for_review, labeled, synchronize]   # synchronize: a PERSON's push (the pipeline's own start their review)
   workflow_dispatch:
     inputs:
       pr:
@@ -42,6 +42,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request_target' && vars.AI_REVIEW == 'true' &&
       (github.event.action != 'labeled' || github.event.label.name == 'ai:review') &&
+      (github.event.action != 'synchronize' || github.event.sender.type != 'Bot') &&
       !startsWith(github.event.pull_request.head.ref, 'backmerge-') && !startsWith(github.event.pull_request.head.ref, 'release/')
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -49,7 +50,13 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - run: gh workflow run ai-review.yml --ref main -f pr="${{ github.event.pull_request.number }}"
+      - run: |
+          # a push that only adds or changes the story's Playwright spec needs no review (the gate accepts e2e-only changes)
+          if [ "${{ github.event.action }}" = synchronize ]; then
+            gh pr edit "${{ github.event.pull_request.number }}" --remove-label blocked >/dev/null 2>&1 || true   # a person pushed: AI fixes may resume
+            gh api "repos/$GH_REPO/compare/${{ github.event.before }}...${{ github.event.after }}" --jq '[.files[].filename] | map(select(startswith("e2e/") | not)) | length' | grep -qx 0 && { echo "spec-only push: no review"; exit 0; }
+          fi
+          gh workflow run ai-review.yml --ref main -f pr="${{ github.event.pull_request.number }}"
   review:
     if: github.event_name == 'workflow_dispatch' && vars.AI_REVIEW == 'true'
     runs-on: ubuntu-latest

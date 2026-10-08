@@ -1856,3 +1856,64 @@ test("the UI tester's screenshots must show the criterion met: data first, the e
   assert.match(wf, /A screenshot is evidence only if it shows the criterion met: create the records the criterion needs first/);
   assert.match(wf, /never the app name or an empty page/);
 });
+
+// ---------------------------------------------------------------- end-to-end round 1 (the spec #125 release)
+test("round 1: a weak UI spec fails; evidence never boxes the page header; closed stories' comments are rewritten before their screenshots go", async () => {
+  assert.deepEqual(evidence.specProblems("await expect(page.getByRole('heading').first()).toBeVisible();").length, 2);
+  assert.deepEqual(evidence.specProblems(readFileSync(new URL("../../e2e/story-84.spec.ts", import.meta.url), "utf8")), []);
+  assert.match(readFileSync(new URL("../../e2e/support/evidence.ts", import.meta.url), "utf8"), /its locator points into the page header/);
+  const ui = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
+  assert.match(ui, /pipe\.mjs ui spec-check --file/);
+  assert.match(ui, /the spec passed but checks too little/);
+  const api = (m, path) => path.endsWith("/git/ref/heads/evidence") ? { object: { sha: "h" } } : path.includes("/git/commits/") ? { tree: { sha: "t" } }
+    : { tree: [{ type: "blob", path: "story-143/abc/01-a.webp" }, { type: "blob", path: "story-150/def/01-b.webp" }, { type: "blob", path: "README.md" }] };
+  assert.deepEqual(evidence.storiesOnBranch({ api, repo: "o/r" }), ["143", "150"]);
+  assert.match(readFileSync(new URL("../../.github/workflows/scratch-janitor.yml", import.meta.url), "utf8"), /issues: write/);
+  assert.doesNotMatch(evidence.removedComment(), /open in the scratch org|!\[/);
+});
+
+test("round 1: a person's push re-runs the review and resets the fix rounds; the round limit says what to do, once", () => {
+  const rv = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
+  assert.match(rv, /types: \[opened, ready_for_review, labeled, synchronize\]/);
+  assert.match(rv, /github\.event\.action != 'synchronize' \|\| github\.event\.sender\.type != 'Bot'/);
+  assert.match(rv, /spec-only push: no review/);
+  const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(ci, /blocked: a person is on it/);
+  const fx = readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8");
+  assert.match(fx, /\*\*What you can do:\*\* push a fix yourself/);
+  assert.match(fx, /if: failure\(\) && env\.STORY_KEY != '' && steps\.rounds\.outputs\.over != 'true'/);
+  const isBot = (l) => /\[bot\]$/.test(l) || l === "__owner__-pipeline";
+  const commits = [{ committedDate: "2026-10-08T10:55:01Z", authors: [{ login: "" }, { login: "claude" }] },
+    { committedDate: "2026-10-08T11:45:04Z", authors: [{ login: "github-actions[bot]" }, { login: "claude" }] }];
+  assert.equal(verdict.lastHumanPush(commits, isBot), "2026-10-08T10:55:01Z", "an AI commit co-authored by Claude is not a person's push");
+  const runs = [{ id: 1, display_title: "ai-fix PR #9", status: "completed", conclusion: "success", created_at: "2026-10-08T10:00:00Z" },
+    { id: 2, display_title: "ai-fix PR #9", status: "completed", conclusion: "success", created_at: "2026-10-08T11:00:00Z" }];
+  assert.equal(verdict.fixRunsFor(runs, 9, 0, () => true, "2026-10-08T10:55:01Z"), 1, "rounds count again from a person's push");
+});
+
+test("round 1: a spec closes when its stories ship, and its card says where", async () => {
+  const issues = { 143: { state: "OPEN", body: "x\n\nPart of spec #125." }, 125: { state: "OPEN", body: "spec" } };
+  const done = [], cardsDone = [];
+  const tracker = { story: async (k) => issues[k], done: async (k, t) => { done.push([k, t]); issues[k].state = "CLOSED"; }, carry: async () => {}, comment: async () => {}, closeSprint: async () => {} };
+  const gh = (a) => (a[0] === "issue" && a[1] === "list" ? [{ number: 143 }] : []);
+  await closeout.apply({ ship: ["143"], carry: [], hotfix: [], sprint: null, deleteOrgs: [], deleteBranch: null }, { tag: "v1", tracker, orgs: { remove() {} }, git: () => "", gh, cards: { newStory: async (k, o) => cardsDone.push([k, o]) }, log: () => {} });
+  assert.deepEqual(done.map((d) => d[0]), ["143", "125"]);
+  assert.match(done[1][1], /every story of this spec is in production \(v1\)/);
+  assert.deepEqual(cardsDone, [["125", { spec: true, stage: "shipped", stories: ["143"], tag: "v1" }]]);
+  assert.match(newStoryCard({ key: "125", spec: true, stage: "shipped", stories: ["143"], tag: "v1" }), /Done: shipped in v1 \(story #143\)/);
+  const left = { 150: { state: "OPEN", body: "Part of spec #9." }, 9: { state: "OPEN" } };
+  const done2 = [];
+  await closeout.apply({ ship: ["150"], carry: [], hotfix: [], sprint: null, deleteOrgs: [], deleteBranch: null }, { tag: "v2", tracker: { ...tracker, story: async (k) => left[k], done: async (k) => done2.push(k) }, orgs: { remove() {} }, git: () => "", gh: () => [{ number: 150 }, { number: 151 }], log: () => {} });
+  assert.deepEqual(done2, ["150"], "a spec with an unshipped story stays open");
+});
+
+test("round 1: spec revisions reach the story; Where keeps the whole Solution; Accept anyway needs a reason; release notes mention UAT", async () => {
+  assert.match(specs.revisedNote(125), /Spec #125 was revised\. Its decisions bind this story/);
+  const t = specs.storyFromSpec({ spec: 1, title: "Spec: x", text: "### Solution\nManagers see two things:\n- the count\n- the amount\n### User stories\n1. As a manager, I want y\n" });
+  assert.match(t.where, /- the count\n- the amount/);
+  const r = actions.perform("review-ok", "", { number: 9, isPr: true, pr: { headRefOid: "abc1234" } }, "pm", { host: { status: () => { throw new Error("no reason: no status"); } } });
+  assert.match(r.said, /say why in a comment: `\/review-ok <why>`/);
+  const notes = await closeout.releaseNotes({ gh: () => [] }, { sprintStories: async () => [{ key: "143", title: "Story: x", state: "OPEN" }] }, "2026-w46");
+  assert.match(notes, /- #143 Story: x\n/);
+  assert.doesNotMatch(notes, /\[OPEN\]/);
+});

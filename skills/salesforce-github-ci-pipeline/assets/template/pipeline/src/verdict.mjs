@@ -82,8 +82,13 @@ export function reviewVerdict(commentBodies) {
 /** How many AI fix rounds a PR has had: its earlier completed ai-fix runs (run-name "ai-fix PR #N") in which Claude
  *  actually ran (agentRan(runId); a run that failed before the agent, e.g. on a permission, is not a round: PR #144's
  *  first two were not). Robust to what the agent called its commits. */
-export const fixRunsFor = (runs, pr, currentRunId, agentRan = () => true) =>
-  runs.filter((r) => r.display_title === `ai-fix PR #${pr}` && r.status === "completed" && ["success", "failure"].includes(r.conclusion) && String(r.id) !== String(currentRunId) && agentRan(r.id)).length;
+export const fixRunsFor = (runs, pr, currentRunId, agentRan = () => true, since = null) =>
+  runs.filter((r) => r.display_title === `ai-fix PR #${pr}` && r.status === "completed" && ["success", "failure"].includes(r.conclusion) && String(r.id) !== String(currentRunId)
+    && (!since || String(r.created_at) > since) && agentRan(r.id)).length;
+
+/** When a person last pushed to the PR (commits: gh pr view --json commits): rounds count again from there. Pure. */
+// A commit is a person's when one of its authors is neither the pipeline nor Claude (an AI commit's co-author).
+export const lastHumanPush = (commits, isPipeline) => (commits || []).filter((c) => (c.authors || []).some((a) => a.login !== "claude" && !isPipeline(a.login))).map((c) => c.committedDate).sort().pop() || null;
 
 /** Did this run's jobs run the agent step? jobs: the run's jobs API list. Pure. */
 // unknown jobs (an API error) count as a round, so the limit always holds

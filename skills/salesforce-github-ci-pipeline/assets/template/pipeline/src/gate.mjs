@@ -116,7 +116,7 @@ export function requiredVerdicts({ ai = {}, compare = {} }, story) {
   const ui = !files || uiFacing(files).length > 0;
   const spec = Boolean(story) && Array.isArray(files) && files.includes(storySpec(story));
   return [
-    { context: STATUS.review, what: "AI review", required: Boolean(ai.review), how: "it starts when the PR opens; or tick Run the AI review again" },
+    { context: STATUS.review, what: "AI review", required: Boolean(ai.review), how: "it starts when the PR opens and after each push; or tick Run the AI review again" },
     { context: STATUS.ui, what: "UI test", required: ui && (Boolean(ai.uiTest) || spec), how: ai.uiTest ? "tick Have Claude write and run the UI test" : "tick Run the committed UI test" },
   ];
 }

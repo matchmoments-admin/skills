@@ -223,9 +223,9 @@ const commands = {
     output({ verdict: v });
     return say(v);
   },
-  "verdict rounds": () => {
-    // earlier completed ai-fix runs for the PR (run-name "ai-fix PR #N"), from the newest page of ai-fix runs
-    const n = verdict.fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), flag("pr"), process.env.GITHUB_RUN_ID, (id) => verdict.ranAgent(host.api("GET", `repos/${host.repo}/actions/runs/${id}/jobs`)?.jobs));
+  "verdict rounds": () => {   // earlier ai-fix runs of the PR in which Claude ran, since a person last pushed
+    const n = verdict.fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), flag("pr"), process.env.GITHUB_RUN_ID, (id) => verdict.ranAgent(host.api("GET", `repos/${host.repo}/actions/runs/${id}/jobs`)?.jobs),
+      verdict.lastHumanPush(io.gh(["pr", "view", flag("pr"), "--json", "commits"])?.commits, names.isPipelineAuthor));   // a person's push resets the count
     output({ rounds: n, limit: verdict.MAX_FIX_ROUNDS, over: n >= verdict.MAX_FIX_ROUNDS });
     return say(String(n));
   },
@@ -251,14 +251,16 @@ const commands = {
     output({ url: url || "", shots: shots.length });
     return say(url || `posted ${shots.length} screenshot(s) on ${key}`);
   },
-  "evidence squash": async () => {
-    // runs whatever the switch says, so turning UI_EVIDENCE off still clears what was stored
-    const isOpen = async (k) => { try { return (await tracker.story(k)).state !== "CLOSED"; } catch { return true; } };
-    const r = await evidence.squash({ api: host.api, repo: host.repo, isOpen });
-    for (const k of r?.removed || []) {   // the closed story's comment says the screenshots are gone (only where one exists)
-      const has = (await tracker.comments(k).catch(() => [])).some((c) => String(c.body).includes(evidence.EVIDENCE_TITLE));
-      if (has) await tracker.card(k, evidence.removedComment(), evidence.EVIDENCE_MARK, evidence.EVIDENCE_TITLE).catch((e) => log(`::warning::${k}: ${e.message}`));
+  "ui spec-check": () => { const p = evidence.specProblems(readFileSync(flag("file"), "utf8")); output({ problems: p.join("; ") }); return say(p.length ? `weak spec: ${p.join("; ")}` : "spec checks values"); },
+  "evidence squash": async () => {   // runs whatever the switch says, so turning UI_EVIDENCE off still clears what was stored
+    // a closed story's comment is rewritten FIRST; only then are its screenshots deleted (a failed rewrite keeps them)
+    const keep = new Set();
+    for (const k of evidence.storiesOnBranch({ api: host.api, repo: host.repo })) {
+      const open = await tracker.story(k).then((s) => s.state !== "CLOSED", () => true);
+      const has = !open && (await tracker.comments(k).catch(() => null))?.some((c) => String(c.body).includes(evidence.EVIDENCE_TITLE));
+      if (open || (has && !(await tracker.card(k, evidence.removedComment(), evidence.EVIDENCE_MARK, evidence.EVIDENCE_TITLE).then(() => true, (e) => (log(`::warning::${k}: ${e.message}`), false))))) keep.add(k);
     }
+    const r = await evidence.squash({ api: host.api, repo: host.repo, isOpen: async (k) => keep.has(k) });
     return say(r ? `evidence branch: ${r.kept} open stories kept${r.removed.length ? `, removed ${r.removed.join(", ")}` : ""}` : "no evidence branch");
   },
   "triage review": async () => {
@@ -298,7 +300,7 @@ const commands = {
   "spec context": async () => { writeFileSync(flag("out"), await specs.specFile(tracker, arg(0)) + "\n" + pack.packForCheckout(io, { text: (await tracker.story(arg(0))).body, log })); return say(`wrote ${flag("out")}`); },
   "spec pending": async () => { await tracker.card(arg(0), specs.pendingComment(specs.currentSpec(await tracker.comments(arg(0)).catch(() => [])), { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl }), specs.SPEC_MARK); return say("pending"); },
   "spec post": async () => {   // a revision of a spec already made into a story keeps its link and offers no second story
-    const story = specs.storyOfSpec(specs.currentSpec(await tracker.comments(arg(0)).catch(() => []))); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true });
+    const story = specs.storyOfSpec(specs.currentSpec(await tracker.comments(arg(0)).catch(() => []))); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true }); if (story) await tracker.comment(story, specs.revisedNote(arg(0)));
     await tracker.card(arg(0), specs.specComment(readFileSync(flag("file"), "utf8"), { story }), specs.SPEC_MARK); await cards.newStory(arg(0), { spec: true, stage: story ? "story" : "spec", stories: [story].filter(Boolean) }); return say(`spec on #${arg(0)}`); },
   "story blockers": async () => {   // before a branch and org exist: blockers merged? A failed check lets it start (the gate checks at merge)
     let waiting = []; try { waiting = gate.blockersOf((await tracker.story(arg(0))).body).filter((n) => !gate.landedOf(n, io.gh)); } catch (e) { log(`::warning::blockers not checked (${e.message}): starting; the gate still checks them at merge`); }
@@ -435,7 +437,7 @@ async function closeoutCmd(run) {
   const p = closeout.plan(await closeout.gather(io, tracker, { sha: flag("sha", "HEAD"), previous: flag("previous") || null }));
   log(JSON.stringify(p));
   if (!run) return;
-  await closeout.apply(p, { tag: flag("tag"), tracker, orgs: orgs(), git: io.git, gh: io.gh, log });
+  await closeout.apply(p, { tag: flag("tag"), tracker, orgs: orgs(), git: io.git, gh: io.gh, cards, log });
   record("release", { tag: flag("tag"), sha: flag("sha"), previous: flag("previous"), sprint: p.sprint, shipped: p.ship, hotfixes: p.hotfix.map((h) => h.key), carried: p.carry });
   for (const key of [...p.ship, ...p.hotfix.map((h) => h.key)]) await cards.refresh(key, { tag: flag("tag") });
   if (flag("sha")) await cards.refreshCommit(flag("sha"), { tag: flag("tag") });   // the release card: Done, with the tag

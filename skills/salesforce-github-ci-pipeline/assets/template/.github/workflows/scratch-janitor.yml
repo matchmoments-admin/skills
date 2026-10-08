@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write       # the event log (orgs deleted); which sprint is open; main and tags for the watchdog
-  issues: read          # which stories are closed; an open "Production rolled back" issue
+  issues: write         # which stories are closed; an open "Production rolled back" issue; rewrite closed stories' evidence comments
   actions: write        # the watchdog starts a release
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them

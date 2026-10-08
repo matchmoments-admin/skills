@@ -81,8 +81,30 @@ export function evidenceComment({ key, pr, sha, shots, orgUrl = null, repoUrl, w
   return lines.join("\n");
 }
 
-/** What the evidence comment becomes once the story is closed and its screenshots are deleted. Pure. */
-export const removedComment = () => [EVIDENCE_MARK, `### ${EVIDENCE_TITLE}: removed`, "", "The story is closed, so its screenshots were deleted from the `evidence` branch. The UI test's own verdict and report are unchanged."].join("\n");
+/** What the evidence comment becomes once the story is closed and its screenshots are deleted (no image or org link
+ *  left to break: the story's scratch org is gone too). Pure. */
+export const removedComment = () => [EVIDENCE_MARK, `### ${EVIDENCE_TITLE}: removed`, "", "The story is closed, so its screenshots were deleted from the `evidence` branch and its scratch org is gone. The UI test's own verdict and report are unchanged."].join("\n");
+
+/**
+ * Does a story's Playwright spec check anything a criterion is about? Problems, or [] when it does. A spec that only
+ * waits for something to be visible passed story #143 without checking a row or a total. Pure (the spec's source).
+ */
+export function specProblems(src) {
+  const s = String(src || "");
+  const problems = [];
+  const valueChecks = (s.match(/\.(toHaveText|toContainText|toHaveValue|toHaveCount|toEqual|toBe|toMatch|toHaveAttribute)\(/g) || []).length;
+  if (!valueChecks) problems.push("it only checks that things are visible: assert the values a criterion is about (rows, totals, a field's value)");
+  if (/getByRole\(\s*["']heading["']\s*\)\.first\(\)/.test(s)) problems.push("it uses getByRole(\"heading\").first(), which is Lightning's app name: name the heading");
+  return problems;
+}
+
+/** The story keys that have screenshots on the evidence branch (none when there is no branch). */
+export function storiesOnBranch({ api, repo }) {
+  const ref = api("GET", `repos/${repo}/git/ref/heads/${BRANCH}`);
+  if (ref?.status) return [];
+  const head = api("GET", `repos/${repo}/git/commits/${ref.object.sha}`);
+  return [...new Set((api("GET", `repos/${repo}/git/trees/${head.tree.sha}?recursive=1`).tree || []).map((e) => keyOf(e.path)).filter(Boolean))];
+}
 
 /**
  * Put the screenshots on the evidence branch, replacing the story's folder, in one commit (Git Data API: one blob per
