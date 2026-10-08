@@ -1850,3 +1850,9 @@ test("a person can overrule a wrong AI review on the exact commit, with the reas
   assert.match(wf, /> "\$RUNNER_TEMP\/ci\.md"/);
   assert.match(wf, /never report it as a syntax or compile error/);
 });
+
+test("the UI tester's screenshots must show the criterion met: data first, the element that shows it (story #143 showed an empty report)", () => {
+  const wf = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
+  assert.match(wf, /A screenshot is evidence only if it shows the criterion met: create the records the criterion needs first/);
+  assert.match(wf, /never the app name or an empty page/);
+});
