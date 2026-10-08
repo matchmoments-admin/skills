@@ -1781,7 +1781,11 @@ test("reports, report types and dashboards are UI-facing; a review the agent onl
   const wf = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
   assert.match(wf, /verdict review "\$PR" --since "\$SINCE"\)" = none \] \|\| exit 0/);
   assert.match(wf, /GH_TOKEN: \$\{\{ steps\.id\.outputs\.token \}\}   # the pipeline's identity/);
-  assert.match(wf, /grep -qE 'AI-REVIEW: \(PASS\|CHANGES\)'/);
+  assert.match(wf, /gh pr comment "\$PR" --body-file "\$F"/);
+  // the reviewer writes its summary to a file and never posts through the shell (10 quoting failures on PR #144)
+  assert.match(wf, /allowed-tools: "Read,Glob,Grep,Write,mcp__github_inline_comment__create_inline_comment,/);
+  assert.doesNotMatch(wf, /Bash\(gh pr comment/);
+  assert.match(verdict.instructions("review"), /Do not post the summary yourself: write it with the Write tool/);
 });
 
 test("review round 3: a spec revision keeps the spec and its story link; screenshots are found wherever the artifact put them; lanes can see runs", () => {

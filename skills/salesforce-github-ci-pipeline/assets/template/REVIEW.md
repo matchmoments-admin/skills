@@ -7,6 +7,8 @@ Before calling a Salesforce detail wrong (a report interval, a metadata value, a
 
 ## Severity
 - **blocker**: wrong behaviour, security issue (missing sharing or FLS, injection, hard-coded secret), data loss, missing bulk safety, tests that cannot fail.
+- **major**: anything the change needs that the deploy does not carry (a run-once script, "add these members by hand",
+  a public group's members): production would get it empty. See `docs/agents/salesforce.md`.
 - **major**: missing test category (negative, permission, bulk), missing permission set entry, an acceptance criterion not met, a field or component missing from the page layout or UI the issue's "Where to see it" describes.
 - **minor**: naming, duplication, comment quality, small clarity issues.
 

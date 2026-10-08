@@ -141,13 +141,13 @@ jobs:
           github-token: ${{ steps.id.outputs.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots (Actions bot, the App); empty = none
           max-turns: "15"
-          allowed-tools: "Read,Glob,Grep,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments:*)"
+          allowed-tools: "Read,Glob,Grep,Write,mcp__github_inline_comment__create_inline_comment,Bash(gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments:*)"
           prompt: |
             Review pull request #${{ env.PR }} following REVIEW.md and CLAUDE.md. The story and its acceptance criteria are in ${{ runner.temp }}/story.md (it ends with "The codebase today": what already exists and production's org-wide defaults); the full diff is in ${{ runner.temp }}/pr.diff; the access check's findings are in ${{ runner.temp }}/access.md (read all three with the Read tool; open other files only when they are not enough).
             Leave an inline comment for each finding (the inline comment tool, or if it is not available:
             gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments -f commit_id="${{ steps.pr.outputs.head }}" -f path=<file> -F line=<line in the new file> -f side=RIGHT -f body="[minor] ..."),
-            then post one summary comment with `gh pr comment ${{ env.PR }}`.
-      - name: The review's verdict is posted even if the agent only wrote it as its final message (PR #144)
+            then write the summary (ending with the verdict line) to ${{ runner.temp }}/review.md with the Write tool. Do not post it: the pipeline does, word for word (posting long text through the shell kept failing on quoting, PR #144).
+      - name: Post the review (agent-free; the agent writes review.md, or its final message carries the verdict)
         if: always() && steps.id.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.id.outputs.token }}   # the pipeline's identity, the one the verdict job trusts
@@ -155,10 +155,12 @@ jobs:
           OUT: ${{ runner.temp }}/claude-execution-output.json
         run: |
           [ "$(node .pipeline/pipeline/bin/pipe.mjs verdict review "$PR" --since "$SINCE")" = none ] || exit 0
-          [ -s "$OUT" ] && jq -r '[.[] | select(.type == "result")] | last | .result // empty' "$OUT" > "$RUNNER_TEMP/review.md" || exit 0
-          if grep -qE 'AI-REVIEW: (PASS|CHANGES)' "$RUNNER_TEMP/review.md"; then
-            gh pr comment "$PR" --body-file "$RUNNER_TEMP/review.md" && echo "posted the review's own summary (the agent did not)"
+          F="$RUNNER_TEMP/review.md"
+          if ! grep -qE 'AI-REVIEW: (PASS|CHANGES)' "$F" 2>/dev/null && [ -s "$OUT" ]; then
+            jq -r '[.[] | select(.type == "result")] | last | .result // empty' "$OUT" > "$F"   # older runs: the final message
           fi
+          if grep -qE 'AI-REVIEW: (PASS|CHANGES)' "$F" 2>/dev/null; then gh pr comment "$PR" --body-file "$F" && echo "posted the review"
+          else echo "::warning::the review wrote no verdict line"; fi
   verdict:
     # Agent-free: reads only the pipeline's comment from this run and posts the trusted status.
     needs: review

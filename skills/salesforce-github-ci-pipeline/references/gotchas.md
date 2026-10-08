@@ -54,6 +54,9 @@ Every entry happened in a real run. Search this file for the error text you see.
 
 - **"Claude reported a successful result after 69 turns, exceeding the configured maximum of 60" failed a build that had opened its PR** → claude-code-action fails a finished run that went past `--max-turns`, so the card said the build failed and the follow-ups were skipped. → The wrapper runs the action with `continue-on-error` and judges the transcript's last `result`: `success` with `is_error false` passes (with a warning). In jq print `.is_error | tostring`: `// ""` swallows `false`. A whole spec as one story needs about 70 turns: the build's cap is 100.
 
+- **The AI review "posted no verdict" twice on one PR** → once it only wrote the verdict as its final message; once it tried `gh pr comment` ten times and Claude Code refused every multi-line quoting form. → The reviewer writes its summary with the Write tool to `$RUNNER_TEMP/review.md`; an agent-free step posts it as the pipeline (falling back to the transcript's final message). Never make an agent post long text through the shell.
+- **A story "needed" a run-once script nothing runs** → the Metadata API cannot deploy a public group's members, so the build added `data/*.apex` to run by hand; production would get an empty group and a folder shared with nobody. → Share with Roles (`folderShares` with `sharedToType` Role) and make "everything reaches production by the deploy" a review rule.
+
 ## Playwright against Lightning
 
 - **`JSON.parse` fails on `sf org open --json` inside Playwright** → Playwright sets `FORCE_COLOR`, so the CLI colours its JSON. → `login.ts` sets `FORCE_COLOR=0` for the CLI call.

@@ -62,6 +62,11 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   depends on field access, such as `describeReport` groupings on a custom field, `Schema...isAccessible()` or a query
   `WITH USER_MODE`, must run inside `System.runAs` a user who holds the permission set. Otherwise it passes in your
   story org and fails in CI (PR #144: `List index out of bounds: 0` on `getGroupingsDown()[0]`).
+- **Everything a story needs reaches production by the deploy: no run-once scripts.** Nothing runs a `data/*.apex` or
+  "run this after the deploy" step in UAT or production. Some things cannot be deployed as metadata, notably a
+  **public group's members**. Design around them: share a report folder (`folderShares`), a sharing rule or a queue with
+  **Roles** (`Role`, not `RoleAndSubordinates`, when subordinates must not get it) instead of a group whose members
+  would arrive empty (PR #144).
 - **Reports in Apex tests** need `@IsTest(SeeAllData=true)` to find the org's report definitions; suppress
   `PMD.ApexUnitTestShouldNotUseSeeAllDataTrue` on exactly those methods and keep the data assertions in SOQL tests
   without SeeAllData.
