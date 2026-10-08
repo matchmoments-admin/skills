@@ -2370,3 +2370,36 @@ test("admins' path (enterprise D): a login to the story's org from the story its
   assert.match(wf, /set -o pipefail/, "a failed retrieve is a failure, not \"nothing new\"");
   assert.ok(calls.some((c) => /Username LIKE '%\.pipeline' AND \(NOT Username LIKE 'persona\.%'\)/.test(c)));
 });
+
+test("full runs in a scratch org (story #166): this repo's tests and coverage, not production's own classes the baseline brings; a dashboard does not force everything", () => {
+  const src = {
+    "force-app/main/default/classes/AccountSelector.cls": "public class AccountSelector {}",
+    "force-app/main/default/classes/AccountSelectorTest.cls": "@IsTest(testFor='ApexClass:AccountSelector') class AccountSelectorTest {}",
+    "force-app/main/default/classes/RegionalReportingTest.cls": "@IsTest class RegionalReportingTest { /* Regional_Reporting */ }",
+    "force-app/main/default/triggers/CaseTrigger.trigger": "trigger CaseTrigger on Case (before insert) {}",
+    "force-app/main/default/dashboards/Regional_Reporting.dashboardFolder-meta.xml": "<DashboardFolder/>",
+    "force-app/main/default/dashboards/Regional_Reporting/Regional_Sales.dashboard-meta.xml": "<Dashboard/>",
+  };
+  const files = Object.keys(src), read = (p) => src[p] || "";
+  const all = tests.selectTests({ changed: [], files, read, mode: "all" });
+  assert.deepEqual(all.apex, ["AccountSelectorTest", "RegionalReportingTest"]);
+  assert.deepEqual(all.code, ["AccountSelector", "CaseTrigger"]);
+  const dash = tests.selectTests({ changed: files.filter((p) => p.includes("/dashboards/")), files, read });
+  assert.equal(dash.mode, "relevant", "a dashboard is not 'metadata that can affect anything'");
+  assert.deepEqual(dash.apex, ["RegionalReportingTest"], "the test that names its folder");
+  // the runner: RunSpecifiedTests with the repo's tests; coverage from the repo's classes only (live: org-wide read 10%)
+  const calls = [];
+  const io = { sf: (a) => {
+    calls.push(a.join(" "));
+    if (a[1] === "run") return { testRunId: "707" };
+    if (a[0] === "data") return { records: /ApexTestQueueItem/.test(a.join(" ")) ? [{ Status: "Completed" }] : [{ Outcome: "Pass", MethodName: "m", ApexClass: { Name: "AccountSelectorTest" } }] };
+    return { summary: { orgWideCoverage: "10%" }, coverage: { coverage: [
+      { name: "AccountSelector", totalLines: 9, totalCovered: 9, coveredPercent: 100 },
+      { name: "CaseTrigger", totalLines: 11, totalCovered: 7, coveredPercent: 64 },
+      { name: "MeterApi", totalLines: 400, totalCovered: 0, coveredPercent: 0 }] } };
+  } };
+  const st = tests.runTests(io, { alias: "issue-166", plan: { ...all, flows: [] }, sleep: () => {} });
+  assert.match(calls[0], /apex run test -o issue-166 --test-level RunSpecifiedTests --tests AccountSelectorTest --tests RegionalReportingTest --code-coverage/);
+  assert.equal(st.orgWide, 80, "16 of 20 repo lines, not 10% of the org");
+  assert.equal(tests.verdict(st, { plan: all }).ok, true);
+});

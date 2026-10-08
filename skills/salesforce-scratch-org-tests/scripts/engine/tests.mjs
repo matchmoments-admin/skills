@@ -26,13 +26,16 @@ const isPermissionSet = (p) => p.endsWith(".permissionset-meta.xml");
  */
 export function selectTests({ changed, deleted = [], files, read, mode = "relevant" }) {
   const flowTests = files.filter(isFlowTest).map((p) => `${flowOfTest(read(p))}.${base(p).replace(".flowtest-meta.xml", "")}`);
-  const all = (why) => ({ mode: "all", apex: [], flows: flowTests, why });
+  const tests = files.filter((p) => p.endsWith(".cls")).filter((p) => /@istest/i.test(read(p)))
+    .map((p) => ({ name: base(p).replace(/\.cls$/, ""), src: read(p) }));
+  // everything = this repo's tests and code, not every class in the org: a scratch org also holds production's own
+  // (the production baseline), whose tests production's validation runs in production
+  const code = files.filter((p) => /\.(cls|trigger)$/.test(p) && !tests.some((t) => t.name === base(p).replace(/\.cls$/, ""))).map((p) => base(p).replace(/\.(cls|trigger)$/, ""));
+  const all = (why) => ({ mode: "all", apex: tests.map((t) => t.name), code, flows: flowTests, why });
   if (mode === "all") return all("all tests requested");   // first: a full run never depends on what changed
   if (!changed.length && !deleted.length) return { mode: "none", apex: [], flows: [], why: "no Salesforce source changed" };
   if (deleted.length) return all(`a deletion (${base(deleted[0])}) can affect anything`);
 
-  const tests = files.filter((p) => p.endsWith(".cls")).filter((p) => /@istest/i.test(read(p)))
-    .map((p) => ({ name: base(p).replace(/\.cls$/, ""), src: read(p) }));
   const naming = (word) => tests.filter((t) => new RegExp(`\\b${word}\\b`).test(t.src)).map((t) => t.name);
   const apex = new Set(), flows = new Set();
 
@@ -62,6 +65,9 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
       const hit = naming(objectOf(p));
       if (!hit.length) return all(`no test names ${objectOf(p)} (changed ${base(p)})`);
       hit.forEach((t) => apex.add(t));
+    } else if (/\/(dashboards|reports)\//.test(p)) {
+      // a dashboard, report or their folder: only a test that names it reads it (SeeAllData); people and the UI test see it
+      naming(base(p).replace(/\.[a-zA-Z]+-meta\.xml$/, "")).forEach((t) => apex.add(t));
     } else if (isPermissionSet(p)) {
       const hit = naming(base(p).replace(".permissionset-meta.xml", ""));
       if (!hit.length) return all(`no test names permission set ${base(p)}`);
@@ -161,7 +167,7 @@ export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs
   if (apexDone) Object.assign(state, { apex: apexDone.apex, coverage: apexDone.coverage });   // RunRelevantTests already ran them
   const runApex = !apexDone && (plan.mode === "all" || plan.apex.length > 0);
   if (runApex) {
-    const level = plan.mode === "all" ? ["--test-level", "RunLocalTests"] : ["--test-level", "RunSpecifiedTests", ...plan.apex.flatMap((t) => ["--tests", t])];
+    const level = plan.mode === "all" && !plan.apex.length ? ["--test-level", "RunLocalTests"] : ["--test-level", "RunSpecifiedTests", ...plan.apex.flatMap((t) => ["--tests", t])];
     const id = io.sf(["apex", "run", "test", "-o", alias, ...level, "--code-coverage"]).testRunId;
     for (let i = 0; i < maxPolls; i++) {
       const items = io.sf(["data", "query", "-o", alias, "-q", `SELECT Id, Status, ApexClass.Name FROM ApexTestQueueItem WHERE ParentJobId = '${id}'`]).records || [];
@@ -186,6 +192,9 @@ export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs
     const final = io.sf(["apex", "get", "test", "-o", alias, "-i", id, "--code-coverage", ...(outDir ? ["--output-dir", `${outDir}/apex`] : [])], { allowFail: true });
     for (const c of final?.coverage?.coverage || []) state.coverage[c.name] = c.coveredPercent;
     state.orgWide = Number(String(final?.summary?.orgWideCoverage || "").replace("%", "")) || null;
+    // a full run judges this repo's code (plan.code), not the org's: production's own classes are in the org too
+    const mine = (final?.coverage?.coverage || []).filter((c) => plan.mode === "all" && plan.code?.includes(c.name) && Number(c.totalLines) > 0);
+    if (mine.length) state.orgWide = Math.round((100 * mine.reduce((n, c) => n + Number(c.totalCovered || 0), 0)) / mine.reduce((n, c) => n + Number(c.totalLines), 0));
   }
   if (plan.flows.length) {
     state.phase = "flows"; onProgress(state);
@@ -209,17 +218,17 @@ export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs
   return state;
 }
 
-/** Pass or fail, and why. Relevant runs gate the changed code's own coverage; full runs gate org-wide coverage. */
+/** Pass or fail, and why. Relevant runs gate the changed code's own coverage; full runs gate the coverage of this repo's code (plan.code; org-wide when unknown). */
 export function verdict(state, { plan, changedCode = [], min = 75 }) {
   const reasons = [];
   const apexPlanned = plan.mode === "all" || plan.apex.length > 0;
   if (apexPlanned && !state.apex.finished) reasons.push("the Apex tests did not finish in time");
   if (plan.mode === "all" && state.apex.finished && state.apex.ran === 0) reasons.push("no Apex tests ran in a full run");
   if (plan.flows.length && !state.flows.finished) reasons.push("the Flow tests did not finish in time");
-  if (plan.mode === "all" && state.apex.ran > 0 && state.orgWide === null) reasons.push("org-wide coverage is unknown");
+  if (plan.mode === "all" && state.apex.ran > 0 && state.orgWide === null) reasons.push("coverage is unknown (this repo's code)");
   if (state.apex.failed) reasons.push(`${state.apex.failed} Apex test(s) failed`);
   if (state.flows.failed) reasons.push(`${state.flows.failed} Flow test(s) failed`);
-  if (plan.mode === "all" && state.orgWide !== null && state.orgWide < min) reasons.push(`org-wide coverage ${state.orgWide}% is below ${min}%`);
+  if (plan.mode === "all" && state.orgWide !== null && state.orgWide < min) reasons.push(`coverage of this repo's code ${state.orgWide}% is below ${min}%`);
   if (plan.mode === "relevant") {
     for (const c of changedCode) {
       const pct = state.coverage[c];
