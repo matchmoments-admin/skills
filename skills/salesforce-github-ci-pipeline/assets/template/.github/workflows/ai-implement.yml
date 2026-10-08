@@ -36,6 +36,7 @@ jobs:
     # The agent can run code in this job, and later steps run in the same runner: so this job's token cannot post
     # verdicts (statuses) or start workflows (actions). Those happen in a separate job after it (the trust model).
     permissions:
+      actions: read         # the org lane checks whether the holder's run has ended (lane.mjs)
       contents: write       # the org's lane (refs/locks) and the event log; pushes go as the pipeline App
       pull-requests: write
       issues: write

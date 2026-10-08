@@ -1505,9 +1505,11 @@ test("a story made from a spec carries the whole spec to every agent; blockers m
   assert.match(src, /Part of spec #\(\\d\+\)/, "pipe tracker story adds the spec");
 
   assert.deepEqual(gate.blockersOf("Blocked by #12, #14 and #3.\nBlocked by #12"), [12, 14, 3]);
-  const gh = (state, merged) => (a) => (a[0] === "issue" ? { state } : a[0] === "pr" ? (merged ? [{ number: 1 }] : []) : null);
+  const gh = (state, merged) => (a) => (a[0] === "issue" ? { state } : a[0] === "pr" ? (merged ? [{ headRefName: merged }] : []) : null);
   assert.equal(gate.landedOf(12, gh("OPEN", false)), false, "started (in-sprint) is not landed");
-  assert.equal(gate.landedOf(12, gh("OPEN", true)), true, "its story PR merged");
+  assert.equal(gate.landedOf(12, gh("OPEN", "issue-12")), true, "its story PR merged");
+  assert.equal(gate.landedOf(12, gh("OPEN", "issue-12-region-field")), true, "an older issue-N-slug branch counts too");
+  assert.equal(gate.landedOf(12, gh("OPEN", "issue-123")), false, "issue-123 is not issue-12");
   assert.equal(gate.landedOf(12, gh("CLOSED", false)), true);
   assert.match(gate.blockedMessage([12]), /blocked by #12, which has not merged yet\. Nothing was created/);
   const wf = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
@@ -1780,4 +1782,40 @@ test("reports, report types and dashboards are UI-facing; a review the agent onl
   assert.match(wf, /verdict review "\$PR" --since "\$SINCE"\)" = none \] \|\| exit 0/);
   assert.match(wf, /GH_TOKEN: \$\{\{ steps\.id\.outputs\.token \}\}   # the pipeline's identity/);
   assert.match(wf, /grep -qE 'AI-REVIEW: \(PASS\|CHANGES\)'/);
+});
+
+test("review round 3: a spec revision keeps the spec and its story link; screenshots are found wherever the artifact put them; lanes can see runs", () => {
+  const spec = specs.specComment("### Problem\nslow\n### User stories\n1. As a manager, I want x\n");
+  const pending = specs.pendingComment(spec, { state: "running", what: "Claude is revising the spec" });
+  assert.match(pending, /^<!-- pipeline:spec -->\n⏳ \*\*Now:\*\* Claude is revising the spec\n\n### Spec/);
+  assert.match(pending, /### Problem\nslow/, "the current spec stays readable while Claude revises it");
+  const failed = specs.pendingComment(pending, { state: "failed", what: "Claude could not write the spec" });
+  assert.equal((failed.match(/\*\*(Now|Failed):\*\*/g) || []).length, 1, "one status line, the spec intact");
+  const ctx = plans.planContext([{ author: "app/pipeline", body: failed, created: "1" }], { mark: specs.SPEC_MARK, title: specs.SPEC_TITLE });
+  assert.match(ctx.plan, /^### Spec\n\n### Problem\nslow/, "agents read the spec, not the status line");
+  assert.match(specs.pendingComment(null, { state: "running", what: "x" }), /plan-pending/, "a first spec's placeholder is never read as a spec");
+
+  const made = specs.specComment("### User stories\n1. y\n", { story: 143 });
+  assert.equal(specs.storyOfSpec(made), 143);
+  assert.doesNotMatch(made, /act:story/, "a revision never offers a second story");
+  assert.equal(specs.storyOfSpec(specs.pendingComment(made, { state: "running", what: "x" })), 143, "the link survives the pending status");
+  assert.doesNotMatch(plans.planContext([{ author: "app/pipeline", body: made, created: "1" }], { mark: specs.SPEC_MARK, title: specs.SPEC_TITLE }).plan, /Story:|story:143/);
+
+  assert.equal(verdict.ranAgent(undefined), true, "an API error counts as a round: the limit holds");
+  assert.equal(names.uiFacing(["force-app/main/default/objects/Account/recordTypes/Customer.recordType-meta.xml", "force-app/main/default/objects/Account/webLinks/Map.webLink-meta.xml"]).length, 2);
+
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  assert.match(wf("ui-test"), /D=\$\(find art -type d -name evidence/);
+  assert.match(wf("commands"), /group: card-\$\{\{ github\.event\.issue\.number \}\}/);
+  assert.match(wf("ai-review"), /posted no verdict: tick Run the AI review again" --pr "\$PR"/);
+  // every job that waits in an org lane can see whether the holder's run ended (or a dead holder blocks until the TTL)
+  for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((x) => x.endsWith(".yml"))) {
+    const y = wf(f.replace(/\.yml$/, ""));
+    const workflowLevel = (y.match(/\npermissions:\n((?:  .*\n)+)/) || [])[1] || "";
+    for (const job of y.split(/\n  (?=[a-z-]+:\n)/).slice(1)) {
+      if (!/lane acquire/.test(job)) continue;
+      const own = /\n    permissions:/.test(job) ? job : workflowLevel;   // job-level permissions replace the workflow's
+      assert.match(own, /actions: (read|write)/, `${f}: a job that runs lane acquire needs actions: read`);
+    }
+  }
 });

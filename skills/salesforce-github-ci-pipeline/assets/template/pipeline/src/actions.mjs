@@ -153,7 +153,11 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
       const title = io.gh(["issue", "view", String(number), "--json", "title"])?.title || "";
       let r;
       try { r = makeStory({ gh: appGh, repo: host.repo, spec: number, title, body: spec.body }); }
-      catch (e) { io.gh(["issue", "comment", String(number), "--body", `The story was not made: ${e.message}`]); continue; }
+      catch (e) {   // say why, and untick the box so ticking it again retries
+        io.gh(["issue", "comment", String(number), "--body", `The story was not made: ${e.message}`]);
+        if (spec.id && after) io.gh(["api", "-X", "PATCH", `repos/${host.repo}/issues/comments/${spec.id}`, "-f", `body=${after.replace(/^- \[[xX]\]/gm, "- [ ]")}`]);
+        continue;
+      }
       io.gh(["api", "-X", "PATCH", `repos/${host.repo}/issues/comments/${spec.id}`, "-f", `body=${r.body}`]);
       host.record("stage", { story: String(number), what: r.already ? `story #${r.number} already made` : `made story #${r.number} by @${who}`, state: "running" });
       await cards.newStory(String(number), { spec: true, stage: "story", stories: [r.number] });

@@ -86,7 +86,8 @@ export const fixRunsFor = (runs, pr, currentRunId, agentRan = () => true) =>
   runs.filter((r) => r.display_title === `ai-fix PR #${pr}` && r.status === "completed" && ["success", "failure"].includes(r.conclusion) && String(r.id) !== String(currentRunId) && agentRan(r.id)).length;
 
 /** Did this run's jobs run the agent step? jobs: the run's jobs API list. Pure. */
-export const ranAgent = (jobs) => (jobs || []).some((j) => (j.steps || []).some((s) => /claude-agent/.test(s.name || "") && ["success", "failure"].includes(s.conclusion)));
+// unknown jobs (an API error) count as a round, so the limit always holds
+export const ranAgent = (jobs) => !Array.isArray(jobs) || jobs.some((j) => (j.steps || []).some((s) => /claude-agent/.test(s.name || "") && ["success", "failure"].includes(s.conclusion)));
 
 /** How many AI fix rounds a branch has had, from the commit subjects since its base (the older count). */
 export const fixRounds = (subjects) => subjects.filter((s) => String(s).startsWith(FIX_PREFIX)).length;

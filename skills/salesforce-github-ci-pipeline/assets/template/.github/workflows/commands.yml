@@ -19,6 +19,9 @@ jobs:
   run:
     if: startsWith(github.event.comment.body, '/') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
+    concurrency:
+      group: card-${{ github.event.issue.number }}   # the same queue as card-actions: a /story and a tick never race
+      cancel-in-progress: false
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}

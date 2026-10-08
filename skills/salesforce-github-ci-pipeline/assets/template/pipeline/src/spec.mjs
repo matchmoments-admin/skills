@@ -5,7 +5,7 @@
 // by hand only when one slice cannot pass the production validation alone (docs/agents/salesforce.md, "Stories").
 // Pure, except makeStory(), which acts through the gh seam.
 import { checklist } from "./actions.mjs";
-import { planContext } from "./plan.mjs";
+import { planContext, PENDING } from "./plan.mjs";
 
 export const SPEC_MARK = "<!-- pipeline:spec -->";
 export const SPEC_TITLE = "Spec";
@@ -14,9 +14,11 @@ const MADE = /<!-- story:(\d+) -->/;
 /** How many open questions the spec still has. Pure. */
 export const openQuestions = (text) => (String(text).match(/### Open questions\s*\n([\s\S]*?)(\n###\s|$)/i)?.[1] || "").split("\n").filter((l) => /^\s*\d+[.)]\s+\S/.test(l)).length;
 
-/** The spec comment: Claude's spec, then what to do next. With open questions, making the story is an explicit choice. */
-export function specComment(text) {
+/** The spec comment: Claude's spec, then what to do next. With open questions, making the story is an explicit choice.
+ *  story: the story already made from this spec (a revision keeps the link and offers no second story). */
+export function specComment(text, { story = null } = {}) {
   const questions = openQuestions(text);
+  if (story) return [SPEC_MARK, `### ${SPEC_TITLE}`, "", String(text).trim(), "", `<!-- story:${story} -->`, `**Story:** #${story}. This is the revised spec: everyone working on the story reads this version.`].join("\n");
   return [SPEC_MARK, `### ${SPEC_TITLE}`, "", String(text).trim(), "",
     questions ? `**Next:** answer the ${questions === 1 ? "question" : `${questions} questions`} in a comment, then comment **/spec** to revise it. Or make the story now: the spec's assumed answers then stand.` : "**Next:** check it; if it is right, make it a story (or reply with changes and comment **/spec**).",
     "", ...checklist([questions ? "story-anyway" : "story"])].join("\n");
@@ -76,10 +78,20 @@ export function storyBody(t, { spec, blockers = [] }) {
     "", `Part of spec #${spec}.`].join("\n");
 }
 
-/** What Claude is doing, in the spec comment itself (replaced when its output lands). */
-export function pendingComment(mark, title, { state, what, url }) {
-  return [mark, `### ${title}`, "", `${state === "failed" ? "❌ **Failed:**" : "⏳ **Now:**"} ${what}${url ? ` · **[${state === "failed" ? "see what went wrong" : "watch it live"}](${url})**` : ""}`].join("\n");
+/** What Claude is doing, in the spec comment itself. A first spec: a placeholder (never read as a spec). A revision:
+ *  the status line on top of the current spec, which stays readable (and its story link kept) until the new one lands,
+ *  and stays as it was if the run fails. existing: the spec comment's body now, or null. */
+export function pendingComment(existing, { state, what, url }) {
+  const line = `${state === "failed" ? "❌ **Failed:**" : "⏳ **Now:**"} ${what}${url ? ` · **[${state === "failed" ? "see what went wrong" : "watch it live"}](${url})**` : ""}`;
+  const current = String(existing || "").includes(SPEC_MARK) && !String(existing).includes(PENDING)
+    ? String(existing).replace(SPEC_MARK, "").replace(/^(⏳ \*\*Now:\*\*|❌ \*\*Failed:\*\*).*\n*/m, "").trim() : null;
+  return current ? [SPEC_MARK, line, "", current].join("\n") : [SPEC_MARK, PENDING, `### ${SPEC_TITLE}`, "", line].join("\n");
 }
+
+/** The spec comment's body now (the latest one with the marker), from the issue's comments. */
+export const currentSpec = (comments) => [...comments].reverse().find((c) => String(c.body || "").includes(SPEC_MARK))?.body || null;
+/** The story already made from this spec, if any. */
+export const storyOfSpec = (body) => Number(String(body || "").match(MADE)?.[1]) || null;
 
 /** The file Claude reads to write (or revise) a spec: the issue, the latest spec and the answers since. */
 export async function specFile(tracker, key) {

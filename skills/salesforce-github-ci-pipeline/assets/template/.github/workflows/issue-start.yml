@@ -8,6 +8,7 @@ on:
   repository_dispatch:
     types: [jira-start]
 permissions:
+  actions: read         # the org lane checks whether the holder's run has ended (lane.mjs)
   contents: write
   issues: write
   pull-requests: read   # the story card reads checks and verdicts

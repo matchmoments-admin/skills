@@ -294,19 +294,17 @@ const commands = {
     return say(`card updated for ${key}`);
   },
   "story base": async () => say(names.baseFor({ labels: (await tracker.story(arg(0))).labels, openReleaseBranch: host.openRelease() })),   // as /start: hotfix -> main, else the sprint
-  // ---- specs (bigger work): Claude writes the spec, splits it, a person approves the breakdown (pipeline/src/spec.mjs)
+  // ---- specs (bigger work): Claude writes the spec; a person makes it a story (pipeline/src/spec.mjs)
   "spec context": async () => { writeFileSync(flag("out"), await specs.specFile(tracker, arg(0)) + "\n" + pack.packForCheckout(io, { text: (await tracker.story(arg(0))).body, log })); return say(`wrote ${flag("out")}`); },
-  "spec pending": async () => { await tracker.card(arg(0), specs.pendingComment(specs.SPEC_MARK, specs.SPEC_TITLE, { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl }), specs.SPEC_MARK); return say("pending"); },
-  "spec post": async () => { await tracker.card(arg(0), specs.specComment(readFileSync(flag("file"), "utf8")), specs.SPEC_MARK); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true }); await cards.newStory(arg(0), { spec: true, stage: "spec" }); return say(`spec on #${arg(0)}`); },
-  "story blockers": async () => {
-    // before a story's branch and org exist: have the stories blocking it merged? If not, nothing is created
-    const waiting = gate.blockersOf((await tracker.story(arg(0))).body).filter((n) => !gate.landedOf(n, io.gh));
-    output({ ok: !waiting.length, waiting: waiting.join(" ") });
-    if (!waiting.length) return say("no unmerged blockers");
-    io.gh(["issue", "edit", arg(0), "--remove-label", "start"], { allowFail: true });
-    io.gh(["issue", "comment", arg(0), "--body", gate.blockedMessage(waiting)]);
-    await cards.newStory(arg(0));   // the card offers Start again
-    return say(`blocked by ${waiting.join(", ")}`);
+  "spec pending": async () => { await tracker.card(arg(0), specs.pendingComment(specs.currentSpec(await tracker.comments(arg(0)).catch(() => [])), { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl }), specs.SPEC_MARK); return say("pending"); },
+  "spec post": async () => {   // a revision of a spec already made into a story keeps its link and offers no second story
+    const story = specs.storyOfSpec(specs.currentSpec(await tracker.comments(arg(0)).catch(() => []))); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true });
+    await tracker.card(arg(0), specs.specComment(readFileSync(flag("file"), "utf8"), { story }), specs.SPEC_MARK); await cards.newStory(arg(0), { spec: true, stage: story ? "story" : "spec", stories: [story].filter(Boolean) }); return say(`spec on #${arg(0)}`); },
+  "story blockers": async () => {   // before a branch and org exist: blockers merged? A failed check lets it start (the gate checks at merge)
+    let waiting = []; try { waiting = gate.blockersOf((await tracker.story(arg(0))).body).filter((n) => !gate.landedOf(n, io.gh)); } catch (e) { log(`::warning::blockers not checked (${e.message}): starting; the gate still checks them at merge`); }
+    output({ ok: !waiting.length, waiting: waiting.join(" ") }); if (!waiting.length) return say("no unmerged blockers");
+    io.gh(["issue", "edit", arg(0), "--remove-label", "start"], { allowFail: true }); io.gh(["issue", "comment", arg(0), "--body", gate.blockedMessage(waiting)]);
+    await cards.newStory(arg(0)); return say(`blocked by ${waiting.join(", ")}`);   // the card offers Start again
   },
   "story new": async () => { await cards.newStory(arg(0), { spec: has("spec") }); return say(`card for new ${has("spec") ? "spec" : "story"} ${arg(0)}`); },
   "pr card": async () => {

@@ -186,7 +186,7 @@ jobs:
           case "$V" in
             pass)    node pipeline/bin/pipe.mjs status set pipeline/ai-review success "$HEAD" "AI review passed" --pr "$PR"; gh pr edit "$PR" --add-label review:pass ;;
             changes) node pipeline/bin/pipe.mjs status set pipeline/ai-review failure "$HEAD" "AI review asks for changes" --pr "$PR"; gh pr edit "$PR" --add-label review:changes ;;
-            *)       node pipeline/bin/pipe.mjs status set pipeline/ai-review error "$HEAD" "the review posted no verdict"; echo "::warning::no verdict" ;;
+            *)       node pipeline/bin/pipe.mjs status set pipeline/ai-review error "$HEAD" "the review posted no verdict: tick Run the AI review again" --pr "$PR"; echo "::warning::no verdict" ;;
           esac
       - name: Merge now if a person already approved
         env:

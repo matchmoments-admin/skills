@@ -57,6 +57,7 @@ jobs:
     # The agent can run code in this job, and later steps run in the same runner: so this job's token cannot post
     # verdicts (statuses) or start workflows (actions). Those happen in a separate job after it (the trust model).
     permissions:
+      actions: read         # the org lane checks whether the holder's run has ended (lane.mjs)
       contents: write       # the org's lane (refs/locks) and the event log; pushes go as the pipeline App
       pull-requests: write
       issues: write
@@ -162,6 +163,7 @@ jobs:
     if: always() && github.event_name == 'workflow_dispatch' && ((inputs.mode == 'ai' && needs.write.result != 'skipped') || inputs.mode == 'run')
     runs-on: ubuntu-latest
     permissions:
+      actions: read         # the org lane checks whether the holder's run has ended (lane.mjs)
       contents: write       # the org's lane only (a ref under refs/locks/); the spec step never sees a token
       pull-requests: read
     timeout-minutes: 70   # 45 of them may be waiting for the story org's lane
@@ -281,7 +283,11 @@ jobs:
         id: evidence
         if: env.OUTCOME == 'success' && vars.UI_EVIDENCE == 'true' && env.HAS_SPEC == 'true'
         continue-on-error: true   # no screenshots never fails the verdict
-        run: node pipeline/bin/pipe.mjs evidence publish --key "$KEY" --pr "$PR" --sha "$HEAD_SHA" --dir art/ui-out/evidence --org-url "$ORG_URL"
+        run: |
+          # the artifact's root is the uploaded folders' common parent: art/ui-out/evidence, or art/evidence when ui-out
+          # was the only folder (a clean pass leaves no report or results). Look, don't assume.
+          D=$(find art -type d -name evidence 2>/dev/null | head -1)
+          node pipeline/bin/pipe.mjs evidence publish --key "$KEY" --pr "$PR" --sha "$HEAD_SHA" --dir "${D:-art/ui-out/evidence}" --org-url "$ORG_URL"
       - name: Why did it fail? (Jev triage)
         id: triage
         if: env.OUTCOME == 'failure' && vars.AI_TRIAGE == 'true'

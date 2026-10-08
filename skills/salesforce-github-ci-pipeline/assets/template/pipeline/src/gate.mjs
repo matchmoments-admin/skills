@@ -252,7 +252,9 @@ export const blockersOf = (body) => [...new Set([...String(body || "").matchAll(
 export function landedOf(n, gh) {
   const i = gh(["issue", "view", String(n), "--json", "state"], { allowFail: true });
   if (!i || i.state === "CLOSED") return true;
-  return (gh(["pr", "list", "--head", `issue-${n}`, "--state", "merged", "--limit", "1", "--json", "number"], { allowFail: true }) || []).length > 0;
+  // merged PRs whose head is this story's branch: issue-N, or the older issue-N-slug (storyOf reads both)
+  return (gh(["pr", "list", "--state", "merged", "--search", `head:issue-${n}`, "--limit", "20", "--json", "headRefName"], { allowFail: true }) || [])
+    .some((p) => storyOf(p.headRefName) === String(n));
 }
 
 /** What a story blocked at Start says (the issue comment). Pure. */
