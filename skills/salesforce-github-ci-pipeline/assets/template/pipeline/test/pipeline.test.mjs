@@ -1829,3 +1829,9 @@ test("the review rubric: the UI test spec comes after the review; answers win ov
   assert.match(r, /written by the UI test step \*\*after\*\* this review, so its absence here is never a\nfinding/);
   assert.match(r, /win over the spec text/);
 });
+
+test("the reviewer's rules come from main (a PR cannot soften its own review)", () => {
+  const wf = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
+  assert.match(wf, /sparse-checkout: "pipeline\\nscripts\\nconfig\\n\.github\/actions\\nREVIEW\.md\\nCLAUDE\.md\\ndocs\/agents"/);
+  assert.match(wf, /following \.pipeline\/REVIEW\.md, \.pipeline\/CLAUDE\.md and \.pipeline\/docs\/agents\/salesforce\.md/);
+});
