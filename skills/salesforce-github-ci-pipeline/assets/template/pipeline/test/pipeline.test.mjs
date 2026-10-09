@@ -2425,6 +2425,9 @@ test("UI tests run main's harness (e2e/support), never a story branch's older co
   const wf = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
   assert.equal((wf.match(/cp -R \.pipeline\/e2e\/support e2e\/support/g) || []).length, 2);
   assert.equal((wf.match(/sparse-checkout: "[^"]*\\ne2e\/support[^"]*"/g) || []).length, 2, "both jobs check out main's e2e/support");
+  // story #166: the UI agent's commit carried main's login.ts onto the branch, and the skill check then failed there
+  const hides = /update-index --skip-worktree\n\s+echo "e2e\/support\/" >> \.git\/info\/exclude\n\s+rm -rf e2e\/support && cp -R/g;
+  assert.equal((wf.match(hides) || []).length, 2, "both copies are hidden from git first");
 });
 
 test("agents read main's docs/agents, hidden from git (story #166: the branch's copy lacked the dashboard-iframe fact)", () => {
