@@ -25,7 +25,7 @@ jobs:
       tested: ${{ steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.current.outputs.superseded != 'true' }}
     steps:
       - uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ne2e/support", persist-credentials: false }
       - name: The open sprint
         id: ctx
         working-directory: .pipeline
@@ -69,8 +69,14 @@ jobs:
       - name: Drop production access before running the branch's specs
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         run: |
+          # loginAs reads these: once the Dev Hub is logged out, `sf org display` fails
+          sf org display -o staging --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}"
+      - name: The test harness from main (login, personas, evidence), not the release branch's copy
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        working-directory: candidate
+        run: rm -rf e2e/support && cp -R ../.pipeline/e2e/support e2e/support
       - uses: ./.pipeline/.github/actions/playwright
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
         env:

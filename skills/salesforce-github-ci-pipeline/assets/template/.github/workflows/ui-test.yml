@@ -119,7 +119,10 @@ jobs:
           sf org display -o "$ALIAS" --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --out "$RUNNER_TEMP/story.md"
       - name: The test harness from main (login, personas, evidence), not the story branch's copy
-        run: rm -rf e2e/support && cp -R .pipeline/e2e/support e2e/support
+        run: |   # hidden from git, so the agent's commit never carries main's copy onto the story branch
+          git ls-files -z e2e/support | xargs -0 -r git update-index --skip-worktree
+          echo "e2e/support/" >> .git/info/exclude
+          rm -rf e2e/support && cp -R .pipeline/e2e/support e2e/support
       - uses: ./.pipeline/.github/actions/playwright
       - uses: ./.pipeline/.github/actions/claude-agent
         env:
@@ -234,7 +237,10 @@ jobs:
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}" "$RUNNER_TEMP/ci.key"
       - name: The test harness from main (login, personas, evidence), not the story branch's copy
-        run: rm -rf e2e/support && cp -R .pipeline/e2e/support e2e/support
+        run: |   # hidden from git, like the write job's copy
+          git ls-files -z e2e/support | xargs -0 -r git update-index --skip-worktree
+          echo "e2e/support/" >> .git/info/exclude
+          rm -rf e2e/support && cp -R .pipeline/e2e/support e2e/support
       - uses: ./.pipeline/.github/actions/playwright
         if: steps.spec.outputs.exists == 'true'
       - name: Run the committed spec
