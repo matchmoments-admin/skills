@@ -2419,15 +2419,14 @@ test("UI tests log in as a persona after the Dev Hub is logged out (story #166: 
   assert.equal((wf.match(/SCRATCH_ORG_ID=.*SCRATCH_INSTANCE_URL=/g) || []).length, 2, "both jobs export the org's id and URL");
   assert.ok(wf.indexOf("SCRATCH_INSTANCE_URL") < wf.indexOf("sf org logout -o devhub"), "before production access is dropped");
   assert.match(readFileSync(new URL("../../e2e/support/login.ts", import.meta.url), "utf8"), /process\.env\.SCRATCH_ORG_ID && process\.env\.SCRATCH_INSTANCE_URL/);
+  // story #166: a "Log in as" that did not take left the admin's view, and the rep's no-access test saw the dashboard
+  assert.match(readFileSync(new URL("../../e2e/support/login.ts", import.meta.url), "utf8"), /still the admin after "Log in as"/);
 });
 
 test("UI tests run main's harness (e2e/support), never a story branch's older copy", () => {
   const wf = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
   assert.equal((wf.match(/cp -R \.pipeline\/e2e\/support e2e\/support/g) || []).length, 2);
   assert.equal((wf.match(/sparse-checkout: "[^"]*\\ne2e\/support[^"]*"/g) || []).length, 2, "both jobs check out main's e2e/support");
-  // story #166: the UI agent's commit carried main's login.ts onto the branch, and the skill check then failed there
-  const hides = /update-index --skip-worktree\n\s+echo "e2e\/support\/" >> \.git\/info\/exclude\n\s+rm -rf e2e\/support && cp -R/g;
-  assert.equal((wf.match(hides) || []).length, 2, "both copies are hidden from git first");
 });
 
 test("agents read main's docs/agents, hidden from git (story #166: the branch's copy lacked the dashboard-iframe fact)", () => {

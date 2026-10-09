@@ -109,7 +109,10 @@ export async function loginAs(
   // CI passes the org's id and URL: the Dev Hub is logged out before spec code runs, and `sf org display` needs it
   const org =
     process.env.SCRATCH_ORG_ID && process.env.SCRATCH_INSTANCE_URL
-      ? { id: process.env.SCRATCH_ORG_ID, instanceUrl: process.env.SCRATCH_INSTANCE_URL }
+      ? {
+          id: process.env.SCRATCH_ORG_ID,
+          instanceUrl: process.env.SCRATCH_INSTANCE_URL
+        }
       : sfJson(["org", "display", "-o", alias]);
   const orgId = String(org.id).slice(0, 15).toLowerCase();
   const sets = (persona.permsets || [])
@@ -233,14 +236,31 @@ export async function loginAs(
   await login(page);
   // "Log in as" lives on the classic domain (the org's instance URL), not the Lightning one; it redirects a few times
   const su = `${String(org.instanceUrl).replace(/\/$/, "")}/servlet/servlet.su?oid=${org.id}&suorgadminid=${id}&retURL=%2F&targetURL=%2Flightning%2Fpage%2Fhome`;
-  try {
-    await page.goto(su);
-  } catch (e) {
-    if (!String(e).includes("ERR_ABORTED")) throw e;
-    await page.waitForLoadState("load");
+  // Salesforce's banner names the persona once "Log in as" took. Without it the page is still the admin's, and a
+  // test of what the persona may NOT see would pass on the admin's view (story #166): check, retry once, else fail.
+  const banner = page.getByText(username, { exact: false }).first();
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await page.goto(su);
+    } catch (e) {
+      if (!String(e).includes("ERR_ABORTED")) throw e;
+      await page.waitForLoadState("load");
+    }
+    await expect(page.getByRole("navigation").first()).toBeVisible({
+      timeout: 60_000
+    });
+    const isPersona = await banner
+      .waitFor({ state: "visible", timeout: 15_000 })
+      .then(
+        () => true,
+        () => false
+      );
+    if (isPersona) break;
+    if (attempt === 2)
+      throw new Error(
+        `loginAs: still the admin after "Log in as" ${username} (no "Logged in as" banner)`
+      );
+    await page.waitForTimeout(5_000); // a user just reactivated may not be ready to log in as
   }
-  await expect(page.getByRole("navigation").first()).toBeVisible({
-    timeout: 60_000
-  });
   return { username };
 }
