@@ -163,21 +163,8 @@ jobs:
           JOB: ${{ steps.prod.outputs.job }}
           TREE: ${{ steps.cand.outputs.tree }}
           SHA: ${{ steps.merge.outputs.sha }}
-        run: |
-          for step in $AFTER; do
-            case "$step" in
-              staging) gh workflow run staging-deploy.yml --ref "$BASE" ;;      # on the release branch, so the check lands on the release PR's head
-              release) gh workflow run release.yml --ref main -f sha="$SHA" -f validated_job="$JOB" -f validated_tree="$TREE" ;;   # quick-deploys only that exact tree
-              backmerge) gh workflow run back-merge.yml --ref main ;;   # a workflow fix reaches the open sprint's release branch
-            esac
-          done
-          node pipeline/bin/pipe.mjs pr card "$PR"
-          for step in $AFTER; do
-            case "$step" in
-              delete-story-org) [ -z "$STORY" ] || node pipeline/bin/pipe.mjs org remove "story:$STORY" || echo "::warning::could not delete the story org; the janitor will";;
-              staging) [[ ! "$STORY" =~ ^[0-9]+$ ]] || gh issue edit "$STORY" --add-label in-sprint >/dev/null 2>&1 || true ;;   # the list shows it: merged, ships with the release
-            esac
-          done
+        # the release quick-deploys only the exact tree validated above (job and tree); the same command as an emergency merge
+        run: node pipeline/bin/pipe.mjs start followups --after "$AFTER" --pr "$PR" --base "$BASE" --sha "$SHA" --job "$JOB" --tree "$TREE" --story "$STORY"
       - name: Nothing waiting behind this one is lost (GitHub cancels all but the newest queued run in a group)
         if: always() && steps.merge.outcome != 'skipped' && needs.decide.outputs.lock == 'main'
         env:

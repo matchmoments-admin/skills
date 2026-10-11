@@ -1,7 +1,7 @@
 // Close-out after a production release (see GLOSSARY.md). plan() is pure; gather() reads GitHub and git;
 // apply() acts through the tracker and the org registry.
 import { storyOf, sprintOf, releaseBranch, setting } from "./conventions.mjs";
-import { approverOf, lastPusherOf } from "./gate.mjs";
+import { approverOf, gather as gateGather, standing, TRUSTED_STATUS_CREATORS } from "./gate.mjs";
 
 /**
  * Inputs:
@@ -61,11 +61,11 @@ export async function gather({ gh, git }, tracker, { sha = "HEAD", previous = nu
 }
 
 /** Safe to run again after a partial failure: closed stories, deleted orgs and branches are skipped. */
-export async function apply(p, { tag, tracker, orgs, git, gh, cards = null, log = console.error, now = new Date() }) {
+export async function apply(p, { tag, tracker, orgs, git, gh, ghPages = null, cards = null, log = console.error, now = new Date() }) {
   // the delivery record first (while the release branch, its PRs and statuses are all still there); best effort
-  if (gh) {
+  if (gh && ghPages) {
     for (const key of [...p.ship, ...p.hotfix.map((h) => h.key)]) {
-      try { await tracker.card(key, deliveryRecord(gatherDelivery(key, gh, { tag, sprint: p.hotfix.some((h) => h.key === key) ? null : p.sprint, now })), DELIVERY_MARK, DELIVERY_TITLE); }
+      try { await tracker.card(key, deliveryRecord(gatherDelivery(key, { gh, ghPages }, { tag, sprint: p.hotfix.some((h) => h.key === key) ? null : p.sprint, now })), DELIVERY_MARK, DELIVERY_TITLE); }
       catch (e) { log(`::warning::no delivery record for ${key}: ${e.message}`); }
     }
   }
@@ -114,50 +114,40 @@ export const DELIVERY_TITLE = "Delivery record";
 const hoursBetween = (a, b) => (a && b ? Math.round(((new Date(b) - new Date(a)) / 3600e3) * 10) / 10 : null);
 
 /**
- * What a shipped story's trail says, from GitHub (gh: the gh seam): who approved and when, the AI review or the
- * person who overruled it (the full reason, from their PR comment), the UI test and its evidence, the UAT sign-off,
- * the production validation, and the timeline. sprint: null for a hotfix (its own PR went to main). Fields it cannot
- * find stay null.
+ * What a shipped story's trail says, from GitHub (io: the gh and ghPages seams): who approved and when, the AI review or
+ * the person who overruled it (the full reason, from their PR comment), the UI test and its evidence, the UAT sign-off,
+ * the production validation, and the timeline. Approval and verdicts come from the gate's own Standing (gate.standing on
+ * gate.gather of the merged PR), so the record says exactly what the gate accepted: trusted statuses only, an earlier
+ * review only if nothing but specs changed since, never a refused approver. sprint: null for a hotfix. Fields it
+ * cannot find stay null.
  */
-export function gatherDelivery(key, gh, { tag, sprint = null, now = new Date(), repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY }) {
+export function gatherDelivery(key, io, { tag, sprint = null, now = new Date(), repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY }) {
+  const { gh } = io;
   const api = (path) => gh(["api", path], { allowFail: true });
-  const statusesOf = (sha) => (api(`repos/${repo}/commits/${sha}/statuses?per_page=100`) || []);
   const latest = (sts, context) => sts.filter((s) => s.context === context).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0] || null;
   const issue = gh(["issue", "view", String(key), "--json", "title,body,createdAt"], { allowFail: true }) || {};
-  const pr = (gh(["pr", "list", "--state", "merged", "--search", `head:issue-${key}`, "--limit", "20", "--json", "number,headRefName,headRefOid,createdAt,mergedAt,commits"], { allowFail: true }) || [])
+  const pr = (gh(["pr", "list", "--state", "merged", "--search", `head:issue-${key}`, "--limit", "20", "--json", "number,headRefName,headRefOid,createdAt,mergedAt"], { allowFail: true }) || [])
     .filter((x) => storyOf(x.headRefName) === String(key)).sort((a, b) => String(b.mergedAt).localeCompare(String(a.mergedAt)))[0];
   if (!pr) throw new Error(`no merged pull request for story ${key}`);
-  const sts = statusesOf(pr.headRefOid);
-  const reviews = (api(`repos/${repo}/pulls/${pr.number}/reviews?per_page=100`) || []).filter((r) => r.user?.type === "User" && r.state === "APPROVED")
-    .sort((a, b) => String(b.submitted_at).localeCompare(String(a.submitted_at)));
-  const signoff = latest(sts, "pipeline/sign-off");
-  const approved = reviews[0] ? { by: reviews[0].user.login, at: reviews[0].submitted_at, how: "approved the pull request" }
-    : signoff?.state === "success" ? { by: String(signoff.description).match(/@([A-Za-z0-9-]+)/)?.[1] || null, at: signoff.created_at, how: "ticked Sign off" } : null;
-  // The review sits on the commit it judged: later spec-only commits (the UI tester's) carry none (story #166). An
-  // earlier review counts only if everything since it is under e2e/, the gate's own rule (verdictFor).
-  const specsOnlySince = (sha) => (api(`repos/${repo}/compare/${sha}...${pr.headRefOid}`)?.files || [null]).every((f) => f?.filename?.startsWith("e2e/"));
-  const earlier = () => {
-    for (const c of [...(pr.commits || [])].reverse().slice(1)) {
-      const r = latest(statusesOf(c.oid), "pipeline/ai-review");
-      if (r) return specsOnlySince(c.oid) ? r : null;
-    }
-    return null;
-  };
-  const review = latest(sts, "pipeline/ai-review") || earlier();
+  const facts = gateGather(String(pr.number), io);
+  const st = standing(facts);
+  const a = st.approval.who?.[0] || null;
+  const approved = a ? { by: a.login, at: a.at, how: a.how } : null;
+  const review = ["missing", "stale"].includes(st.review.state) ? null : st.review;
   const overruled = /overruled by @([A-Za-z0-9-]+)/.exec(review?.description || "");
   const reason = overruled ? (api(`repos/${repo}/issues/${pr.number}/comments?per_page=100`) || []).map((c) => String(c.body || ""))
     .reverse().find((b) => b.startsWith(`✋ @${overruled[1]} accepted this change`))?.replace(/^.*?`[0-9a-f]{7}`: /s, "").replace(/\. A new push needs a review again\.$/, "") : null;
-  const ui = latest(sts, "pipeline/ui-test");
+  const ui = ["missing", "stale"].includes(st.ui.state) ? null : st.ui;
   // the release (or, for a hotfix, the PR itself): UAT sign-off and the production validation's deploy id
   const rel = sprint ? (gh(["pr", "list", "--head", releaseBranch(sprint), "--base", "main", "--state", "merged", "--json", "number,headRefOid,mergedAt"], { allowFail: true }) || [])[0] : { headRefOid: pr.headRefOid, mergedAt: pr.mergedAt };
-  const uat = rel ? latest(statusesOf(rel.headRefOid), "pipeline/uat") : null;
+  const uat = rel ? latest((api(`repos/${repo}/commits/${rel.headRefOid}/statuses?per_page=100`) || []).filter((s) => TRUSTED_STATUS_CREATORS.includes(s.creator?.login)), "pipeline/uat") : null;
   const validation = rel ? (api(`repos/${repo}/commits/${rel.headRefOid}/check-runs?per_page=100`)?.check_runs || []).filter((c) => c.name === "Production validation" && c.conclusion === "success")
     .map((c) => String(c.output?.summary || "").match(/`(0Af[A-Za-z0-9]+)`/)?.[1]).find(Boolean) : null;
   return {
     key: String(key), title: issue.title || "", tag, sprint, pr: pr.number,
-    approver: approverOf(issue.body), lastPusher: lastPusherOf(pr.commits || []), approved,
+    approver: approverOf(issue.body), lastPusher: facts.lastPusher, approved,
     review: review ? { state: review.state, overruledBy: overruled?.[1] || null, reason, text: review.description || "" } : null,
-    ui: ui ? { state: ui.state, url: ui.target_url || null } : null,
+    ui: ui ? { state: ui.state, url: ui.url || null } : null,
     uat: uat?.state === "success" ? String(uat.description || "").match(/@([A-Za-z0-9-]+)/)?.[1] || "signed off" : null,
     validation,
     timeline: { storyOpened: issue.createdAt || null, prOpened: pr.createdAt, approved: approved?.at || null, merged: pr.mergedAt, released: rel?.mergedAt || null, closedOut: new Date(now).toISOString() },

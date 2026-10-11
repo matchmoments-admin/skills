@@ -57,13 +57,8 @@ jobs:
         with: { ref: main, fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
-      - name: "Agent guidance from main (docs/agents), not the branch's copy"
-        run: |   # hidden from git, so an agent's commit never carries main's copy onto the story branch
-          git ls-files -z docs/agents | xargs -0 -r git update-index --skip-worktree
-          echo "docs/agents/" >> .git/info/exclude
-          rm -rf docs/agents && mkdir -p docs && cp -R .pipeline/docs/agents docs/agents
       - name: Names for this story
         id: ctx
         run: |
@@ -116,6 +111,8 @@ jobs:
         run: |
           node .pipeline/pipeline/bin/pipe.mjs org ready "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}   # attaches, or rebuilds an expired org
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --base "origin/$BASE" --out "$RUNNER_TEMP/story.md"
+      - name: Main's rules over the branch's copy (CLAUDE.md, REVIEW.md, docs/agents), hidden from git
+        run: node .pipeline/pipeline/bin/pipe.mjs harness overlay implement   # after the branch is checked out and up to date
       - run: npm install --no-audit --no-fund --ignore-scripts   # the production key is still on disk here: no install scripts
       - uses: ./.pipeline/.github/actions/claude-agent
         with:
@@ -169,12 +166,18 @@ jobs:
     timeout-minutes: 3
     permissions:
       actions: write
-      pull-requests: read
+      contents: read
+      pull-requests: write  # pipe start review: labels, the "not needed" verdict and the card
+      statuses: write
+      issues: write
+      checks: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       BRANCH: ${{ needs.implement.outputs.branch }}
     steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       - run: |
           gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
-          gh workflow run ai-review.yml --ref main -f pr="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"
+          node pipeline/bin/pipe.mjs start review --pr "$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"   # the review's start decision

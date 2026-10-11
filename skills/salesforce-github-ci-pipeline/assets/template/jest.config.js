@@ -1,7 +1,7 @@
 const { jestConfig } = require('@salesforce/sfdx-lwc-jest/config');
-// e2e/ holds Playwright specs (*.spec.ts); they must never run as LWC unit tests.
+// e2e/ holds Playwright specs (*.spec.ts); they must never run as LWC unit tests. Nor main's copy under .pipeline/.
 module.exports = {
   ...jestConfig,
   modulePathIgnorePatterns: ['<rootDir>/.localdevserver'],
-  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/e2e/']
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/e2e/', '<rootDir>/.pipeline/']
 };

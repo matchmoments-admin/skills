@@ -1,4 +1,4 @@
-import { isPipelineAuthor, setting } from "./conventions.mjs";
+import { isPipelineAuthor, isHumanAuthor, setting } from "./conventions.mjs";
 // What the AI jobs are told to produce, and how the pipeline reads it back. One module owns both sides,
 // so an instruction and its parser cannot drift apart. Pure.
 
@@ -88,7 +88,12 @@ export const fixRunsFor = (runs, pr, currentRunId, agentRan = () => true, since 
 
 /** When a person last pushed to the PR (commits: gh pr view --json commits): rounds count again from there. Pure. */
 // A commit is a person's when one of its authors is neither the pipeline nor Claude (an AI commit's co-author).
-export const lastHumanPush = (commits, isPipeline) => (commits || []).filter((c) => (c.authors || []).some((a) => a.login !== "claude" && !isPipeline(a.login))).map((c) => c.committedDate).sort().pop() || null;
+export const lastHumanPush = (commits, isHuman = isHumanAuthor) => (commits || []).filter((c) => (c.authors || []).some((a) => isHuman(a.login))).map((c) => c.committedDate).sort().pop() || null;
+
+/** How many AI fix rounds PR `pr` has had since a person last pushed (host: the code host; gh: the gh seam). */
+export const fixRoundsUsed = (pr, { host, gh, runId = process.env.GITHUB_RUN_ID }) =>
+  fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), pr, runId, (id) => ranAgent(host.api("GET", `repos/${host.repo}/actions/runs/${id}/jobs`)?.jobs),
+    lastHumanPush(gh(["pr", "view", String(pr), "--json", "commits"])?.commits));   // a person's push resets the count
 
 /** Did this run's jobs run the agent step? jobs: the run's jobs API list. Pure. */
 // unknown jobs (an API error) count as a round, so the limit always holds

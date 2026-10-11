@@ -52,17 +52,5 @@ jobs:
           MERGED_SHA: ${{ github.event.pull_request.merge_commit_sha }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
-        run: |
-          for step in $AFTER; do
-            case "$step" in
-              staging) gh workflow run staging-deploy.yml --ref "$BASE" ;;
-              release) gh workflow run release.yml --ref main -f sha="$MERGED_SHA" ;;   # no validation id: it validates this commit first
-              backmerge) gh workflow run back-merge.yml --ref main ;;   # a workflow fix reaches the open sprint's release branch
-            esac
-          done
-          [ -z "$STORY" ] || node pipeline/bin/pipe.mjs story card "$STORY"
-          for step in $AFTER; do
-            case "$step" in
-              delete-story-org) [ -z "$STORY" ] || node pipeline/bin/pipe.mjs org remove "story:$STORY" || echo "::warning::the janitor will delete it" ;;
-            esac
-          done
+        # no validation id: the release validates this commit first. The same command as the gate's follow-ups.
+        run: node pipeline/bin/pipe.mjs start followups --after "$AFTER" --pr "$PR" --base "$BASE" --sha "$MERGED_SHA" --story "$STORY"

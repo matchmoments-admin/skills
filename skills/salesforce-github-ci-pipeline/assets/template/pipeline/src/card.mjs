@@ -3,7 +3,7 @@
 // same facts and decision the gate uses (gate.gather / gate.evaluate), so the card and the gate cannot disagree.
 // storyCards() puts it on the story and its PR (and moves the board), through the code host and the tracker.
 import { CHECKS, storyBranch, aiFeatures, context, setting, sprintOf, storyOf } from "./conventions.mjs";
-import { latestCheck, verdictFor, approval, requiredVerdicts, evaluate, route, STATUS } from "./gate.mjs";
+import { latestCheck, verdictFor, approval, requiredVerdicts, evaluate, route, standing, checkState, STATUS } from "./gate.mjs";
 import { planContext } from "./plan.mjs";
 import { stageOf, moveCard } from "./board.mjs";
 import { checklist, allowed } from "./actions.mjs";
@@ -12,7 +12,8 @@ export const CARD_TITLE = "Pipeline status";
 export const CARD_MARK = "<!-- pipeline:story-card -->";
 
 const ICON = { done: "✅", running: "⏳", waiting: "⬜", failed: "❌", off: "➖" };
-const stateOf = (c) => (c === "success" || c === "skipped" ? "done" : ["failure", "error", "cancelled", "timed_out"].includes(c) ? "failed" : c === "missing" ? "waiting" : "running");
+// the gate's own reading of a check (gate.checkState), in the card's words
+const stateOf = (c) => ({ passed: "done", failed: "failed", missing: "waiting", running: "running" })[checkState(c)];
 
 /**
  * input: { key, repoUrl, branch, base, ai, pr?, facts?, decision? }
@@ -55,7 +56,7 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
     else rows.push(["off", label, v.context === STATUS.review ? "off: your approval is the review" : "not needed"]);
   }
 
-  const a = approval(ctx, { signOff: base !== "main" });
+  const a = facts ? standing(facts).approval : approval(ctx, { signOff: base !== "main" });   // the route's rule, as the gate applies it
   const approved = merged || a.ok;
   const signOff = base === "main" ? "(Review changes > Approve)" : "(Review changes > Approve), or tick **Sign off** below";
   rows.push([approved ? "done" : "waiting", "Approval", approvalText(a, { merged, prUrl, how: signOff, approver: facts?.storyApprover })]);
@@ -251,7 +252,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
     const pr = host.storyPr(branch);
     const ai = aiFeatures();
     const openRel = host.openRelease();
-    const f = pr ? host.prFacts(pr.number, { openReleaseBranch: openRel, ai }) : null;
+    const f = pr ? host.prFacts(pr.number) : null;
     const planned = Boolean(planContext(await tracker.comments(key).catch(() => [])).plan);
     const releasePr = pr?.state === "MERGED" && openRel ? (host.api("GET", `repos/${host.repo}/pulls?state=open&base=main&head=${host.repo.split("/")[0]}:${openRel}`) || [])[0]?.number || null : null;
     return { branch, pr, ai, facts: f, planned, releasePr, base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
@@ -289,7 +290,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
     /** The card for a pull request, whatever it is: a release PR gets the release card; a story PR its story's. */
     async refreshPr(number, { activity = null, tag = null } = {}) {
       try {
-        const facts = host.prFacts(number, { openReleaseBranch: host.openRelease(), ai: aiFeatures(), uat: setting("UAT_ENABLED") === "true" });
+        const facts = host.prFacts(number);
         const pr = facts.pr;
         if (route(pr) === "release") {
           const stories = await tracker.sprintStories(sprintOf(pr.headRefName)).catch(() => []);
@@ -312,7 +313,7 @@ async function syncBoard({ host, key, pr, facts, shipped, log }) {
   if (!project || !host.hasApp() || !/^\d+$/.test(String(key))) return;
   try {
     const issueNodeId = host.api("GET", `repos/${host.repo}/issues/${key}`)?.node_id;
-    const approved = Boolean(facts && approval({ ...facts, head: pr?.headRefOid }, { signOff: true }).ok);
+    const approved = Boolean(facts && standing(facts).approval.ok);   // a hotfix needs a review, not a sign-off: as the gate
     const stage = stageOf({ pr, approved, shipped });
     await moveCard({ graphql: host.appGraphql, org: host.repo.split("/")[0], project, issueNodeId, stage });
     log(`board: story ${key} -> ${stage}`);

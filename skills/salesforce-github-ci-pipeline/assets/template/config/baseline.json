@@ -11,6 +11,12 @@
     "NamedCredential", "ExternalCredential", "ExternalDataSource", "ExternalServiceRegistration", "RemoteSiteSetting", "CspTrustedSite",
     "PlatformEventChannelMember"
   ],
+  "watch": [
+    "ApprovalProcess", "AssignmentRules", "AutoResponseRules", "EscalationRules", "EntitlementProcess",
+    "StandardValueSet", "PathAssistant", "LightningMessageChannel", "CustomObjectTranslation", "Translations",
+    "Territory2Model", "ExperienceBundle", "Network", "CustomSite", "EmailServicesFunction"
+  ],
+  "_watch_note": "Listed only, never copied: what production has of these appears in the drift PR and the prod-baseline run summary (\"Production has, scratch orgs don't\"). Move a type to types to copy it, or exclude what must not reach a scratch org.",
   "customisedOnly": ["Layout", "FlexiPage", "CustomApplication", "QuickAction", "ListView", "CompactLayout"],
   "folders": { "Report": "ReportFolder", "Dashboard": "DashboardFolder", "EmailTemplate": "EmailFolder" },
   "exclude": [

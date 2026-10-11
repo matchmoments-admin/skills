@@ -52,6 +52,10 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
 - Every class: positive, negative, permission (refused without the permission set) and bulk (200 records) cases.
 - Mocks: `Test.setMock` for callouts, `Test.loadData` or small factories for data; never mock the database.
 - Flows: a Flow test per path whose triggering record meets the entry criteria; "the Flow does not run" is an Apex test.
+  CI fails a change to an active record-triggered Flow with no Flow test naming it (`pipe tests flow-gaps`, as every
+  Apex class needs tests; exceptions in `config/test-exceptions.json`). Flow coverage from the Apex tests is reported
+  with the test results (`FLOW_COVERAGE_MIN` makes it a minimum). Flow tests never run in a deploy: production's
+  validation runs Apex only, so CI and the staging regression are where Flow tests run.
 
 ## Facts agents got wrong (check these before flagging or "fixing" them)
 

@@ -9,10 +9,15 @@
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
 //   status    set <context> <state> <sha> <description> [--pr N]
 //   verdict   instructions <role> [--key K] · model <role> · review <pr> --since T · rounds --pr N
+//   start     review|fix|ui-test --pr N [--mode ai|run] [--before S --after S]   run the job, or say why not (no runner)
+//             followups --after "a b" --pr N --base B --sha S [--job J --tree T] [--story K]   what starts after a merge
+//   ci        plan --ref R --base B                     which CI jobs need a runner: kind, sf, org, ui, target, all
+//   harness   overlay implement|fix|ui-test|staging [--from DIR]   main's rules and harness over the checkout, hidden
 //   tracker   story <key> [--out file] [--pack [--base B]] · comment <key> <text> · open-sprint <sprint> · assign <key> --sprint S
 //   story     card <key> | --branch B [--base B] [--tag T] [--now "what" [--failed] [--retry "how"]] [--starting]
 //             plan-pending <key> [--failed] · plan-post <key> --file F [--started] · readiness <key>
 //   tests     run <alias> --base B [--sha S] [--all] [--min 75] [--out dir]   relevant (or all) tests, live check run
+//             flow-gaps --base B                        every changed record-triggered Flow has a Flow test
 //   prod      validate [--sha S] [--level L] [--deletions-from REF]   check-only deploy, live; prints the job id
 //   access    check --base B [--out file] [--report-only]  least-privilege access of what changed (blockers fail)
 //   ship      candidate --pr N --base B --sha S --dir D · plan --sha S [--validated-job J --validated-tree T]
@@ -55,9 +60,11 @@ import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
 import * as evidence from "../src/evidence.mjs";
 import * as baseline from "../src/baseline.mjs";
+import * as start from "../src/start.mjs";
+import * as harness from "../src/harness.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -160,7 +167,7 @@ const commands = {
   // ---- the gate
   "gate evaluate": async () => {
     const pr = arg(0);
-    const facts = host.prFacts(pr, { openReleaseBranch: host.openRelease(), ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true" });
+    const facts = host.prFacts(pr);
     const d = gate.evaluate(facts);
     record("gate", { pr: Number(pr), story: d.story, route: d.route, mergeable: d.mergeable, reasons: d.reasons, sha: facts.pr.headRefOid });
     const gs = gate.gateStatus(d);
@@ -184,9 +191,9 @@ const commands = {
     if (!r.ok) throw new Error(r.why);
     return say(`${flag("branch")} can be built towards ${flag("base")}`);
   },
-  "gate ui-needed": () => {
-    const files = (io.git(["diff", "--name-only", `${flag("base", "origin/main")}...${flag("head", "HEAD")}`]) || "").split("\n").filter(Boolean);
-    const ui = names.uiFacing(files);
+  "gate ui-needed": () => {   // fails closed, as the gate does: a diff that cannot be read is UI-facing
+    const out = io.git(["diff", "--name-only", `${flag("base", "origin/main")}...${flag("head", "HEAD")}`], { allowFail: true });
+    const ui = out === null ? ["(the diff failed: assumed)"] : names.uiFacing(out.split("\n").filter(Boolean));
     output({ needed: ui.length > 0 });
     return say(ui.length ? `UI-facing changes: ${ui.join(", ")}` : "no UI-facing changes");
   },
@@ -229,11 +236,27 @@ const commands = {
     return say(v);
   },
   "verdict rounds": () => {   // earlier ai-fix runs of the PR in which Claude ran, since a person last pushed
-    const n = verdict.fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), flag("pr"), process.env.GITHUB_RUN_ID, (id) => verdict.ranAgent(host.api("GET", `repos/${host.repo}/actions/runs/${id}/jobs`)?.jobs),
-      verdict.lastHumanPush(io.gh(["pr", "view", flag("pr"), "--json", "commits"])?.commits, names.isPipelineAuthor));   // a person's push resets the count
+    const n = verdict.fixRoundsUsed(flag("pr"), { host, gh: io.gh });
     output({ rounds: n, limit: verdict.MAX_FIX_ROUNDS, over: n >= verdict.MAX_FIX_ROUNDS });
     return say(String(n));
   },
+  // ---- start decisions: does a job need a runner? (pipeline/src/start.mjs)
+  "start review": () => startCmd("review"),
+  "start fix": () => startCmd("fix"),
+  "start ui-test": () => startCmd("ui-test"),
+  "start followups": async () => {   // after a merge: what the gate (or an emergency merge) starts, one way
+    const steps = await start.startFollowUps(flag("after"), { pr: flag("pr"), base: flag("base"), sha: flag("sha"), job: flag("job", ""), tree: flag("tree", ""), story: flag("story", "") },
+      { host, gh: io.gh, cards, removeOrg: (t) => { const o = names.orgFor(t); if (orgs().remove(t)) record("org", { action: "deleted", org: o?.description, story: o?.key }); }, log });
+    return say(`follow-ups: ${steps.join(" ") || "none"}`);
+  },
+  "ci plan": () => {   // which CI jobs need a runner, from what changed (a failed diff assumes everything)
+    const base = flag("base", "main");
+    const out = io.git(["diff", "--name-only", `origin/${base}...HEAD`], { allowFail: true });
+    const p = start.ciPlan({ ref: flag("ref"), base, files: out === null ? null : out.split("\n").filter(Boolean) });
+    output({ ...p, base });
+    return say(JSON.stringify(p));
+  },
+  "harness overlay": () => say(`main's ${harness.overlay(arg(0), { git: io.git, from: flag("from", ".pipeline") }).join(", ")} over the checkout, hidden from git`),
   "triage ui": async () => {
     const read = (f) => (f ? readFileSync(f, "utf8") : "");
     const t = await triageUiFailure(jev(), { log: read(flag("log")), story: read(flag("story")) });
@@ -250,7 +273,8 @@ const commands = {
   "baseline capture": () => {   // production's customisations into baseline/ (pipeline/src/baseline.mjs); the workflow opens the drift PR
     const r = baseline.capture({ sf: io.sf, config: JSON.parse(readFileSync("config/baseline.json", "utf8")), log });
     const changes = (io.git(["status", "--porcelain", "--untracked-files=all", "--", baseline.DIR], { allowFail: true }) || "").split("\n").filter(Boolean);
-    writeFileSync(flag("out", "drift.md"), baseline.driftSummary(changes, r.listings)); output({ changed: changes.length, id: baseline.baselineId(baseline.DIR) || "" });
+    const inventory = baseline.inventoryMarkdown(r.notCopied); summary(inventory);
+    writeFileSync(flag("out", "drift.md"), [baseline.driftSummary(changes, r.listings), inventory].filter(Boolean).join("\n\n")); output({ changed: changes.length, id: baseline.baselineId(baseline.DIR) || "" });
     record("baseline", { action: changes.length ? "drift" : "refreshed", changed: changes.length }); return say(`${changes.length} file(s) differ from git`);
   },
   "snapshot refresh": () => {   // a source org (shape + packages + baseline + source + seed), snapshotted; the newest Active one is used
@@ -352,11 +376,25 @@ const commands = {
       host, alias, base: flag("base", "origin/main"), sha: flag("sha"), all: has("all"), level: names.setting("CI_TEST_LEVEL") || "RunRelevantTests", min: Number(flag("min", "75")), outDir: flag("out", "test-results"), sleep, log,
     }));
     if (!r.result) return say("no Salesforce changes");
+    const src = io.sourceFiles({ base: flag("base", "origin/main") });
+    const changedFlows = tests.recordTriggeredFlows(src.changed, src.read);   // active record-triggered: what coverage is about
+    const cov = tests.flowCoverage(io, alias, changedFlows), min = Number(names.setting("FLOW_COVERAGE_MIN") || 0);
+    if (changedFlows.length) summary(`**Flow coverage (from the Apex tests):** ${changedFlows.map((f) => `${f} ${cov[f] ?? "n/a"}${cov[f] === undefined ? "" : "%"}`).join(", ")}${min ? ` (minimum ${min}%)` : " (report only; FLOW_COVERAGE_MIN sets a minimum)"}`);
+    const low = min ? changedFlows.filter((f) => (cov[f] ?? 0) < min) : [];
+    if (low.length) r.result = { ...r.result, ok: false, reasons: [...(r.result.reasons || []), `Flow coverage below ${min}% (FLOW_COVERAGE_MIN): ${low.map((f) => `${f} ${cov[f] ?? 0}%`).join(", ")}`] };
     record("tests", { story, sha: flag("sha"), org: alias, mode: r.plan.mode, ok: r.result.ok, seconds: r.seconds, reasons: r.result.ok ? undefined : r.result.reasons,
       apex: { ran: r.state.apex.ran, passed: r.state.apex.passed }, flows: { ran: r.state.flows.ran, passed: r.state.flows.passed } });
     summary(tests.summaryMarkdown(r.state, { plan: r.plan, result: r.result }));
     if (!r.result.ok) throw new Error(`tests failed: ${r.result.reasons.join("; ")}`);
     return say(`tests passed: apex ${r.state.apex.passed}/${r.state.apex.ran}, flow ${r.state.flows.passed}/${r.state.flows.ran}`);
+  },
+  "tests flow-gaps": () => {   // every changed record-triggered Flow has a Flow test (parity with Apex); main's exceptions
+    const src = io.sourceFiles({ base: flag("base") });
+    const exFile = join(PIPELINE_ROOT, "config/test-exceptions.json");
+    const gaps = tests.flowTestGaps(src, existsSync(exFile) ? JSON.parse(readFileSync(exFile, "utf8")).flowsWithoutTests || [] : []);
+    for (const g of gaps) log(`::error title=Flow without a Flow test::${g} is a record-triggered Flow with no Flow test (force-app/main/default/flowtests/, <flowApiName>${g}</flowApiName>). Add one, or an exception in config/test-exceptions.json with a reason.`);
+    if (gaps.length) throw new Error(`${gaps.length} record-triggered Flow(s) without a Flow test: ${gaps.join(", ")}`);
+    return say("every changed record-triggered Flow has a Flow test");
   },
   "access check": () => {
     const { files, read, changed, added } = io.sourceFiles({ base: flag("base"), head: flag("head", "HEAD") });
@@ -431,11 +469,17 @@ const commands = {
   },
 };
 
+async function startCmd(kind) {
+  const d = await start.startJob(kind, flag("pr"), { host, gh: io.gh, cards, ai: names.aiFeatures(), mode: flag("mode", "run"), before: flag("before"), after: flag("after"), log });
+  output({ run: d.run, why: d.why || "" });
+  return say(d.run ? `started ${kind} for PR #${flag("pr")}` : `not started: ${d.why}`);
+}
+
 async function closeoutCmd(run) {
   const p = closeout.plan(await closeout.gather(io, tracker, { sha: flag("sha", "HEAD"), previous: flag("previous") || null }));
   log(JSON.stringify(p));
   if (!run) return;
-  await closeout.apply(p, { tag: flag("tag"), tracker, orgs: orgs(), git: io.git, gh: io.gh, cards, log });
+  await closeout.apply(p, { tag: flag("tag"), tracker, orgs: orgs(), git: io.git, gh: io.gh, ghPages: io.ghPages, cards, log });
   record("release", { tag: flag("tag"), sha: flag("sha"), previous: flag("previous"), sprint: p.sprint, shipped: p.ship, hotfixes: p.hotfix.map((h) => h.key), carried: p.carry });
   for (const key of [...p.ship, ...p.hotfix.map((h) => h.key)]) await cards.refresh(key, { tag: flag("tag") });
   if (flag("sha")) await cards.refreshCommit(flag("sha"), { tag: flag("tag") });   // the release card: Done, with the tag

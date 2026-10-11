@@ -3,7 +3,7 @@
 // process however many callers ask (the open release branch, a story's PR, a PR's gate facts). Tests pass a fake `io`.
 // A second host (Bitbucket, GitLab) would be a second adapter with this interface.
 import { gather } from "./gate.mjs";
-import { openRelease as pickOpenRelease } from "./conventions.mjs";
+import { openRelease as pickOpenRelease, aiFeatures, setting } from "./conventions.mjs";
 import { recorder } from "./events.mjs";
 import { appToken } from "./board.mjs";
 
@@ -34,8 +34,10 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
     /** A story branch's latest PR (any state), or null. */
     storyPr: (branch) => once(`pr:${branch}`, () => (io.gh(["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "number,state,title,baseRefName,headRefOid"]) || [])[0] || null),
 
-    /** The facts the gate decides on, gathered once per process (a card refreshed every minute reuses them). */
-    prFacts: (number, opts) => once(`facts:${number}`, () => gather(String(number), io, opts)),
+    /** The facts the gate decides on, gathered once per process (a card refreshed every minute reuses them). Always
+     *  with the same options (the open release, the AI flags, UAT): a caller that passed fewer once made a later card
+     *  show "AI review off" from the cached facts. */
+    prFacts: (number) => once(`facts:${number}`, () => gather(String(number), io, { openReleaseBranch: host.openRelease(), ai: aiFeatures(env), uat: setting("UAT_ENABLED", env) === "true" })),
 
     /** A verdict as a commit status on an exact commit, linked to this run. Agent-free steps only (see gate.mjs). */
     status(sha, context, state, description, url = host.runUrl) {

@@ -29,6 +29,8 @@ import * as specs from "../src/spec.mjs";
 import * as evidence from "../src/evidence.mjs";
 import * as baselineMod from "../src/baseline.mjs";
 import * as orgMod from "../src/org.mjs";
+import * as start from "../src/start.mjs";
+import * as harness from "../src/harness.mjs";
 
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/pr-${n}.json`, import.meta.url)));
 const open = (f, pr = {}) => ({ ...f, pr: { ...f.pr, state: "OPEN", mergeable: "MERGEABLE", ...pr } });   // as it was before merging
@@ -685,7 +687,8 @@ test("every workflow that runs the Claude agent allows the pipeline's own bots (
 test("pipeline/gate: success only when mergeable; failure when something failed; pending while waiting", () => {
   assert.deepEqual(gate.gateStatus({ mergeable: true, reasons: [] }), { state: "success", description: "All requirements met: the gate merges it" });
   assert.deepEqual(gate.gateStatus({ mergeable: false, reasons: ["not approved (Review changes > Approve)", "AI review has not run on this code"] }), { state: "pending", description: "not approved (+1 more)" });
-  assert.equal(gate.gateStatus({ mergeable: false, reasons: ["UI test did not pass (failure)"] }).state, "failure");
+  assert.equal(gate.gateStatus({ mergeable: false, blocking: "failure", reasons: ["UI test did not pass (failure)"] }).state, "failure");
+  assert.equal(gate.gateStatus({ mergeable: false, blocking: "pending", reasons: ["UI test did not pass (failure)"] }).state, "pending", "the decision says it, not the wording");
   assert.ok(gate.gateStatus({ mergeable: false, reasons: ["x".repeat(300)] }).description.length <= 139);
 });
 
@@ -697,7 +700,8 @@ test("follow-ups after an emergency merge are the ones the gate would have start
   assert.deepEqual(gate.followUps({ headRefName: "fix/x", baseRefName: "main" }, ["force-app/a.cls"]), ["release"]);
   // a workflow fix reaches the open sprint's release branch (its own copy runs staging): back-merge (story #166)
   assert.deepEqual(gate.followUps({ headRefName: "fix/x", baseRefName: "main" }, [".github/workflows/staging-deploy.yml"]), ["backmerge"]);
-  for (const f of ["gate", "merged"]) assert.match(readFileSync(new URL(`../../.github/workflows/${f}.yml`, import.meta.url), "utf8"), /backmerge\) gh workflow run back-merge\.yml --ref main/);
+  // one command starts them for the gate and an emergency merge alike (they had drifted: merged.yml missed in-sprint)
+  for (const f of ["gate", "merged"]) assert.match(readFileSync(new URL(`../../.github/workflows/${f}.yml`, import.meta.url), "utf8"), /pipe\.mjs start followups --after "\$AFTER"/);
 });
 
 test("story card says what is running right now, with a link; failures say where to look and how to retry", () => {
@@ -944,13 +948,13 @@ test("a production validation that cannot start says why", () => {
 
 test("shipping wiring: the gate passes the SHA and the validated tree; nothing queued is lost; UAT signs only what it runs", () => {
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
-  assert.match(wf("gate"), /release.yml --ref main -f sha="\$SHA" -f validated_job="\$JOB" -f validated_tree="\$TREE"/);
+  assert.match(wf("gate"), /start followups --after "\$AFTER" --pr "\$PR" --base "\$BASE" --sha "\$SHA" --job "\$JOB" --tree "\$TREE"/);
   assert.match(wf("gate"), /ship candidate --pr/);
   assert.doesNotMatch(wf("gate"), /refs\/pull\/\$\{\{ env.PR \}\}\/merge/);
   assert.match(wf("gate"), /ship renudge --base/);
   assert.match(wf("release"), /run-name: release \$\{\{ inputs.sha/);
   assert.match(wf("release"), /closeout run --tag "\$TAG" --sha "\$SHA"/);
-  assert.match(wf("merged"), /-f sha="\$MERGED_SHA"/);
+  assert.match(wf("merged"), /--sha "\$MERGED_SHA"/);
   assert.match(wf("scratch-janitor"), /ship watchdog/);
   assert.match(readFileSync(new URL("../src/actions.mjs", import.meta.url), "utf8"), /startsWith\("In UAT"\)/);
   assert.match(wf("commands"), /pipe.mjs act /);
@@ -1112,7 +1116,7 @@ test("fix rounds are this PR's earlier completed ai-fix runs, whatever the commi
   assert.equal(verdict.fixRunsFor(runs, 90, 5), 1);
   assert.equal(verdict.fixRunsFor(runs, 90, 4), 2);
   const wf = readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8");
-  assert.match(wf, /verdict rounds --pr/);
+  assert.match(wf, /pipe\.mjs start fix --pr/, "the route job counts the rounds before the fix job starts");
   assert.match(readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8"), /event agent --role/);
 });
 
@@ -1173,7 +1177,7 @@ test("the GitHub tracker finds a marked comment once, then edits it directly", a
 
 test("pipe.mjs is a thin command table: no GitHub, git or Salesforce logic of its own", () => {
   const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
-  assert.ok(src.split("\n").length < 450, "small: one line or a few per command");
+  assert.ok(src.split("\n").length < 500, "small: one line or a few per command");
   assert.doesNotMatch(src, /fetch\(|check-runs`, \{|sgd", "source", "delta"|createSign/);
 });
 
@@ -1344,7 +1348,7 @@ test("agent jobs cannot post verdicts or start workflows; follow-ups run on a fr
     assert.doesNotMatch(b, /gh workflow run/, `${n}/${j} dispatches nothing`);
   }
   assert.match(job(wf("ai-fix"), "follow-up"), /the fix pushed nothing: no new review/);
-  assert.match(wf("ai-review"), /round limit reached: no AI fix/);
+  assert.match(job(wf("ai-fix"), "route"), /pipe\.mjs start fix --pr/, "the round limit is decided before the fix job starts");
 });
 
 test("correctness wiring: story PR base from the story, UAT never reset by a redeploy, merge button locked until production accepts", () => {
@@ -1413,14 +1417,14 @@ test("Actions minutes: a job that has nothing to do never starts a runner (GitHu
   const ci = wf("ci");
   // static decides what changed before the PR's code runs; the org job and the code analyzer only on Salesforce changes
   assert.ok(ci.indexOf("id: what") < ci.indexOf("npm ci --no-audit"), "decided before any of the PR's code runs");
-  assert.match(ci, /needs\.static\.outputs\.org == 'true' \|\| \(github\.event_name == 'workflow_dispatch' &&\n\s+!startsWith\(inputs\.ref, 'release\/'\) && !startsWith\(inputs\.ref, 'backmerge-'\)\)/, "a hand-started release or back-merge CI never deploys again");
+  assert.match(ci, /needs\.static\.outputs\.org == 'true' \|\| \(github\.event_name == 'workflow_dispatch' &&\n\s+needs\.static\.outputs\.kind != 'release' && needs\.static\.outputs\.kind != 'backmerge'\)/, "a hand-started release or back-merge CI never deploys again");
   assert.match(ci, /Code analyzer \(PMD and ESLint\)\n\s+if: steps\.what\.outputs\.sf == 'true'/);
   assert.match(ci, /needs\.apex\.result == 'skipped'/, "the nudge runs when the org job was skipped");
   assert.match(ci, /needs\.static\.outputs\.ui == 'false'/, "UI test not needed, posted by the nudge");
-  assert.match(ci, /!contains\(github\.head_ref, '\/'\) && !startsWith\(github\.head_ref, 'backmerge-'\)/, "autofix filtered before a runner starts");
+  assert.match(ci, /needs\.static\.outputs\.kind == 'story'/, "autofix filtered before a runner starts");
   assert.doesNotMatch(ci, /pull_request\.labels\.\*\.name, 'blocked'/, "blocked is read live: the payload is older than a person's push");
   // nothing reviewable: the routing job says so; the review and verdict jobs never start
-  assert.match(wf("ai-review"), /not needed: no Salesforce source or specs changed" >\/dev\/null\n\s+echo "nothing reviewable/);
+  assert.match(wf("ai-review"), /pipe\.mjs start review --pr/, "the route decides (start.decide); the review job never starts for nothing");
   assert.match(wf("story-pr"), /github\.event\.sender\.type != 'Bot'/);
   assert.equal(gate.checkPassed("skipped"), true, "a skipped org job passes the gate, as it passes GitHub's rules");
   assert.equal(gate.checkPassed("failure"), false);
@@ -1428,7 +1432,8 @@ test("Actions minutes: a job that has nothing to do never starts a runner (GitHu
 
 test("cost wiring: no duplicate full run on release PRs, the fixer only for code failures, renudge only on the main lock", () => {
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
-  assert.match(wf("ci"), /release\/\*\|backmerge-\*\) echo "org=false"/);
+  assert.equal(start.ciPlan({ ref: "release/2026-w47", base: "main", files: ["force-app/a.cls"] }).org, false, "release PRs test in the staging regression");
+  assert.equal(start.ciPlan({ ref: "backmerge-9", base: "release/2026-w47", files: ["force-app/a.cls"] }).org, false);
   assert.match(wf("ci"), /needs.apex.outputs.code-failed == 'true'/);
   assert.match(wf("gate"), /needs.decide.outputs.lock == 'main'/);
 });
@@ -1884,7 +1889,7 @@ test("the review rubric: the UI test spec comes after the review; answers win ov
 
 test("the reviewer's rules come from main (a PR cannot soften its own review)", () => {
   const wf = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
-  assert.match(wf, /sparse-checkout: "pipeline\\nscripts\\nconfig\\n\.github\/actions\\nbaseline\\ndata\/seed\\nREVIEW\.md\\nCLAUDE\.md\\ndocs\/agents"/);
+  for (const f of ["REVIEW\\.md", "CLAUDE\\.md", "docs\\/agents"]) assert.match(wf, new RegExp(`path: \\.pipeline, sparse-checkout: "[^"]*${f}`));
   assert.match(wf, /following \.pipeline\/REVIEW\.md, \.pipeline\/CLAUDE\.md and \.pipeline\/docs\/agents\/salesforce\.md/);
 });
 
@@ -1936,16 +1941,16 @@ test("round 1: a person's push re-runs the review and resets the fix rounds; the
   const rv = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
   assert.match(rv, /types: \[opened, ready_for_review, labeled, synchronize\]/);
   assert.match(rv, /github\.event\.action != 'synchronize' \|\| github\.event\.sender\.type != 'Bot'/);
-  assert.match(rv, /spec-only push: no review/);
-  const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
-  assert.match(ci, /blocked: a person is on it/);
+  assert.match(rv, /start review --pr "\$\{\{ github\.event\.pull_request\.number \}\}" \$PUSH/, "a push passes before and after: the route sees what this push changed");
+  assert.equal(start.decide("review", { ai: { review: true }, branch: "issue-1", pushed: ["e2e/story-1.spec.ts"] }).run, false, "a spec-only push: no review");
+  assert.match(start.decide("fix", { ai: { fix: true }, branch: "issue-1", labels: ["blocked"] }).why, /blocked: a person is on it/);
+  assert.match(start.stopMessage(2), /\*\*What you can do:\*\* push a fix yourself/);
   const fx = readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8");
-  assert.match(fx, /\*\*What you can do:\*\* push a fix yourself/);
-  assert.match(fx, /if: failure\(\) && env\.STORY_KEY != '' && steps\.rounds\.outputs\.over != 'true'/);
+  assert.match(fx, /if: failure\(\) && env\.STORY_KEY != ''/);
   const isBot = (l) => /\[bot\]$/.test(l) || l === "__owner__-pipeline";
   const commits = [{ committedDate: "2026-10-08T10:55:01Z", authors: [{ login: "" }, { login: "claude" }] },
     { committedDate: "2026-10-08T11:45:04Z", authors: [{ login: "github-actions[bot]" }, { login: "claude" }] }];
-  assert.equal(verdict.lastHumanPush(commits, isBot), "2026-10-08T10:55:01Z", "an AI commit co-authored by Claude is not a person's push");
+  assert.equal(verdict.lastHumanPush(commits, (l) => l !== "claude" && !isBot(l)), "2026-10-08T10:55:01Z", "an AI commit co-authored by Claude is not a person's push");
   const runs = [{ id: 1, display_title: "ai-fix PR #9", status: "completed", conclusion: "success", created_at: "2026-10-08T10:00:00Z" },
     { id: 2, display_title: "ai-fix PR #9", status: "completed", conclusion: "success", created_at: "2026-10-08T11:00:00Z" }];
   assert.equal(verdict.fixRunsFor(runs, 9, 0, () => true, "2026-10-08T10:55:01Z"), 1, "rounds count again from a person's push");
@@ -2258,6 +2263,133 @@ test("approver (enterprise B): the story's approver approves, never the person w
   assert.match(gate.approval({ ...signed, head: f.pr.headRefOid, ...team, lastPusher: "alice" }, { signOff: true }).refused[0].why, /pushed the latest change/);
 });
 
+test("start decisions: a job that has nothing to do is decided before a runner starts, in main's code", async () => {
+  const on = { review: true, fix: true, uiTest: true };
+  // review
+  assert.deepEqual(start.decide("review", { ai: {}, branch: "issue-1" }).off, "AI_REVIEW");
+  assert.equal(start.decide("review", { ai: on, branch: "release/2026-w47" }).run, false);
+  assert.equal(start.decide("review", { ai: on, branch: "backmerge-7" }).run, false);
+  const nothing = start.decide("review", { ai: on, branch: "issue-1", changed: [".github/workflows/ci.yml", "docs/x.md"] });
+  assert.deepEqual([nothing.run, nothing.status?.description], [false, "not needed: no Salesforce source or specs changed"]);
+  assert.equal(start.decide("review", { ai: on, branch: "issue-1", changed: Array(300).fill("docs/x.md") }).run, true, "300 files is the compare limit: always reviewed");
+  assert.equal(start.decide("review", { ai: on, branch: "issue-1", changed: null }).run, true, "unknown: reviewed");
+  assert.equal(start.decide("review", { ai: on, branch: "issue-1", changed: ["force-app/a.cls"], pushed: ["force-app/a.cls", "e2e/s.spec.ts"] }).run, true);
+  // fix
+  assert.equal(start.decide("fix", { ai: on, branch: "fix/x" }).run, false, "story PRs only");
+  const over = start.decide("fix", { ai: on, branch: "issue-1", rounds: { n: 2, limit: 2 } });
+  assert.deepEqual([over.run, over.stop], [false, true]);
+  assert.equal(start.decide("fix", { ai: on, branch: "issue-1", rounds: { n: 1, limit: 2 } }).run, true);
+  // ui-test
+  assert.equal(start.decide("ui-test", { ai: {}, branch: "issue-1", mode: "ai" }).off, "AI_UI_TEST");
+  const none = start.decide("ui-test", { ai: on, branch: "issue-12", mode: "run", hasSpec: false });
+  assert.deepEqual([none.run, none.status.state, none.status.description], [false, "failure", "no spec e2e/story-12.spec.ts committed"]);
+  assert.equal(start.decide("ui-test", { ai: on, branch: "issue-12", mode: "run", hasSpec: true }).run, true);
+  // branch kinds and CI's plan (a diff that failed assumes everything)
+  assert.deepEqual(["issue-4", "LIFE-12", "release/2026-w47", "backmerge-9", "fix/gate"].map(start.branchKind), ["story", "story", "release", "backmerge", "maintenance"]);
+  assert.deepEqual(start.ciPlan({ ref: "issue-4", base: "release/2026-w47", files: ["force-app/main/default/layouts/A.layout-meta.xml"] }), { kind: "story", sf: true, org: true, ui: true, target: "issue-4", all: false });
+  assert.deepEqual(start.ciPlan({ ref: "backmerge-9", base: "release/2026-w47", files: [] }), { kind: "backmerge", sf: false, org: false, ui: false, target: "sprint:2026-w47", all: true });
+  assert.equal(start.ciPlan({ ref: "issue-4", base: "main", files: null }).ui, true, "fails closed");
+  // the job starter acts on the decision: dispatch, or post the verdict and say why
+  const did = [];
+  const host = { repo: "o/r", runUrl: "u", dispatch: (...a) => did.push(["dispatch", ...a]), status: (...a) => did.push(["status", ...a]),
+    api: (m, path) => (path.includes("/compare/") ? { files: [{ filename: "docs/readme.md" }] } : {}), workflowRuns: () => [] };
+  const gh = (a) => { did.push(a.slice(0, 3).join(" ")); return a[0] === "pr" && a[1] === "view" ? { headRefName: "issue-5", baseRefName: "release/w", headRefOid: "h5", labels: [], state: "OPEN", commits: [] } : null; };
+  const cards = { refreshPr: async () => did.push("card"), refresh: async () => did.push("card") };
+  const d = await start.startJob("review", 5, { host, gh, cards, ai: on });
+  assert.equal(d.run, false);
+  assert.ok(did.some((x) => Array.isArray(x) && x[0] === "status" && x[1] === "h5" && x[3] === "success"), "posts not needed on the head");
+  assert.ok(!did.some((x) => Array.isArray(x) && x[0] === "dispatch"), "no review runner");
+  did.length = 0;
+  await start.startJob("fix", 5, { host, gh, cards, ai: on });
+  assert.deepEqual(did.find((x) => Array.isArray(x) && x[0] === "dispatch"), ["dispatch", "ai-fix.yml", { pr: 5 }]);
+  // follow-ups: the same for the gate and an emergency merge
+  did.length = 0;
+  const removed = [];
+  await start.startFollowUps("staging delete-story-org", { pr: 9, base: "release/w", sha: "m1", story: "5" }, { host, gh, cards, removeOrg: (t) => removed.push(t) });
+  assert.deepEqual(did.filter(Array.isArray), [["dispatch", "staging-deploy.yml", {}, "release/w"]]);
+  assert.deepEqual(removed, ["story:5"]);
+  assert.ok(did.includes("issue edit 5"), "in-sprint label (the emergency path used to miss it)");
+  did.length = 0;
+  await start.startFollowUps("release", { pr: 9, sha: "m1", job: "0Af1", tree: "t1" }, { host, gh, cards, removeOrg: () => {} });
+  assert.deepEqual(did.filter(Array.isArray), [["dispatch", "release.yml", { sha: "m1", validated_job: "0Af1", validated_tree: "t1" }]]);
+});
+
+test("nudge: a sign-off on an earlier commit re-runs the gate only if nothing but specs changed since (no billed gate run per check)", () => {
+  process.env.GH_REPO = "o/r";
+  const BOTSTATUS = [{ context: gate.STATUS.signoff, state: "success", creator: { login: "github-actions[bot]" } }];
+  const io = (files) => ({
+    gh: (a) => (a[0] === "pr" && a.includes("state,labels,headRefName,baseRefName,headRefOid") ? { state: "OPEN", labels: [], headRefName: "issue-1", baseRefName: "release/w", headRefOid: "h2" }
+      : a[0] === "pr" ? { commits: [{ oid: "h1" }, { oid: "h2" }] } : a[0] === "api" ? { status: "ahead", files: files.map((filename) => ({ filename })) } : null),
+    ghPages: (path) => (path.includes("/reviews") ? [] : path.includes("/commits/h1/") ? BOTSTATUS : []),
+  });
+  assert.equal(gate.nudge(1, io(["e2e/story-1.spec.ts"])).action, "dispatch", "spec-only since the sign-off");
+  assert.equal(gate.nudge(1, io(["force-app/a.cls"])).action, "none", "code changed since: the sign-off no longer covers it");
+});
+
+test("Flow parity: a changed active record-triggered Flow needs a Flow test; production inventory lists what scratch orgs lack", () => {
+  const flow = (trigger, status = "Active") => `<Flow><start><triggerType>${trigger}</triggerType></start><status>${status}</status></Flow>`;
+  const files = { "force-app/main/default/flows/A.flow-meta.xml": flow("RecordAfterSave"), "force-app/main/default/flows/B.flow-meta.xml": flow("RecordBeforeSave"),
+    "force-app/main/default/flows/S.flow-meta.xml": "<Flow><processType>Flow</processType><status>Active</status></Flow>",
+    "force-app/main/default/flows/D.flow-meta.xml": flow("RecordAfterSave", "Draft"),
+    "force-app/main/default/flowtests/B_Path.flowtest-meta.xml": "<FlowTest><flowApiName>B</flowApiName></FlowTest>" };
+  const src = { files: Object.keys(files), read: (p) => files[p] || "", changed: Object.keys(files).filter((p) => p.includes("/flows/")) };
+  assert.deepEqual(tests.flowTestGaps(src), ["A"], "B has a test; a screen Flow and a draft are not asked");
+  assert.deepEqual(tests.flowTestGaps(src, ["A"]), [], "an exception (config/test-exceptions.json)");
+  assert.deepEqual(tests.recordTriggeredFlows(src.changed, src.read), ["A", "B"], "coverage minimum: only active record-triggered Flows");
+  assert.deepEqual(tests.flowTestGaps({ ...src, changed: [] }), [], "only what the change touches");
+  const cov = tests.flowCoverage({ sf: () => ({ records: [{ FlowVersion: { Definition: { DeveloperName: "A" } }, NumElementsCovered: 3, NumElementsNotCovered: 1 },
+    { FlowVersion: { Definition: { DeveloperName: "A" } }, NumElementsCovered: 1, NumElementsNotCovered: 3 }, { FlowVersion: { Definition: { DeveloperName: "Z" } }, NumElementsCovered: 1, NumElementsNotCovered: 0 }] }) }, "issue-1", ["A"]);
+  assert.deepEqual(cov, { A: 75 }, "the best test method; other Flows ignored");
+  assert.deepEqual(tests.flowCoverage({ sf: () => null }, "x", ["A"]), {}, "never throws");
+  // the inventory: watched types production has customised, which the baseline does not copy
+  const config = { types: ["CustomObject"], customisedOnly: [], exclude: ["ApprovalProcess:*.Skip_*"] };
+  const later = "2026-09-01T00:00:00Z";
+  const watched = { ApprovalProcess: [{ fullName: "Opportunity.Discount", lastModifiedDate: later, lastModifiedByName: "Ann Admin" }, { fullName: "Opportunity.Skip_Me", lastModifiedDate: later, lastModifiedByName: "Ann Admin" }],
+    StandardValueSet: [{ fullName: "LeadSource", lastModifiedDate: "2020-01-01T00:00:00Z", lastModifiedByName: "Ann Admin" }], AssignmentRules: [{ fullName: "Lead", namespacePrefix: "pkg", lastModifiedDate: later }] };
+  const nc = baselineMod.uncovered(watched, { config, orgCreated: "2025-01-01T00:00:00Z" });
+  assert.deepEqual(nc, { ApprovalProcess: ["Opportunity.Discount"] }, "customised only: not unchanged since the org was created, not managed, not excluded");
+  assert.match(baselineMod.inventoryMarkdown(nc), /\| ApprovalProcess \| 1 \| `Opportunity\.Discount` \|/);
+  assert.match(baselineMod.inventoryMarkdown({}), /nothing of the watched types/);
+  assert.ok(JSON.parse(readFileSync(new URL("../../config/baseline.json", import.meta.url), "utf8")).watch.includes("ApprovalProcess"));
+});
+
+test("Standing: one place decides what still counts on the head, and the gate, the card and the board read it", () => {
+  const f = withVerdicts(fixture(23));
+  const head = f.pr.headRefOid;
+  // the head: everything stands
+  const st = gate.standing(f);
+  assert.equal(st.route, "feature");
+  assert.equal(st.review.state, "success");
+  assert.equal(st.review.sha, head);
+  // a spec-only push: the review carries; the UI test and UAT do not (their verdict is about that exact code)
+  const pushed = { ...f, pr: { ...f.pr, headRefOid: "spec2" }, diffsToHead: { [head]: ["e2e/story-23.spec.ts"] },
+    statuses: [...f.statuses, ok(head, gate.STATUS.uat)] };
+  const sp = gate.standing(pushed);
+  assert.equal(sp.review.state, "success", "a review carries over a spec-only push");
+  assert.equal(sp.ui.state, "stale", "the UI test must run on the new spec");
+  assert.equal(sp.uat.state, "stale", "UAT signed off that code, not this");
+  // a diverged compare (null): nothing carries
+  assert.equal(gate.standing({ ...pushed, diffsToHead: { [head]: null } }).review.state, "stale");
+  // a status anyone but the pipeline posted counts for nothing
+  assert.equal(gate.standing({ ...f, statuses: f.statuses.map((x) => ({ ...x, creator: { login: "mallory" } })) }).review.state, "missing");
+  // a cancelled required check is a failure for the gate status and for the card alike
+  const cancelled = { ...f, checkRuns: f.checkRuns.map((c) => (c.name === names.CHECKS.apex ? { ...c, conclusion: "timed_out" } : c)) };
+  assert.equal(gate.checkState("cancelled"), "missing", "a newer run on the same head cancels the older one: waiting, not red");
+  assert.equal(gate.checkState("timed_out"), "failed");
+  assert.equal(gate.checkState("skipped"), "passed");
+  assert.equal(gate.checkState("in_progress"), "running");
+  assert.equal(gate.gateStatus(gate.evaluate(cancelled)).state, "failure", "a timed-out check: red on the gate as on the card");
+  const superseded = { ...f, checkRuns: f.checkRuns.map((c) => (c.name === names.CHECKS.apex ? { ...c, conclusion: "cancelled" } : c)) };
+  assert.equal(gate.gateStatus(gate.evaluate(superseded)).state, "pending", "cancelled by a newer run: waiting, on the gate as on the card");
+  // a hotfix needs a review, not a sign-off: the board reads the same rule as the gate
+  const hot = { ...withVerdicts(fixture(12)), reviews: [], statuses: [...withVerdicts(fixture(12)).statuses, { ...ok(fixture(12).pr.headRefOid, gate.STATUS.signoff), description: "Signed off by @alice" }] };
+  assert.equal(gate.standing(hot).approval.ok, false, "a sign-off box is not a hotfix approval");
+  assert.equal(gate.standing(hot).approval.ok, gate.evaluate(hot).reasons.every((r) => !/approv/.test(r)));
+  // approvals carry who, when and how (the delivery record's row)
+  const signed = { ...f, reviews: [], statuses: [...f.statuses, { ...ok(head, gate.STATUS.signoff, "2026-10-05T01:00:00Z"), description: "Signed off by @alice" }] };
+  assert.deepEqual(gate.standing(signed).approval.who, [{ login: "alice", at: "2026-10-05T01:00:00Z", how: "ticked Sign off" }]);
+});
+
 test("approver (enterprise B): Sign off and /review-ok refuse an approval that would not count; the reason is kept in full; stories name the default approver; a big spec suggests slicing", () => {
   const did = [];
   const host = { repoUrl: "https://github.com/o/r", status: (...a) => did.push(a), dispatch: () => {} };
@@ -2328,52 +2460,92 @@ test("a spec-only push keeps the AI review but not the UI test (story #166: a we
   assert.equal(verdictFor(STATUS.ui, { ...ctx, head: "h1" }).state, "success");
 });
 
-test("delivery record: the AI review is found on the commit it judged when later commits only changed the spec (story #166)", async () => {
+// A fake gh/ghPages seam for gate.gather() plus close-out's own reads: keys are API paths, or "pr view", "issue view",
+// "pr list <head>". gatherDelivery reads the merged PR through the gate's own facts (Standing).
+function deliveryIo(data) {
+  const gh = (a) => {
+    if (a[0] === "api") return data[a[a.length - 1]] ?? null;
+    if (a[0] === "pr" && a[1] === "view") return data["pr view"];
+    if (a[0] === "issue" && a[1] === "view") return data[`issue view ${a[2]}`] ?? null;
+    if (a[0] === "issue" && a[1] === "list") return [];
+    if (a[0] === "pr" && a[1] === "list") return data[`pr list ${(a.find((x) => /^head:|^release\//.test(x)) || "").replace("head:", "")}`] || [];
+    return null;
+  };
+  const ghPages = (path, key) => { const v = data[path]; return key ? v?.[key] || [] : v || []; };
+  return { gh, ghPages };
+}
+const BOT = { login: "github-actions[bot]" };
+
+test("delivery record: the AI review is found on the commit it judged when later commits only changed the spec (story #166); only trusted statuses and counted approvals", async () => {
   const { gatherDelivery } = await import("../src/closeout.mjs");
+  process.env.GH_REPO = "o/r";
   const R = "repos/o/r";
   const data = {
-    "issue view 166": { title: "Story", body: "", createdAt: "2026-10-08T00:00:00Z" },
-    "pr list issue-166": [{ number: 176, headRefName: "issue-166", headRefOid: "spec2", createdAt: "2026-10-08T06:00:00Z", mergedAt: "2026-10-09T00:00:00Z",
-      commits: [{ oid: "code" }, { oid: "spec1" }, { oid: "spec2" }] }],
-    [`${R}/commits/spec2/statuses?per_page=100`]: [{ context: "pipeline/ui-test", state: "success", created_at: "2026-10-08T09:00:00Z" }],
+    "issue view 166": { title: "Story", body: "### Approver\n\n@alice\n", createdAt: "2026-10-08T00:00:00Z" },
+    "pr list issue-166": [{ number: 176, headRefName: "issue-166", headRefOid: "spec2", createdAt: "2026-10-08T06:00:00Z", mergedAt: "2026-10-09T00:00:00Z" }],
+    "pr view": { number: 176, state: "MERGED", baseRefName: "release/2026-w47", headRefName: "issue-166", headRefOid: "spec2", author: { login: "alice" },
+      commits: [{ oid: "code", committedDate: "2026-10-08T07:00:00Z", authors: [{ login: "alice" }] }, { oid: "spec1", committedDate: "2026-10-08T08:30:00Z", authors: [{ login: "github-actions[bot]" }, { login: "claude" }] },
+        { oid: "spec2", committedDate: "2026-10-08T08:40:00Z", authors: [{ login: "github-actions[bot]" }, { login: "claude" }] }] },
+    [`${R}/commits/spec2/statuses?per_page=100`]: [{ context: "pipeline/ui-test", state: "success", created_at: "2026-10-08T09:00:00Z", creator: BOT },
+      { context: "pipeline/sign-off", state: "success", description: "Signed off by @alice", created_at: "2026-10-08T12:00:00Z", creator: BOT }],
     [`${R}/commits/spec1/statuses?per_page=100`]: [],
-    [`${R}/commits/code/statuses?per_page=100`]: [{ context: "pipeline/ai-review", state: "success", description: "AI review passed", created_at: "2026-10-08T08:00:00Z" }],
-    [`${R}/pulls/176/reviews?per_page=100`]: [],
-    [`${R}/compare/code...spec2`]: { files: [{ filename: "e2e/story-166.spec.ts" }] },
+    [`${R}/commits/code/statuses?per_page=100`]: [{ context: "pipeline/ai-review", state: "success", description: "AI review passed", created_at: "2026-10-08T08:00:00Z", creator: BOT }],
+    [`${R}/compare/code...spec2`]: { status: "ahead", files: [{ filename: "e2e/story-166.spec.ts" }] },
   };
-  const gh = (a) => a[0] === "api" ? data[a[1]] : a[0] === "issue" ? data[`issue view ${a[2]}`] : a.some((x) => x === "head:issue-166") ? data["pr list issue-166"] : [];
-  const d = gatherDelivery("166", gh, { tag: "v1", sprint: "2026-w47", repo: "o/r" });
+  const io = deliveryIo(data);
+  const saved = process.env.PIPELINE_VARS;   // CI passes the repository's own settings: this test sets its own
+  process.env.PIPELINE_VARS = "{}";
+  try {
+  const d = gatherDelivery("166", io, { tag: "v1", sprint: "2026-w47", repo: "o/r" });
   assert.equal(d.review.state, "success");
   assert.equal(d.review.text, "AI review passed");
+  assert.equal(d.lastPusher, "alice", "Claude's spec commits are not a person's push");
+  assert.equal(d.approved.by, "alice", "APPROVERS unset: anyone's sign-off counts");
+  // with APPROVERS set, alice pushed the latest change: her own sign-off was refused by the gate, so the record names nobody
+  process.env.PIPELINE_VARS = JSON.stringify({ APPROVERS: "alice,bob" });
+  assert.equal(gatherDelivery("166", io, { tag: "v1", sprint: "2026-w47", repo: "o/r" }).approved, null, "a refused approver is never recorded");
+  process.env.PIPELINE_VARS = "{}";
+  // a review status posted by anyone but the pipeline does not count
+  data[`${R}/commits/code/statuses?per_page=100`][0].creator = { login: "mallory" };
+  assert.equal(gatherDelivery("166", io, { tag: "v1", sprint: "2026-w47", repo: "o/r" }).review, null, "untrusted status creator");
+  data[`${R}/commits/code/statuses?per_page=100`][0].creator = BOT;
   // code changed after the review (never reviewed): the earlier review does not count for it
-  data[`${R}/compare/code...spec2`] = { files: [{ filename: "e2e/story-166.spec.ts" }, { filename: "force-app/main/default/classes/X.cls" }] };
-  assert.equal(gatherDelivery("166", gh, { tag: "v1", sprint: "2026-w47", repo: "o/r" }).review, null);
+  data[`${R}/compare/code...spec2`] = { status: "ahead", files: [{ filename: "e2e/story-166.spec.ts" }, { filename: "force-app/main/default/classes/X.cls" }] };
+  assert.equal(gatherDelivery("166", io, { tag: "v1", sprint: "2026-w47", repo: "o/r" }).review, null);
+  } finally { if (saved === undefined) delete process.env.PIPELINE_VARS; else process.env.PIPELINE_VARS = saved; }
 });
 
 test("delivery record (enterprise D): the shipped story's trail, read from GitHub, as one table and one JSON line; an overrule keeps its full reason", async () => {
   const { gatherDelivery, deliveryRecord, apply, DELIVERY_MARK } = await import("../src/closeout.mjs");
+  process.env.GH_REPO = "o/r";
   const R = "repos/o/r";
   const reason = "THIS_YEAR is valid SOQL and CI passed; the reviewer misread the date literal, which the Salesforce docs list as a valid filter for CreatedDate";
   const data = {
     "issue view 166": { title: "Story: Regional Sales dashboard", body: "### Approver\n\n@alice\n", createdAt: "2026-10-08T00:00:00Z" },
-    "pr list issue-166": [{ number: 180, headRefName: "issue-166", headRefOid: "h180", createdAt: "2026-10-08T06:00:00Z", mergedAt: "2026-10-09T00:00:00Z", commits: [{ committedDate: "2026-10-08T07:00:00Z", authors: [{ login: "bob" }] }] }],
+    "pr list issue-166": [{ number: 180, headRefName: "issue-166", headRefOid: "h180", createdAt: "2026-10-08T06:00:00Z", mergedAt: "2026-10-09T00:00:00Z" }],
+    "pr view": { number: 180, state: "MERGED", baseRefName: "release/2026-w47", headRefName: "issue-166", headRefOid: "h180", author: { login: "bob" },
+      commits: [{ oid: "h180", committedDate: "2026-10-08T07:00:00Z", authors: [{ login: "bob" }] }] },
     [`${R}/commits/h180/statuses?per_page=100`]: [
-      { context: "pipeline/ai-review", state: "success", description: `AI review overruled by @alice: ${reason}`.slice(0, 139), created_at: "2026-10-08T08:00:00Z" },
-      { context: "pipeline/ui-test", state: "success", target_url: "https://github.com/o/r/issues/166#issuecomment-9", created_at: "2026-10-08T08:30:00Z" },
-      { context: "pipeline/sign-off", state: "success", description: "Signed off by @alice", created_at: "2026-10-08T12:00:00Z" }],
-    [`${R}/pulls/180/reviews?per_page=100`]: [],
+      { context: "pipeline/ai-review", state: "success", description: `AI review overruled by @alice: ${reason}`.slice(0, 139), created_at: "2026-10-08T08:00:00Z", creator: BOT },
+      { context: "pipeline/ui-test", state: "success", target_url: "https://github.com/o/r/issues/166#issuecomment-9", created_at: "2026-10-08T08:30:00Z", creator: BOT },
+      { context: "pipeline/sign-off", state: "success", description: "Signed off by @alice", created_at: "2026-10-08T12:00:00Z", creator: BOT }],
     [`${R}/issues/180/comments?per_page=100`]: [{ body: `✋ @alice accepted this change over the AI review on \`abc1234\`: ${reason}. A new push needs a review again.` }],
     "pr list release/2026-w47": [{ number: 181, headRefOid: "r181", mergedAt: "2026-10-10T00:00:00Z" }],
-    [`${R}/commits/r181/statuses?per_page=100`]: [{ context: "pipeline/uat", state: "success", description: "Signed off in UAT by @carol", created_at: "2026-10-09T20:00:00Z" }],
+    [`${R}/commits/r181/statuses?per_page=100`]: [{ context: "pipeline/uat", state: "success", description: "Signed off in UAT by @carol", created_at: "2026-10-09T20:00:00Z", creator: BOT }],
     [`${R}/commits/r181/check-runs?per_page=100`]: { check_runs: [{ name: "Production validation", conclusion: "success", output: { summary: "**Check-only deploy to production** `0AfAB000001xyz` with **RunRelevantTests**." } }] },
   };
-  const gh = (a) => a[0] === "api" ? data[a[1]] : a[0] === "issue" ? data[`issue view ${a[2]}`] : data[`pr list ${(a.find((x) => /^head:|^release\//.test(x)) || "").replace("head:", "")}`];
-  const d = gatherDelivery("166", gh, { tag: "v2026.10.10-1", sprint: "2026-w47", now: new Date("2026-10-10T01:00:00Z"), repo: "o/r" });
+  const io = deliveryIo(data);
+  const saved = process.env.PIPELINE_VARS;
+  process.env.PIPELINE_VARS = "{}";   // CI passes the repository's own APPROVERS: this trail has none
+  let d;
+  try { d = gatherDelivery("166", io, { tag: "v2026.10.10-1", sprint: "2026-w47", now: new Date("2026-10-10T01:00:00Z"), repo: "o/r" }); }
+  finally { if (saved === undefined) delete process.env.PIPELINE_VARS; else process.env.PIPELINE_VARS = saved; }
   assert.equal(d.approver, "alice");
   assert.deepEqual(d.approved, { by: "alice", at: "2026-10-08T12:00:00Z", how: "ticked Sign off" });
   assert.equal(d.lastPusher, "bob");
   assert.equal(d.review.overruledBy, "alice");
   assert.equal(d.review.reason, reason, "the full reason, not the 139-character status");
+  assert.equal(d.ui.url, "https://github.com/o/r/issues/166#issuecomment-9");
   assert.equal(d.uat, "carol");
   assert.equal(d.validation, "0AfAB000001xyz");
   const md = deliveryRecord(d);
@@ -2385,7 +2557,7 @@ test("delivery record (enterprise D): the shipped story's trail, read from GitHu
   // apply writes it once per shipped story, through the tracker's marked comment (re-running updates it)
   const cards = [];
   const tracker = { story: async () => ({ state: "OPEN" }), done: async () => {}, carry: async () => {}, closeSprint: async () => {}, card: async (k, body, mark) => cards.push([k, mark, body]) };
-  await apply({ sprint: "2026-w47", ship: ["166"], carry: [], hotfix: [], deleteOrgs: [], deleteBranch: null }, { tag: "v1", tracker, orgs: { remove: () => {} }, git: () => "", gh, log: () => {} });
+  await apply({ sprint: "2026-w47", ship: ["166"], carry: [], hotfix: [], deleteOrgs: [], deleteBranch: null }, { tag: "v1", tracker, orgs: { remove: () => {} }, git: () => "", ...io, log: () => {} });
   assert.equal(cards.length, 1);
   assert.equal(cards[0][1], DELIVERY_MARK);
 });
@@ -2489,30 +2661,54 @@ test("UI tests log in as a persona after the Dev Hub is logged out (story #166: 
   assert.match(readFileSync(new URL("../../e2e/support/login.ts", import.meta.url), "utf8"), /still the admin after "Log in as"/);
 });
 
-test("UI tests run main's harness (e2e/support), never a story branch's older copy", () => {
-  const wf = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
-  assert.equal((wf.match(/cp -R \.pipeline\/e2e\/support e2e\/support/g) || []).length, 2);
-  assert.equal((wf.match(/sparse-checkout: "[^"]*\\ne2e\/support[^"]*"/g) || []).length, 2, "both jobs check out main's e2e/support");
-  // story #166: the UI agent's commit carried main's login.ts onto the branch, and the skill check then failed there
-  const hides = /update-index --skip-worktree\n\s+echo "e2e\/support\/" >> \.git\/info\/exclude\n\s+rm -rf e2e\/support && cp -R/g;
-  assert.equal((wf.match(hides) || []).length, 2, "both copies are hidden from git first");
-});
+// The harness overlay (pipeline/src/harness.mjs): main's rules and harness over a branch, one way, hidden from git
+const wfSteps = async (file, job) => {
+  const { createRequire } = await import("node:module");
+  const doc = createRequire(import.meta.url)("js-yaml").load(readFileSync(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8"));
+  return doc.jobs[job].steps.map((st) => `${st.uses || ""} ${st.run || ""} ${st.name || ""}`);
+};
 
-test("the staging UI regression runs main's harness, with the org's id and URL for loginAs (story #166)", () => {
-  const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
-  assert.match(wf, /sparse-checkout: "[^"]*\\ne2e\/support"/);
-  assert.ok(wf.indexOf("SCRATCH_INSTANCE_URL") < wf.indexOf("sf org logout -o devhub"), "read before the Dev Hub logout");
-  assert.ok(wf.indexOf("cp -R ../.pipeline/e2e/support e2e/support") < wf.indexOf("npx playwright test"));
-});
-
-test("agents read main's docs/agents, hidden from git (story #166: the branch's copy lacked the dashboard-iframe fact)", () => {
-  for (const f of ["ai-fix", "ai-implement", "ui-test"]) {
-    const wf = readFileSync(new URL(`../../.github/workflows/${f}.yml`, import.meta.url), "utf8");
-    const i = wf.indexOf("cp -R .pipeline/docs/agents docs/agents");
-    assert.ok(i > 0, f);
-    assert.ok(wf.indexOf("update-index --skip-worktree") < i && wf.indexOf('echo "docs/agents/" >> .git/info/exclude') < i, `${f}: hidden from git before the copy`);
+test("harness overlay: every agent and spec job runs main's rules and harness, after the branch checkout, hidden from git (#180 #181 #184 #186)", async () => {
+  for (const [file, job, role] of [["ai-implement", "implement", "implement"], ["ai-fix", "fix", "fix"], ["ui-test", "write", "ui-test"], ["ui-test", "run", "ui-test"], ["staging-deploy", "staging", "staging"]]) {
+    const st = await wfSteps(file, job);
+    const at = st.findIndex((x) => x.includes(`harness overlay ${role}`));
+    assert.ok(at > 0, `${file}/${job} lays main's copy over the checkout`);
+    const identity = st.findIndex((x) => x.includes("pipeline-identity"));
+    if (identity >= 0) assert.ok(identity < at, `${file}/${job}: after the branch checkout (a re-checkout or merge would undo it)`);
+    const agent = st.findIndex((x) => x.includes("claude-agent")), spec = st.findIndex((x) => /playwright test|actions\/playwright/.test(x));
+    if (agent >= 0) assert.ok(at < agent, `${file}/${job}: before the agent`);
+    if (spec >= 0) assert.ok(at < spec, `${file}/${job}: before the specs run`);
+    assert.ok(!st.some((x) => /cp -R (\.\.\/)?\.pipeline\/(e2e|docs)/.test(x)), `${file}/${job}: no hand-written copy left`);
   }
+  assert.deepEqual(harness.OVERLAYS.implement, ["CLAUDE.md", "REVIEW.md", "docs/agents"], "implement and fix follow main's CLAUDE.md too");
   assert.match(readFileSync(new URL("../../docs/agents/salesforce.md", import.meta.url), "utf8"), /frameLocator\("iframe"\)/);
+  const sw = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  assert.ok(sw.indexOf("SCRATCH_INSTANCE_URL") < sw.indexOf("sf org logout -o devhub"), "loginAs's org id and URL are read before the Dev Hub logout");
+});
+
+test("harness overlay: main's copy replaces the branch's, git sees nothing to commit, and a missing path fails", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = mkdtempSync(join(tmpdir(), "overlay-"));
+  const g = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+  const put = (p, t) => { mkdirSync(join(root, p, ".."), { recursive: true }); writeFileSync(join(root, p), t); };
+  g(["init", "-q"]); g(["config", "user.email", "t@t"]); g(["config", "user.name", "t"]);
+  put("CLAUDE.md", "branch rules"); put("REVIEW.md", "branch review"); put("docs/agents/salesforce.md", "old facts"); put("docs/agents/gone.md", "removed on main");
+  g(["add", "-A"]); g(["commit", "-qm", "branch"]);
+  put(".pipeline/CLAUDE.md", "main rules"); put(".pipeline/REVIEW.md", "main review"); put(".pipeline/docs/agents/salesforce.md", "new facts"); put(".pipeline/docs/agents/new.md", "added on main");
+  const git = (args, o) => execFileSync("git", args, { cwd: o?.cwd || root, encoding: "utf8" });
+  assert.deepEqual(harness.overlay("implement", { git, root }), ["CLAUDE.md", "REVIEW.md", "docs/agents"]);
+  assert.equal(readFileSync(join(root, "CLAUDE.md"), "utf8"), "main rules");
+  assert.equal(readFileSync(join(root, "docs/agents/new.md"), "utf8"), "added on main");
+  assert.ok(!existsSync(join(root, "docs/agents/gone.md")));
+  assert.equal(g(["status", "--porcelain"]).trim(), "", "nothing of main's copy would be committed");
+  put("sub/CLAUDE.md", "a nested file the agent made");
+  assert.match(g(["status", "--porcelain"]), /sub\//, "only the root CLAUDE.md is hidden");
+    harness.overlay("implement", { git, root });   // twice is fine
+  assert.throws(() => harness.overlay("staging", { git, root }), /main has no e2e\/support/);
+  assert.throws(() => harness.overlay("nope", { git, root }), /unknown role/);
 });
 
 test("every workflow file parses as YAML (an unquoted ': ' in a step name broke three workflows on main)", async () => {

@@ -188,7 +188,7 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
       await cards.newStory(String(number), { spec: true, stage: "story", stories: [r.number] });
       continue;
     }
-    const mayApprove = (login) => (pr ? approvalProblem(host.prFacts(pr.number, {}), login) : null);
+    const mayApprove = (login) => (pr ? approvalProblem(host.prFacts(pr.number), login) : null);
     const r = perform(id, arg, { number, isPr, pr, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat, mayApprove });
     if (r.said) io.gh(["issue", "comment", String(number), "--body", r.said]);
     if (r.done) { log(r.done); host.record("stage", { story: storyOf(pr?.headRefName || "") || (isPr ? undefined : String(number)), pr: isPr ? Number(number) : undefined, what: `${id} by @${who}`, state: "running" }); }

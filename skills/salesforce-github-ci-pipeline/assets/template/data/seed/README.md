@@ -2,7 +2,7 @@
 
 Synthetic records every scratch org gets (story, CI, staging, UAT and the snapshot): for people, the Playwright UI tests,
 Flow checks and demos. **Never production data.** Apex tests never see these records (they make their own with
-`TestData` and `TestPersonas`).
+`TestDataFactory`: personas with a role and permission sets, accounts and opportunities in bulk).
 
 - `plan.json` and the `*.json` files: `sf data import tree` format (reference ids like `@Acc01` link children to parents).
 - Date tokens are filled in at load time, so "this year" never goes stale: `${TODAY}`, `${THIS_YEAR}`, `${LAST_YEAR}`,

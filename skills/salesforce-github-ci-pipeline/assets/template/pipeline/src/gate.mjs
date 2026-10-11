@@ -9,7 +9,7 @@
 // AI is optional (facts.ai, from the AI_* repo variables). Required verdicts: the AI review only when AI_REVIEW is on;
 // the UI test when the change is UI-facing and either AI_UI_TEST is on or the PR commits its story spec. A failed
 // verdict on the code always blocks, whatever the flags. With every flag off, CI plus a person's approval is the gate.
-import { CHECKS, storyOf, sprintOf, uiFacing, storySpec, isPipelineAuthor, setting } from "./conventions.mjs";
+import { CHECKS, storyOf, sprintOf, uiFacing, storySpec, isPipelineAuthor, isHumanAuthor, setting } from "./conventions.mjs";
 
 // signoff: a person's sign-off on a story PR into the sprint (a ticked box or /ship), recorded by an agent-free job.
 export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", uat: "pipeline/uat", signoff: "pipeline/sign-off" };
@@ -17,11 +17,12 @@ export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", ua
  *  the gate is satisfied; admins (and any team the rules name) can still bypass in an emergency. */
 export const GATE_STATUS = "pipeline/gate";
 
-/** What pipeline/gate says for a decision: success when it may merge; failure when something failed; else pending. */
+/** What pipeline/gate says for a decision: success when it may merge; failure when something failed (evaluate() says
+ *  so in decision.blocking, where it adds the reason); else pending. */
 export function gateStatus(decision) {
   if (decision.mergeable) return { state: "success", description: "All requirements met: the gate merges it" };
   const r = decision.reasons || [];
-  const failed = r.some((x) => /did not pass|is failure|UAT failed|production rejected|merge conflicts/.test(x));
+  const failed = decision.blocking === "failure";
   const first = String(r[0] || "waiting").replace(/\s*\(Review changes > Approve\)/, "");
   const more = r.length > 1 ? ` (+${r.length - 1} more)` : "";
   return { state: failed ? "failure" : "pending", description: `${first}${more}`.slice(0, 139) };
@@ -76,13 +77,24 @@ export function latestCheck(checkRuns, name) {
   const runs = checkRuns.filter((c) => c.name === name).sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)));
   return runs.length ? runs[runs.length - 1].conclusion || runs[runs.length - 1].status || "pending" : "missing";
 }
-/** Does a required check's conclusion pass? A job skipped by its own `if:` (nothing to deploy) passes, as in GitHub's rules. */
-export const checkPassed = (conclusion) => conclusion === "success" || conclusion === "skipped";
+/**
+ * One reading of a check's conclusion for the gate, the cards and the board: "passed" | "failed" | "running" | "missing".
+ * A job skipped by its own `if:` (nothing to deploy) passes, as in GitHub's rules. Pure.
+ */
+// cancelled and stale are not failures: a newer CI run on the same head cancels the older one (cancel-in-progress),
+// and a red gate in that window would be wrong; they wait for a run that finishes
+export function checkState(conclusion) {
+  if (conclusion === "success" || conclusion === "skipped") return "passed";
+  if (["failure", "error", "timed_out", "action_required", "neutral", "startup_failure"].includes(conclusion)) return "failed";
+  return ["missing", "cancelled", "stale"].includes(conclusion) ? "missing" : "running";
+}
+export const checkPassed = (conclusion) => checkState(conclusion) === "passed";
 
 /** True if every file changed between a commit and the head is under e2e/ (the UI tester's spec). */
 const onlySpecsSince = (sha, head, diffsToHead) =>
   sha === head || (Array.isArray(diffsToHead[sha]) && diffsToHead[sha].every((f) => f.startsWith("e2e/")));
 
+const EXACT_HEAD = [STATUS.ui, STATUS.uat];
 /** The verdict a status context gives the head: { state: "success" | "failure" | "stale" | "missing" | ... }. */
 export function verdictFor(context, { statuses = [], head, diffsToHead = {} }) {
   const mine = statuses.filter((s) => s.context === context && TRUSTED_STATUS_CREATORS.includes(s.creator?.login))
@@ -90,21 +102,23 @@ export function verdictFor(context, { statuses = [], head, diffsToHead = {} }) {
   if (!mine.length) return { state: "missing" };
   const last = mine[mine.length - 1];
   // A spec-only push keeps a review or sign-off, but not the UI test: the spec IS that test, so a changed spec has
-  // not passed yet (story #166: a weakened spec rode on the earlier pass).
-  const carries = context === STATUS.ui ? last.sha === head : onlySpecsSince(last.sha, head, diffsToHead);
+  // not passed yet (story #166: a weakened spec rode on the earlier pass). Nor UAT: a person signed off that code.
+  const carries = EXACT_HEAD.includes(context) ? last.sha === head : onlySpecsSince(last.sha, head, diffsToHead);
   if (!carries) return { state: "stale", sha: last.sha };
-  return { state: last.state, description: last.description || "", url: last.url || null };
+  return { state: last.state, description: last.description || "", url: last.url || null, sha: last.sha, at: last.created_at || null };
 }
 
-/** Who approved the code as it is now (logins)? Latest decisive review per human, on the head (or e2e-only since). */
-export function reviewApprovers({ reviews = [], head, diffsToHead = {} }) {
+/** The approving reviews that cover the code as it is now: latest decisive review per human, on the head (or e2e-only since). */
+function approvingReviews({ reviews = [], head, diffsToHead = {} }) {
   const latest = new Map();
   for (const r of [...reviews].sort((a, b) => String(a.submitted_at).localeCompare(String(b.submitted_at)))) {
     if (r.user?.type !== "User") continue;
     if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) latest.set(r.user.login, r);
   }
-  return [...latest.values()].filter((r) => r.state === "APPROVED" && onlySpecsSince(r.commit_id, head, diffsToHead)).map((r) => r.user.login);
+  return [...latest.values()].filter((r) => r.state === "APPROVED" && onlySpecsSince(r.commit_id, head, diffsToHead));
 }
+/** Who approved the code as it is now (logins)? */
+export const reviewApprovers = (ctx) => approvingReviews(ctx).map((r) => r.user.login);
 /** Has a person approved the code as it is now (any person; approval() applies the team's rule)? */
 export const humanApproval = (ctx) => reviewApprovers(ctx).length > 0;
 
@@ -114,7 +128,7 @@ export const approverOf = (body) => String(body || "").match(/^(?:#+\s*)?\**Appr
 export const approverList = (v) => String(v || "").split(/[\s,]+/).map((x) => x.replace(/^@/, "")).filter(Boolean);
 /** Who pushed the PR's latest change: the person on the newest commit with a human author (not Claude, not the pipeline). */
 export const lastPusherOf = (commits = []) => [...commits].sort((a, b) => String(a.committedDate).localeCompare(String(b.committedDate)))
-  .map((c) => (c.authors || []).find((a) => a.login && a.login !== "claude" && !isPipelineAuthor(a.login))?.login).filter(Boolean).pop() || null;
+  .map((c) => (c.authors || []).find((a) => a.login && isHumanAuthor(a.login))?.login).filter(Boolean).pop() || null;
 
 /**
  * Why this person's approval does not count, or null when it does (see GLOSSARY.md: Approver). With APPROVERS unset,
@@ -135,34 +149,37 @@ export function approvalProblem({ approvers = [], storyApprover = null, lastPush
 /**
  * Does a person's approval cover the code as it is now (Sign-off)? Reviews on the head; with signOff, also a ticked
  * Sign off or /ship (the trusted pipeline/sign-off status) and `ready` or /ship after the push. Each is checked
- * against approvalProblem(). Returns { ok, by: [login], refused: [{ login, why }] }. Pure.
+ * against approvalProblem(). Returns { ok, by: [login], who: [{ login, at, how }], refused: [{ login, why }] }. Pure.
  */
 export function approval(ctx, { signOff = false } = {}) {
-  const who = [...reviewApprovers(ctx)];
+  const seen = approvingReviews(ctx).map((r) => ({ login: r.user.login, at: r.submitted_at, how: "approved the pull request" }));
   if (signOff) {
     const s = verdictFor(STATUS.signoff, ctx);
-    if (s.state === "success") who.push(String(s.description || "").match(/@([A-Za-z0-9-]+)/)?.[1] || "");
-    who.push(...readyBy(ctx));
+    if (s.state === "success") seen.push({ login: String(s.description || "").match(/@([A-Za-z0-9-]+)/)?.[1] || "", at: s.at, how: "ticked Sign off" });
+    seen.push(...readyEvents(ctx).map(([at, login, how]) => ({ login, at, how })));
   }
-  const by = [], refused = [];
-  for (const login of [...new Set(who)]) {
-    const why = approvalProblem(ctx, login);
-    if (why) refused.push({ login, why }); else by.push(login);
+  const who = [], refused = [];
+  for (const a of seen) {
+    if (who.some((w) => w.login === a.login) || refused.some((r) => r.login === a.login)) continue;
+    const why = approvalProblem(ctx, a.login);
+    if (why) refused.push({ login: a.login, why }); else who.push(a);
   }
-  return { ok: by.length > 0, by, refused };
+  return { ok: who.length > 0, by: who.map((w) => w.login), who, refused };
 }
 
 /** `ready` counts if a person applied it after the head commit was pushed (first check on the head, server time). */
 export const SIGN_OFF_COMMENT = /^\/ship\b/;
 const CAN_SIGN_OFF = ["OWNER", "MEMBER", "COLLABORATOR"];
-export function readyBy({ labelEvents = [], checkRuns = [], comments = [] }) {
+/** [at, login, how] for each `ready` label or /ship after the head was pushed. */
+function readyEvents({ labelEvents = [], checkRuns = [], comments = [] }) {
   const pushedAt = checkRuns.map((c) => c.started_at).filter(Boolean).sort()[0];
   if (!pushedAt) return [];
-  const label = labelEvents.filter((e) => e.event === "labeled" && e.label?.name === "ready" && e.actor?.type !== "Bot").map((e) => [e.created_at, e.actor?.login]);
+  const label = labelEvents.filter((e) => e.event === "labeled" && e.label?.name === "ready" && e.actor?.type !== "Bot").map((e) => [e.created_at, e.actor?.login || "someone", "labelled it ready"]);
   // `/ship` in a comment by a person with write access counts the same as the `ready` label.
-  const ship = comments.filter((c) => SIGN_OFF_COMMENT.test(String(c.body || "").trim()) && c.user?.type !== "Bot" && CAN_SIGN_OFF.includes(c.author_association)).map((c) => [c.created_at, c.user?.login]);
-  return [...new Set([...label, ...ship].filter(([at]) => at >= pushedAt).map(([, login]) => login || "someone"))];
+  const ship = comments.filter((c) => SIGN_OFF_COMMENT.test(String(c.body || "").trim()) && c.user?.type !== "Bot" && CAN_SIGN_OFF.includes(c.author_association)).map((c) => [c.created_at, c.user?.login || "someone", "commented /ship"]);
+  return [...label, ...ship].filter(([at]) => at >= pushedAt);
 }
+export const readyBy = (facts) => [...new Set(readyEvents(facts).map(([, login]) => login))];
 export const readyAfterPush = (facts) => readyBy(facts).length > 0;
 
 /** Which verdicts this PR needs, given the AI flags and what it changes (prFiles: files changed against its base). */
@@ -176,39 +193,62 @@ export function requiredVerdicts({ ai = {}, compare = {} }, story) {
   ];
 }
 
-/** Decide from GitHub facts (see gather()). Returns { route, rules, reasons[], mergeable, story, validate, after[] }. */
+/**
+ * What still stands on the PR's head (see GLOSSARY.md: Standing): each verdict, the approval under the route's rule,
+ * and each required check. The one place that decides whether an earlier result still counts (trusted creator,
+ * spec-only carry, exact head for the UI test and UAT, nobody approves their own push). The gate, the cards, the
+ * board and the delivery record all read it. Pure: facts from gather().
+ */
+export function standing(facts) {
+  const { pr, checkRuns = [] } = facts;
+  const r = route(pr);
+  const rules = r ? RULES[r] : null;
+  const ctx = { ...facts, head: pr.headRefOid };
+  const kind = rules?.approval || "review";
+  return {
+    route: r, rules, ctx,
+    review: verdictFor(STATUS.review, ctx), ui: verdictFor(STATUS.ui, ctx), signoff: verdictFor(STATUS.signoff, ctx), uat: verdictFor(STATUS.uat, ctx),
+    approval: kind === "none" ? { ok: true, by: [], who: [], refused: [], none: true } : approval(ctx, { signOff: kind === "sign-off" }),
+    checks: Object.fromEntries((rules?.checks || [CHECKS.static, CHECKS.apex]).map((n) => { const c = latestCheck(checkRuns, n); return [n, { conclusion: c, state: checkState(c) }]; })),
+  };
+}
+
+/** Decide from GitHub facts (see gather()). Returns { route, rules, reasons[], blocking, mergeable, story, validate, after[] }. */
 export function evaluate(facts) {
-  const { pr, checkRuns = [], compare = {} } = facts;
+  const { pr, compare = {} } = facts;
   const r = route(pr);
   if (!r) return { route: null, reasons: ["not a gated pull request"], mergeable: false };
-  const rules = RULES[r];
-  const ctx = { ...facts, head: pr.headRefOid };
+  const st = standing(facts);
+  const rules = st.rules;
   const reasons = [];
+  let blocking = "pending";
+  const fail = (why) => { blocking = "failure"; reasons.push(why); };
   if (pr.state && pr.state !== "OPEN") reasons.push(`the PR is ${String(pr.state).toLowerCase()}`);
   if (pr.isDraft) reasons.push("the PR is a draft");
-  if (pr.mergeable === "CONFLICTING") reasons.push("it has merge conflicts with its base; update the branch");
+  if (pr.mergeable === "CONFLICTING") fail("it has merge conflicts with its base; update the branch");
 
-  for (const name of rules.checks) {
-    const c = latestCheck(checkRuns, name);
-    if (!checkPassed(c)) reasons.push(`check "${name}" is ${c}`);
+  for (const [name, c] of Object.entries(st.checks)) {
+    if (c.state === "failed") fail(`check "${name}" is ${c.conclusion}`);
+    else if (c.state !== "passed") reasons.push(`check "${name}" is ${c.conclusion}`);
   }
   if (rules.verdicts) {
     for (const v of requiredVerdicts(facts, storyOf(pr.headRefName))) {
-      const got = verdictFor(v.context, ctx);
+      const got = v.context === STATUS.review ? st.review : st.ui;
       if (v.required) {
         if (got.state === "missing") reasons.push(`${v.what} has not run on this code (${v.how})`);
         else if (got.state === "stale") reasons.push(`${v.what} judged an older commit; run it again (${v.how})`);
-        else if (got.state !== "success") reasons.push(`${v.what} did not pass (${got.state})`);
-      } else if (["failure", "error"].includes(got.state)) reasons.push(`${v.what} did not pass (${got.state})`);
+        else if (got.state === "pending") reasons.push(`${v.what} is running`);
+        else if (got.state !== "success") fail(`${v.what} did not pass (${got.state})`);
+      } else if (["failure", "error"].includes(got.state)) fail(`${v.what} did not pass (${got.state})`);
     }
   }
   // UAT (UAT_ENABLED): a release ships only after a person signed off the release in UAT (/uat-pass), on this code.
   if (r === "release" && facts.uat) {
-    const u = verdictFor(STATUS.uat, ctx);
+    const u = st.uat;
     if (u.state === "missing") reasons.push("not in UAT yet (it deploys there after the release PR opens)");
     else if (u.state === "stale") reasons.push("UAT signed off an older version; it redeploys, then sign off again (/uat-pass)");
     else if (u.state === "pending") reasons.push("waiting for UAT sign-off: test in UAT, then tick UAT passed on the release card (or comment /uat-pass)");
-    else if (u.state !== "success") reasons.push(`UAT failed (${u.description || u.state}); fix it, or tick UAT passed after a retest`);
+    else if (u.state !== "success") fail(`UAT failed (${u.description || u.state}); fix it, or tick UAT passed after a retest`);
   }
   if (rules.trusted) {
     if (!isPipelineAuthor(pr.author?.login)) reasons.push("a back-merge must be opened by the pipeline");
@@ -226,7 +266,7 @@ export function evaluate(facts) {
   for (const b of facts.blockers || []) if (!b.landed) reasons.push(`blocked by #${b.number}: it has not merged into the sprint yet`);
   // approvals (Approver): the story's approver, never the person who pushed the latest change, when APPROVERS is set
   if (rules.approval !== "none") {
-    const a = approval(ctx, { signOff: rules.approval === "sign-off" });
+    const a = st.approval;
     const staleApproval = !a.ok && (facts.reviews || []).some((x) => x.user?.type === "User" && x.state === "APPROVED");
     const named = facts.storyApprover ? ` by @${facts.storyApprover}` : "";
     if (!a.ok) reasons.push(a.refused.length ? `approval does not count: ${a.refused[0].why}`
@@ -237,7 +277,7 @@ export function evaluate(facts) {
   const forceApp = Boolean(compare.forceAppChanged);
   const validate = rules.validate === true || (rules.validate === "if-force-app" && forceApp);
   const after = followUps(pr, compare.prFiles || [], { forceApp });   // one rule for the gate and an emergency merge
-  return { route: r, rules, reasons, mergeable: reasons.length === 0, story: storyOf(pr.headRefName), validate, after };
+  return { route: r, rules, reasons, blocking, mergeable: reasons.length === 0, story: storyOf(pr.headRefName), validate, after, standing: st };
 }
 
 const validate_ = (rules, compare) => rules.validate === true || (rules.validate === "if-force-app" && Boolean(compare.forceAppChanged));
@@ -297,9 +337,20 @@ export function nudge(prNumber, { gh, ghPages }) {
   if (route(pr) === "backmerge" || pr.labels.some((l) => l.name === "ready")) return { action: "dispatch" };
   const approved = ghPages(`repos/${repo}/pulls/${prNumber}/reviews?per_page=100`).some((r) => r.user?.type === "User" && r.state === "APPROVED");
   if (approved) return { action: "dispatch" };
-  // a ticked Sign off (or /ship): the trusted pipeline/sign-off status on the head
-  const signedOff = ghPages(`repos/${repo}/commits/${pr.headRefOid}/statuses?per_page=100`)
+  // a ticked Sign off (or /ship): the trusted pipeline/sign-off status on any of its commits (one on an earlier commit
+  // still counts after a spec-only push; the gate decides whether it covers the head)
+  // and only if nothing but specs changed since it (verdictFor's rule): a sign-off that no longer covers the head would
+  // start a gate run, a billed minute, on every check and verdict until someone signs off again
+  const shas = (gh(["pr", "view", String(prNumber), "--json", "commits"])?.commits || []).map((c) => c.oid).reverse().slice(0, 20);
+  const signed = (sha) => ghPages(`repos/${repo}/commits/${sha}/statuses?per_page=100`)
     .some((s) => s.context === STATUS.signoff && s.state === "success" && TRUSTED_STATUS_CREATORS.includes(s.creator?.login));
+  const covers = (sha) => {
+    if (sha === pr.headRefOid) return true;
+    const cmp = gh(["api", `repos/${repo}/compare/${sha}...${pr.headRefOid}`], { allowFail: true });
+    return Boolean(cmp && cmp.status !== "diverged" && onlySpecsSince(sha, pr.headRefOid, { [sha]: (cmp.files || []).map((f) => f.filename) }));
+  };
+  const at = (shas.length ? shas : [pr.headRefOid]).find(signed);
+  const signedOff = Boolean(at && covers(at));
   return signedOff ? { action: "dispatch" } : { action: "none", why: "not signed off yet" };
 }
 

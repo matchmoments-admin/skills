@@ -39,9 +39,10 @@ export const COVERAGE_MIN = 75;
 
 /** Pipeline code: story PRs may not change it (it runs with production credentials). */
 // package.json and the lockfile too: install scripts run in jobs that hold credentials, so a story cannot change them.
-// The rules the checks and agents enforce too (code-analyzer.yml, CLAUDE.md, REVIEW.md): a story cannot loosen its own review.
+// The rules the checks and agents enforce too (code-analyzer.yml, CLAUDE.md, REVIEW.md, docs/agents): a story cannot
+// loosen its own review, and agents always read main's copy (the harness overlay), so a story's edit would be lost.
 export const PIPELINE_PATHS = [".github/", "pipeline/", "scripts/", "config/", "devhub-setup/", "baseline/", "package.json", "package-lock.json",
-  "code-analyzer.yml", "CLAUDE.md", "REVIEW.md"];
+  "code-analyzer.yml", "CLAUDE.md", "REVIEW.md", "docs/agents/"];
 
 /** Is this login one of the pipeline's own identities (PIPELINE_BOTS: bare names, e.g. "github-actions,acme-pipeline")?
  *  Exact names only, in the three forms GitHub prints them (name, name[bot], app/name): a look-alike user is not trusted. */
@@ -49,6 +50,9 @@ export function isPipelineAuthor(login, bots = setting("PIPELINE_BOTS") || "gith
   const names = String(bots).split(",").map((b) => b.trim()).filter(Boolean);
   return names.some((n) => [n, `${n}[bot]`, `app/${n}`].includes(String(login || "")));
 }
+/** Is a commit author a person: neither the pipeline nor Claude (an AI commit's co-author)? One rule for "who pushed
+ *  last" (approvals) and "when a person last pushed" (fix rounds). */
+export const isHumanAuthor = (login) => login !== "claude" && !isPipelineAuthor(login);
 export const touchesPipeline = (files) => files.filter((f) => PIPELINE_PATHS.some((p) => f.startsWith(p)));
 
 /** Metadata a user sees in the UI: a change touching any of these needs a UI test; others do not. */

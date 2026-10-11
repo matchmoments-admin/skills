@@ -25,7 +25,7 @@ jobs:
       tested: ${{ steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.current.outputs.superseded != 'true' }}
     steps:
       - uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ne2e/support", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - name: The open sprint
         id: ctx
         working-directory: .pipeline
@@ -76,7 +76,7 @@ jobs:
       - name: The test harness from main (login, personas, evidence), not the release branch's copy
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
-        run: rm -rf e2e/support && cp -R ../.pipeline/e2e/support e2e/support
+        run: node ../.pipeline/pipeline/bin/pipe.mjs harness overlay staging --from ../.pipeline
       - uses: ./.pipeline/.github/actions/playwright
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
         env:

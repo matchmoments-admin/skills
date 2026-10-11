@@ -43,14 +43,11 @@ jobs:
       PR: ${{ github.event.pull_request.number }}
       LABEL: ${{ github.event.label.name }}
     steps:
-      - run: |
-          if [ "$LABEL" = "ai:test" ] && [ "${{ vars.AI_UI_TEST }}" != "true" ]; then
-            gh pr comment "$PR" --body "AI UI test is off (repository variable \`AI_UI_TEST\`). Commit \`e2e/story-<key>.spec.ts\` yourself and label the PR \`test\`, or turn it on in Settings > Secrets and variables > Actions > Variables."
-            gh pr edit "$PR" --remove-label ai:test || true
-            exit 0
-          fi
-          if [ "$LABEL" = "ai:test" ]; then MODE=ai; else MODE=run; fi
-          gh workflow run ui-test.yml --ref main -f pr="$PR" -f mode="$MODE"
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      # flag off, or nothing to run (no committed spec: that is the verdict, posted here): decided in main's code
+      # (pipeline/src/start.mjs) before a test runner starts
+      - run: node pipeline/bin/pipe.mjs start ui-test --pr "$PR" --mode "$([ "$LABEL" = "ai:test" ] && echo ai || echo run)"
   write:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'ai' && vars.AI_UI_TEST == 'true'
     runs-on: ubuntu-latest
@@ -82,13 +79,8 @@ jobs:
         with: { ref: "${{ steps.pr.outputs.branch }}", fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
-      - name: "Agent guidance from main (docs/agents), not the branch's copy"
-        run: |   # hidden from git, so an agent's commit never carries main's copy onto the story branch
-          git ls-files -z docs/agents | xargs -0 -r git update-index --skip-worktree
-          echo "docs/agents/" >> .git/info/exclude
-          rm -rf docs/agents && mkdir -p docs && cp -R .pipeline/docs/agents docs/agents
       - id: id
         uses: ./.pipeline/.github/actions/pipeline-identity
         with:
@@ -118,11 +110,8 @@ jobs:
           # loginAs reads these: once the Dev Hub is logged out (before any agent or spec code), `sf org display` fails
           sf org display -o "$ALIAS" --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --out "$RUNNER_TEMP/story.md"
-      - name: The test harness from main (login, personas, evidence), not the story branch's copy
-        run: |   # hidden from git, so the agent's commit never carries main's copy onto the story branch
-          git ls-files -z e2e/support | xargs -0 -r git update-index --skip-worktree
-          echo "e2e/support/" >> .git/info/exclude
-          rm -rf e2e/support && cp -R .pipeline/e2e/support e2e/support
+      - name: Main's rules over the branch's copy (CLAUDE.md, REVIEW.md, docs/agents, e2e/support), hidden from git
+        run: node .pipeline/pipeline/bin/pipe.mjs harness overlay ui-test   # after the branch is checked out and up to date
       - uses: ./.pipeline/.github/actions/playwright
       - uses: ./.pipeline/.github/actions/claude-agent
         env:
@@ -201,7 +190,7 @@ jobs:
         with: { ref: "${{ steps.head.outputs.sha }}", persist-credentials: false }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - name: Which spec?
         id: spec
         run: |
@@ -236,11 +225,9 @@ jobs:
         run: |
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}" "$RUNNER_TEMP/ci.key"
-      - name: The test harness from main (login, personas, evidence), not the story branch's copy
-        run: |   # hidden from git, like the write job's copy
-          git ls-files -z e2e/support | xargs -0 -r git update-index --skip-worktree
-          echo "e2e/support/" >> .git/info/exclude
-          rm -rf e2e/support && cp -R .pipeline/e2e/support e2e/support
+      - name: Main's rules over the branch's copy (CLAUDE.md, REVIEW.md, docs/agents, e2e/support), hidden from git
+        if: steps.spec.outputs.exists == 'true'
+        run: node .pipeline/pipeline/bin/pipe.mjs harness overlay ui-test   # after the branch is checked out and up to date
       - uses: ./.pipeline/.github/actions/playwright
         if: steps.spec.outputs.exists == 'true'
       - name: Run the committed spec

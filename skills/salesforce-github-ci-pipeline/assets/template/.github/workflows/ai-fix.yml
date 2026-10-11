@@ -2,7 +2,8 @@ name: ai-fix
 # FLAG: repository variable AI_FIX=true (off by default: a person pushes the fixes). Works on human review
 # comments and failed CI checks, so it does not need AI_REVIEW.
 # BUTTON: label a PR `ai:fix` or comment /fix. Claude fixes the blockers and majors from the review and the errors of
-# a failed CI run, pushes, and the review runs again. At most two rounds per PR.
+# a failed CI run, pushes, and the review runs again. At most two rounds per PR since a person last pushed (the route
+# job decides, before the fix job starts: pipeline/src/start.mjs).
 # The label only dispatches the real job with --ref main: a labelled PR runs the workflow file from GitHub's test merge
 # commit, which can lag behind main, so fixes to this file would otherwise not reach open PRs.
 run-name: "${{ inputs.pr && format('ai-fix PR #{0}', inputs.pr) || format('ai-fix (label on PR #{0})', github.event.pull_request.number) }}"   # the round limit counts these
@@ -34,13 +35,11 @@ jobs:
       GH_REPO: ${{ github.repository }}
       PR: ${{ github.event.pull_request.number }}
     steps:
-      - run: |
-          if [ "${{ vars.AI_FIX }}" != "true" ]; then
-            gh pr comment "$PR" --body "AI fix is off (repository variable \`AI_FIX\`). Push the fix yourself, or turn it on in Settings > Secrets and variables > Actions > Variables."
-            gh pr edit "$PR" --remove-label ai:fix || true
-          else
-            gh workflow run ai-fix.yml --ref main -f pr="$PR"
-          fi
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      # flag off, not a story, the blocked label, the round limit (it then blocks the PR and says what a person can
+      # do, once): decided here in main's code (pipeline/src/start.mjs), so the fix job never starts only to stop
+      - run: node pipeline/bin/pipe.mjs start fix --pr "$PR"
   fix:
     if: github.event_name == 'workflow_dispatch' && vars.AI_FIX == 'true'
     runs-on: ubuntu-latest
@@ -58,7 +57,6 @@ jobs:
       is-app: ${{ steps.id.outputs.is-app }}
       branch: ${{ steps.pr.outputs.branch }}
       before: ${{ steps.head.outputs.before }}
-      over: ${{ steps.rounds.outputs.over }}
     timeout-minutes: 75   # 45 of them may be waiting for the story org's lane
     env:
       GH_TOKEN: ${{ github.token }}
@@ -78,13 +76,8 @@ jobs:
         with: { ref: "${{ steps.pr.outputs.branch }}", fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
-      - name: "Agent guidance from main (docs/agents), not the branch's copy"
-        run: |   # hidden from git, so an agent's commit never carries main's copy onto the story branch
-          git ls-files -z docs/agents | xargs -0 -r git update-index --skip-worktree
-          echo "docs/agents/" >> .git/info/exclude
-          rm -rf docs/agents && mkdir -p docs && cp -R .pipeline/docs/agents docs/agents
       - id: id
         uses: ./.pipeline/.github/actions/pipeline-identity
         with:
@@ -101,21 +94,6 @@ jobs:
       - name: The head before the fix (the review runs again only on a new one)
         id: head
         run: echo "before=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Enforce the round limit (earlier fix runs for this PR, whatever their commits were called)
-        id: rounds
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node .pipeline/pipeline/bin/pipe.mjs verdict rounds --pr "$PR"
-      - name: Stop at the limit
-        if: steps.rounds.outputs.over == 'true'
-        run: |
-          # not a failure: the pipeline worked as designed. Say what a person can do, once.
-          if ! gh pr view "$PR" --json labels --jq '[.labels[].name] | index("blocked")' | grep -q '[0-9]'; then
-            gh pr comment "$PR" --body "Claude has had ${{ steps.rounds.outputs.limit }} fix rounds on this change since the last push by a person, so it stops here. **What you can do:** push a fix yourself (the count starts again, and the review re-runs), or, if the AI review is wrong, comment \`/review-ok <why>\` to accept the change anyway."
-          fi
-          gh pr edit "$PR" --remove-label ai:fix --add-label blocked
-          [ -z "$STORY_KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$STORY_KEY" --now "Claude's fix rounds are used up: a person needs to look" --failed --retry "push a fix yourself, or comment /review-ok <why> if the review is wrong"
-          exit 1   # stops the job (the agent must not run); the card above already says what to do
       - uses: ./.pipeline/.github/actions/sf-auth
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
@@ -152,6 +130,8 @@ jobs:
           } > "$RUNNER_TEMP/review-feedback.md"
           grep -c "Failed CI checks" "$RUNNER_TEMP/review-feedback.md" | sed 's/^/failed-CI sections: /'
           if [ -n "$STORY_KEY" ]; then node .pipeline/pipeline/bin/pipe.mjs tracker story "$STORY_KEY" --pack --base "origin/$BASE" --out "$RUNNER_TEMP/story.md"; else echo "(no story)" > "$RUNNER_TEMP/story.md"; fi
+      - name: Main's rules over the branch's copy (CLAUDE.md, REVIEW.md, docs/agents), hidden from git
+        run: node .pipeline/pipeline/bin/pipe.mjs harness overlay fix   # after the branch is checked out and up to date
       - run: npm install --no-audit --no-fund --ignore-scripts   # the production key is still on disk here: no install scripts
       - uses: ./.pipeline/.github/actions/claude-agent
         with:
@@ -178,20 +158,24 @@ jobs:
         if: always()
         run: gh pr edit "$PR" --remove-label ai:fix || true
       - name: The story card says the fix failed, and where to look
-        if: failure() && env.STORY_KEY != '' && steps.rounds.outputs.over != 'true'
+        if: failure() && env.STORY_KEY != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$STORY_KEY" --now "Claude's fix" --failed --retry "comment /fix to retry, or push a fix yourself"
   follow-up:
-    # Fresh runner, no agent: the review again (and CI without the App), only if the fix pushed a new head. A run that
-    # stopped at the round limit, or pushed nothing, starts nothing (that was an endless review/fix loop).
+    # Fresh runner, no agent: the review again (and CI without the App), only if the fix pushed a new head. A fix that
+    # pushed nothing starts nothing (that was an endless review/fix loop); the round limit stops it before it starts.
     needs: fix
-    if: always() && needs.fix.result != 'skipped' && needs.fix.outputs.over != 'true' && needs.fix.outputs.before != ''
+    if: always() && needs.fix.result != 'skipped' && needs.fix.outputs.before != ''
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
       actions: write
-      pull-requests: read
+      contents: read
+      pull-requests: write  # pipe start review: labels, the "not needed" verdict and the card
+      statuses: write
+      issues: write
+      checks: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -199,8 +183,10 @@ jobs:
       BRANCH: ${{ needs.fix.outputs.branch }}
       BEFORE: ${{ needs.fix.outputs.before }}
     steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       - run: |
           NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
           [ "$NOW" != "$BEFORE" ] || { echo "the fix pushed nothing: no new review"; exit 0; }
-          [ "${{ vars.AI_REVIEW }}" != "true" ] || gh workflow run ai-review.yml --ref main -f pr="$PR"
+          [ "${{ vars.AI_REVIEW }}" != "true" ] || node pipeline/bin/pipe.mjs start review --pr "$PR"   # the review's start decision
           [ "${{ needs.fix.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"

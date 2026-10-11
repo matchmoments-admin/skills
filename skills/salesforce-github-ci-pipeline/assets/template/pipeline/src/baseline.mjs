@@ -149,6 +149,11 @@ export function capture({ sf, config, root = process.cwd(), log = () => {} }) {
     log(`${type}: ${listings[type].length} in production`);
   }
   const manifest = manifestFor(listings, { config, orgCreated });
+  // the inventory: types the baseline does not copy (config.watch), listed only, so a person sees what production
+  // has that scratch orgs do not (report only; add a type to `types`, or to `exclude`)
+  const watched = {};
+  for (const type of config.watch || []) watched[type] = sf(["org", "list", "metadata", "-m", type, "-o", "devhub"], { allowFail: true }) || [];
+  const notCopied = uncovered(watched, { config, orgCreated });
   const work = join(tmpdir(), `baseline-${process.pid}`);
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { recursive: true });
@@ -161,5 +166,25 @@ export function capture({ sf, config, root = process.cwd(), log = () => {} }) {
   dropEmpty(out);
   for (const f of walk(out).filter((x) => /\.xml$/.test(x))) writeFileSync(f, sanitize(relative(root, f), readFileSync(f, "utf8")));   // binaries untouched
   log(`baseline: ${walk(out).length} files from production, ${removed.length} left to force-app (it owns them)`);
-  return { manifest, listings, removed };
+  return { manifest, listings, removed, notCopied };
+}
+
+/**
+ * What production has, of the watched types the baseline does not copy (config.watch): customised members only (the
+ * same filter as the baseline: no managed packages, nothing the platform made, nothing unchanged since the org was
+ * created). Pure. { Type: [names] }.
+ */
+export function uncovered(watched, { config, orgCreated }) {
+  const types = Object.keys(watched).filter((t) => !(config.types || []).includes(t));
+  return manifestFor(Object.fromEntries(types.map((t) => [t, watched[t]])), { config: { ...config, customisedOnly: [...(config.customisedOnly || []), ...types] }, orgCreated });
+}
+
+/** The inventory section for the drift PR and the run summary. Pure. */
+export function inventoryMarkdown(notCopied) {
+  const rows = Object.entries(notCopied || {}).filter(([, ms]) => ms.length);
+  if (!rows.length) return "**Production has, scratch orgs don't:** nothing of the watched types (`config/baseline.json` watch).";
+  return ["### Production has, scratch orgs don't", "",
+    "Customised in production, of types the baseline does not copy: a story that depends on one of these is tested without it. Add the type to `types` in `config/baseline.json` (scratch orgs then get it), or to `exclude` with a reason.", "",
+    "| type | count | examples |", "|---|---|---|",
+    ...rows.map(([t, ms]) => `| ${t} | ${ms.length} | ${ms.slice(0, 5).map((m) => `\`${m}\``).join(", ")}${ms.length > 5 ? ", ..." : ""} |`)].join("\n");
 }

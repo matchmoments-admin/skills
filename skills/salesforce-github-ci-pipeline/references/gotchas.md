@@ -408,3 +408,22 @@ Every entry happened in a real run. Search this file for the error text you see.
   starts a back-merge into the open release branch.
 - **The delivery record said "AI review: not run"**: the review status sits on the commit it judged, and the UI
   tester's spec commits came after. → Close-out looks back through the PR's commits.
+
+## End-to-end readiness (12 Oct, PR #190)
+
+- **A rule decided in several places drifts.** The delivery record trusted any status creator and could name an
+  approver the gate had refused; the card and the board used other approval rules than the gate. → One `standing()`
+  in the gate decides what still counts; every reader renders it.
+- **Hand-written overlays of main's files kept breaking** (four fix PRs in three weeks; implement and fix read the
+  branch's old CLAUDE.md). → One `pipe harness overlay <role>`, run after the branch checkout, hidden from git.
+- **Cone-mode sparse checkout brings a directory's parents' top-level files.** Adding `e2e/support` to `.pipeline`'s
+  sparse list also checked out `e2e/*.spec.ts`, which the LWC Jest run then picked up. → `e2e/support` only where the
+  harness runs; Jest ignores `.pipeline/`.
+- **A pipeline PR cannot use a new `pipe` command from main's `.pipeline` copy in its own CI**: main does not have it
+  yet ("Unknown command"). → The static job (no secrets; the guard keeps a story's `pipeline/` equal to its base) runs
+  the checkout's own `pipe.mjs`, as the access check does.
+- **Tests read the repository's settings in CI** (`PIPELINE_VARS`, for example `APPROVERS`): a test of approval rules
+  must set its own.
+- **A job that starts only to stop still bills a minute and holds a lane.** → Start decisions (`pipe start`) in the
+  short route job: flag off, release or back-merge, spec-only push, nothing reviewable, blocked, the fix-round limit,
+  no committed spec.

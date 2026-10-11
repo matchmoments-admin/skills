@@ -20,6 +20,44 @@ const flowOfTest = (src) => (src.match(/<flowApiName>([^<]+)<\/flowApiName>/) ||
 const objectOf = (p) => (p.match(/\/objects\/([^/]+)\//) || [])[1] || null;
 const isPermissionSet = (p) => p.endsWith(".permissionset-meta.xml");
 
+const isRecordTriggered = (xml) => /<triggerType>Record(Before|After)Save<\/triggerType>/.test(xml);
+const isActive = (xml) => /<status>Active<\/status>/.test(xml);
+
+/**
+ * Flow parity with Apex's "every class is tested": a changed, active, record-triggered Flow needs a Flow test
+ * (flowtests/, naming it in <flowApiName>), in the change or already in the repo. Screen, scheduled and inactive Flows
+ * are not asked (Flow tests cannot run them). exceptions: Flow names (config/test-exceptions.json, a reviewed pipeline
+ * change). Returns the Flow names without a test. Pure.
+ */
+export function flowTestGaps({ changed, files, read }, exceptions = []) {
+  const tested = new Set(files.filter(isFlowTest).map((p) => flowOfTest(read(p))));
+  return changed.filter(isFlow).map((p) => ({ name: base(p).replace(".flow-meta.xml", ""), xml: read(p) }))
+    .filter((f) => isRecordTriggered(f.xml) && isActive(f.xml) && !tested.has(f.name) && !exceptions.includes(f.name)).map((f) => f.name);
+}
+
+/** The active record-triggered Flows among changed files (the ones Flow tests and Flow coverage are about). Pure. */
+export const recordTriggeredFlows = (changed, read) => changed.filter(isFlow).filter((p) => { const x = read(p); return isRecordTriggered(x) && isActive(x); })
+  .map((p) => base(p).replace(".flow-meta.xml", ""));
+
+/**
+ * How much of each Flow the tests just run exercised, from the Tooling API's FlowTestCoverage (filled by Apex tests
+ * that fire the Flow; the platform does not report Flow tests' own coverage). { [flow]: percent }, best of the test
+ * methods; {} when the org reports nothing. Never throws: coverage is information, a minimum is opt-in.
+ */
+export function flowCoverage(io, alias, flows) {
+  if (!flows.length) return {};
+  const rows = io.sf(["data", "query", "--use-tooling-api", "-o", alias, "-q",
+    "SELECT FlowVersion.Definition.DeveloperName, NumElementsCovered, NumElementsNotCovered FROM FlowTestCoverage"], { allowFail: true })?.records || [];
+  const out = {};
+  for (const r of rows) {
+    const name = r.FlowVersion?.Definition?.DeveloperName;
+    const all = (Number(r.NumElementsCovered) || 0) + (Number(r.NumElementsNotCovered) || 0);
+    if (!flows.includes(name) || !all) continue;
+    out[name] = Math.max(out[name] ?? 0, Math.round((100 * Number(r.NumElementsCovered)) / all));
+  }
+  return out;
+}
+
 /**
  * changed/deleted: source paths that differ from the base; files: every source path; read(path) -> text.
  * Returns { mode: "none" | "relevant" | "all", apex: [class], flows: ["Flow.Test"], why }.
