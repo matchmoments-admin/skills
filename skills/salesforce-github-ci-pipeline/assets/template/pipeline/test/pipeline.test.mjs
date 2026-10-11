@@ -398,6 +398,9 @@ test("metrics: DORA from releases and PR routes, AI first-pass rate from fix com
       { name: "ci", conclusion: "success", run_started_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:10:00Z" },
       { name: "ci", conclusion: "failure", run_started_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:20:00Z" },
       { name: "ci", conclusion: "skipped", run_started_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:01Z" },
+      // one row per workflow file, whatever the run is called
+      { name: "ai-fix PR #176", path: ".github/workflows/ai-fix.yml", conclusion: "success", run_started_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:02:00Z" },
+      { name: "ai-fix (label on PR #185)", path: ".github/workflows/ai-fix.yml", conclusion: "success", run_started_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:04:00Z" },
     ],
     fixCommits: { 2: 1 },
   });
@@ -409,6 +412,7 @@ test("metrics: DORA from releases and PR routes, AI first-pass rate from fix com
   assert.equal(s.ai.passedFirstReview, 50);
   assert.deepEqual(s.pipeline.ci, { runs: 2, successRate: 50, medianMinutes: 15, p90Minutes: 20 });
   assert.match(toMarkdown(s), /\| ci \| 2 \| 50% \| 15 \|/);
+  assert.equal(s.pipeline["ai-fix"].runs, 2);
 });
 
 // ---------------------------------------------------------------- AI flags, models, Jev triage
@@ -691,6 +695,9 @@ test("follow-ups after an emergency merge are the ones the gate would have start
   assert.deepEqual(gate.followUps({ headRefName: "release/w", baseRefName: "main" }), ["release"]);
   assert.deepEqual(gate.followUps({ headRefName: "fix/x", baseRefName: "main" }, ["pipeline/a.mjs"]), []);
   assert.deepEqual(gate.followUps({ headRefName: "fix/x", baseRefName: "main" }, ["force-app/a.cls"]), ["release"]);
+  // a workflow fix reaches the open sprint's release branch (its own copy runs staging): back-merge (story #166)
+  assert.deepEqual(gate.followUps({ headRefName: "fix/x", baseRefName: "main" }, [".github/workflows/staging-deploy.yml"]), ["backmerge"]);
+  for (const f of ["gate", "merged"]) assert.match(readFileSync(new URL(`../../.github/workflows/${f}.yml`, import.meta.url), "utf8"), /backmerge\) gh workflow run back-merge\.yml --ref main/);
 });
 
 test("story card says what is running right now, with a link; failures say where to look and how to retry", () => {
@@ -1401,9 +1408,27 @@ test("story orgs leave ORG_RESERVE slots for staging, UAT and CI; an expired org
   assert.throws(() => orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).attach("story:9"), /expired \(story orgs live 7 days\)\. Comment \/start/);
 });
 
+test("Actions minutes: a job that has nothing to do never starts a runner (GitHub bills each job as at least a minute)", () => {
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  const ci = wf("ci");
+  // static decides what changed before the PR's code runs; the org job and the code analyzer only on Salesforce changes
+  assert.ok(ci.indexOf("id: what") < ci.indexOf("npm ci --no-audit"), "decided before any of the PR's code runs");
+  assert.match(ci, /needs\.static\.outputs\.org == 'true' \|\| \(github\.event_name == 'workflow_dispatch' &&\n\s+!startsWith\(inputs\.ref, 'release\/'\) && !startsWith\(inputs\.ref, 'backmerge-'\)\)/, "a hand-started release or back-merge CI never deploys again");
+  assert.match(ci, /Code analyzer \(PMD and ESLint\)\n\s+if: steps\.what\.outputs\.sf == 'true'/);
+  assert.match(ci, /needs\.apex\.result == 'skipped'/, "the nudge runs when the org job was skipped");
+  assert.match(ci, /needs\.static\.outputs\.ui == 'false'/, "UI test not needed, posted by the nudge");
+  assert.match(ci, /!contains\(github\.head_ref, '\/'\) && !startsWith\(github\.head_ref, 'backmerge-'\)/, "autofix filtered before a runner starts");
+  assert.doesNotMatch(ci, /pull_request\.labels\.\*\.name, 'blocked'/, "blocked is read live: the payload is older than a person's push");
+  // nothing reviewable: the routing job says so; the review and verdict jobs never start
+  assert.match(wf("ai-review"), /not needed: no Salesforce source or specs changed" >\/dev\/null\n\s+echo "nothing reviewable/);
+  assert.match(wf("story-pr"), /github\.event\.sender\.type != 'Bot'/);
+  assert.equal(gate.checkPassed("skipped"), true, "a skipped org job passes the gate, as it passes GitHub's rules");
+  assert.equal(gate.checkPassed("failure"), false);
+});
+
 test("cost wiring: no duplicate full run on release PRs, the fixer only for code failures, renudge only on the main lock", () => {
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
-  assert.match(wf("ci"), /release\/\*\|backmerge-\*\) echo "none=true"/);
+  assert.match(wf("ci"), /release\/\*\|backmerge-\*\) echo "org=false"/);
   assert.match(wf("ci"), /needs.apex.outputs.code-failed == 'true'/);
   assert.match(wf("gate"), /needs.decide.outputs.lock == 'main'/);
 });
@@ -1888,6 +1913,14 @@ test("the UI tester's screenshots must show the criterion met: data first, the e
 test("round 1: a weak UI spec fails; evidence never boxes the page header; closed stories' comments are rewritten before their screenshots go", async () => {
   assert.deepEqual(evidence.specProblems("await expect(page.getByRole('heading').first()).toBeVisible();").length, 2);
   assert.deepEqual(evidence.specProblems(readFileSync(new URL("../../e2e/story-84.spec.ts", import.meta.url), "utf8")), []);
+  // story #166: Claude's rewrite polled for "No data" to go, carried on regardless, and asserted isVisible() with toBe(true)
+  const weak = "let n = await d.getByText('No data').count();\nwhile (n > 0 && i < 30) { await page.waitForTimeout(3000); n = await d.getByText('No data').count(); }\nconst v = await c.isVisible();\nexpect(v).toBe(true);";
+  assert.equal(evidence.specProblems(weak).length, 2);
+  // not weak: isVisible() for control flow, a fixed retry followed by an assertion, a poll asserted afterwards
+  assert.deepEqual(evidence.specProblems("await expect(x).toHaveText('A');\nif (await dialog.isVisible()) await dialog.click();"), []);
+  assert.deepEqual(evidence.specProblems("for (let i = 0; i < 3; i++) { await r.click(); await page.waitForTimeout(2000); }\nawait expect(d.getByText('No data')).toHaveCount(0);"), []);
+  assert.deepEqual(evidence.specProblems("let n = 1;\nwhile (n > 0 && i < 30) { await page.waitForTimeout(3000); n = await d.count(); }\nexpect(n).toBe(0);"), []);
+  assert.deepEqual(evidence.specProblems(readFileSync(new URL("../../e2e/story-166.spec.ts", import.meta.url), "utf8")), []);
   assert.match(readFileSync(new URL("../../e2e/support/evidence.ts", import.meta.url), "utf8"), /its locator points into the page header/);
   const ui = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
   assert.match(ui, /pipe\.mjs ui spec-check --file/);
@@ -2282,6 +2315,39 @@ test("RunRelevantTests (enterprise C): CI lets Salesforce choose a story's Apex 
   const p = production.validate({ sf: (a) => { prodCalls.push(a.join(" ")); return a[2] === "validate" ? { id: "0AfP" } : reports.shift(); } }, { source: ["-d", "force-app"], allTests: ["A", "B"], sleep: () => {} });
   assert.equal(p.level, "all");
   assert.match(prodCalls.at(-2), /--test-level RunSpecifiedTests --tests A --tests B/);
+});
+
+test("a spec-only push keeps the AI review but not the UI test (story #166: a weakened spec rode on the earlier pass)", async () => {
+  const { verdictFor, STATUS } = await import("../src/gate.mjs");
+  const by = { login: "github-actions[bot]" };
+  const ctx = { head: "h2", diffsToHead: { h1: ["e2e/story-166.spec.ts"] }, statuses: [
+    { context: STATUS.review, state: "success", sha: "h1", creator: by, created_at: "1" },
+    { context: STATUS.ui, state: "success", sha: "h1", creator: by, created_at: "2" }] };
+  assert.equal(verdictFor(STATUS.review, ctx).state, "success");
+  assert.equal(verdictFor(STATUS.ui, ctx).state, "stale");
+  assert.equal(verdictFor(STATUS.ui, { ...ctx, head: "h1" }).state, "success");
+});
+
+test("delivery record: the AI review is found on the commit it judged when later commits only changed the spec (story #166)", async () => {
+  const { gatherDelivery } = await import("../src/closeout.mjs");
+  const R = "repos/o/r";
+  const data = {
+    "issue view 166": { title: "Story", body: "", createdAt: "2026-10-08T00:00:00Z" },
+    "pr list issue-166": [{ number: 176, headRefName: "issue-166", headRefOid: "spec2", createdAt: "2026-10-08T06:00:00Z", mergedAt: "2026-10-09T00:00:00Z",
+      commits: [{ oid: "code" }, { oid: "spec1" }, { oid: "spec2" }] }],
+    [`${R}/commits/spec2/statuses?per_page=100`]: [{ context: "pipeline/ui-test", state: "success", created_at: "2026-10-08T09:00:00Z" }],
+    [`${R}/commits/spec1/statuses?per_page=100`]: [],
+    [`${R}/commits/code/statuses?per_page=100`]: [{ context: "pipeline/ai-review", state: "success", description: "AI review passed", created_at: "2026-10-08T08:00:00Z" }],
+    [`${R}/pulls/176/reviews?per_page=100`]: [],
+    [`${R}/compare/code...spec2`]: { files: [{ filename: "e2e/story-166.spec.ts" }] },
+  };
+  const gh = (a) => a[0] === "api" ? data[a[1]] : a[0] === "issue" ? data[`issue view ${a[2]}`] : a.some((x) => x === "head:issue-166") ? data["pr list issue-166"] : [];
+  const d = gatherDelivery("166", gh, { tag: "v1", sprint: "2026-w47", repo: "o/r" });
+  assert.equal(d.review.state, "success");
+  assert.equal(d.review.text, "AI review passed");
+  // code changed after the review (never reviewed): the earlier review does not count for it
+  data[`${R}/compare/code...spec2`] = { files: [{ filename: "e2e/story-166.spec.ts" }, { filename: "force-app/main/default/classes/X.cls" }] };
+  assert.equal(gatherDelivery("166", gh, { tag: "v1", sprint: "2026-w47", repo: "o/r" }).review, null);
 });
 
 test("delivery record (enterprise D): the shipped story's trail, read from GitHub, as one table and one JSON line; an overrule keeps its full reason", async () => {

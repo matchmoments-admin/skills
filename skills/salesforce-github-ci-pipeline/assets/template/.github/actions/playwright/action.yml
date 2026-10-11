@@ -1,5 +1,5 @@
 name: playwright
-description: Install the project's npm packages and Playwright's Chromium, with the browser cached by lockfile
+description: Install the project's npm packages and Playwright's Chromium, with the browser and npm's cache kept by lockfile
 inputs:
   working-directory: { required: false, default: ".", description: "Where package.json is" }
 runs:
@@ -8,8 +8,11 @@ runs:
     - id: cache
       uses: actions/cache@v4
       with:
-        path: ~/.cache/ms-playwright
-        key: playwright-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.working-directory)) }}
+        # the browser and npm's download cache (npm ci then installs without downloading)
+        path: |
+          ~/.cache/ms-playwright
+          ~/.npm
+        key: playwright-npm-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.working-directory)) }}
     - name: npm packages and browser
       shell: bash
       working-directory: ${{ inputs.working-directory }}

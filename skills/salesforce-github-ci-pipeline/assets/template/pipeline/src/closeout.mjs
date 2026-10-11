@@ -133,7 +133,17 @@ export function gatherDelivery(key, gh, { tag, sprint = null, now = new Date(), 
   const signoff = latest(sts, "pipeline/sign-off");
   const approved = reviews[0] ? { by: reviews[0].user.login, at: reviews[0].submitted_at, how: "approved the pull request" }
     : signoff?.state === "success" ? { by: String(signoff.description).match(/@([A-Za-z0-9-]+)/)?.[1] || null, at: signoff.created_at, how: "ticked Sign off" } : null;
-  const review = latest(sts, "pipeline/ai-review");
+  // The review sits on the commit it judged: later spec-only commits (the UI tester's) carry none (story #166). An
+  // earlier review counts only if everything since it is under e2e/, the gate's own rule (verdictFor).
+  const specsOnlySince = (sha) => (api(`repos/${repo}/compare/${sha}...${pr.headRefOid}`)?.files || [null]).every((f) => f?.filename?.startsWith("e2e/"));
+  const earlier = () => {
+    for (const c of [...(pr.commits || [])].reverse().slice(1)) {
+      const r = latest(statusesOf(c.oid), "pipeline/ai-review");
+      if (r) return specsOnlySince(c.oid) ? r : null;
+    }
+    return null;
+  };
+  const review = latest(sts, "pipeline/ai-review") || earlier();
   const overruled = /overruled by @([A-Za-z0-9-]+)/.exec(review?.description || "");
   const reason = overruled ? (api(`repos/${repo}/issues/${pr.number}/comments?per_page=100`) || []).map((c) => String(c.body || ""))
     .reverse().find((b) => b.startsWith(`✋ @${overruled[1]} accepted this change`))?.replace(/^.*?`[0-9a-f]{7}`: /s, "").replace(/\. A new push needs a review again\.$/, "") : null;

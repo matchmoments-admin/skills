@@ -32,6 +32,11 @@ jobs:
       contents: read        # runs the PR's own code (lint, unit tests): no token that can post a verdict
     env:
       REF: ${{ inputs.ref || github.head_ref || github.ref_name }}
+    outputs:
+      # decided before any of the PR's code runs (a later step cannot change an earlier step's outputs)
+      base: ${{ steps.what.outputs.base }}
+      org: ${{ steps.what.outputs.org }}
+      ui: ${{ steps.what.outputs.ui }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ inputs.ref || github.ref }}", fetch-depth: 0, persist-credentials: false }   # no token left in .git/config
@@ -46,6 +51,19 @@ jobs:
           BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
           git rev-parse -q --verify "origin/$BASE" >/dev/null || { echo "::error::origin/$BASE is not in the checkout"; exit 1; }   # fetch-depth 0 brought every branch
           node .pipeline/pipeline/bin/pipe.mjs gate guard --base "origin/$BASE" --branch "$REF"
+      - name: What changed? (decides which checks need a runner; before any of the PR's code runs)
+        id: what
+        run: |
+          BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          SF=false; git diff --quiet "origin/$BASE...HEAD" -- force-app || SF=true
+          echo "sf=$SF" >> "$GITHUB_OUTPUT"   # the code analyzer runs only on Salesforce changes
+          # The scratch-org job: a story's Salesforce changes only. Release PRs and back-merges are covered by the
+          # staging regression (required for them instead); with nothing to deploy the job is skipped, which passes.
+          case "$REF" in release/*|backmerge-*) echo "org=false" >> "$GITHUB_OUTPUT" ;; *) echo "org=$SF" >> "$GITHUB_OUTPUT" ;; esac
+          node .pipeline/pipeline/bin/pipe.mjs gate ui-needed --base "origin/$BASE" | tee ui.txt
+          grep -q "^no UI-facing" ui.txt && echo "ui=false" >> "$GITHUB_OUTPUT" || echo "ui=true" >> "$GITHUB_OUTPUT"
+          rm -f ui.txt
       - name: Access check (least privilege; blockers fail, warnings annotate the PR)
         # The checkout's own pipe.mjs: this job holds no secrets and a read-only token, and the guard above keeps a
         # story's pipeline/ (and config/access-exceptions.json) identical to its base.
@@ -67,8 +85,10 @@ jobs:
       - name: The salesforce-github-ci-pipeline skill matches this pipeline
         run: scripts/skills-sync.sh --check
       - uses: ./.pipeline/.github/actions/sf-auth   # the cached CLI only
+        if: steps.what.outputs.sf == 'true'
         with: { login: "false" }
       - name: Code analyzer (PMD and ESLint)
+        if: steps.what.outputs.sf == 'true'
         run: |
           sf code-analyzer rules --rule-selector "pmd:Security" --view table 2>/dev/null | grep -E "Apex(CRUD|Sharing|SOQL)" || true   # code-analyzer.yml raises these to 2
           sf code-analyzer run --workspace force-app --severity-threshold 2 --view table
@@ -80,12 +100,17 @@ jobs:
     permissions:
       contents: write       # the org's lane only (a ref under refs/locks/); the PR is data here, never run
       pull-requests: write
-      statuses: write       # "UI test not needed" verdict
       checks: write         # the live "Salesforce tests" check
       issues: write         # the story card
       actions: read
     timeout-minutes: 110   # up to 45 waiting for the org's lane, up to 60 for the tests
     needs: static
+    # Skipped (which passes the required check, and starts no runner) when no Salesforce metadata changed, and for
+    # release PRs and back-merges (the staging regression covers them, also when CI is started by hand). A story
+    # started by hand always runs.
+    if: >-
+      needs.static.outputs.org == 'true' || (github.event_name == 'workflow_dispatch' &&
+      !startsWith(inputs.ref, 'release/') && !startsWith(inputs.ref, 'backmerge-'))
     env:
       REF: ${{ inputs.ref || github.head_ref || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
@@ -102,27 +127,15 @@ jobs:
         uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
-      - name: What does this merge into, and did Salesforce metadata change?
+      - name: What does this merge into?
         id: delta
         run: |
-          BASE="${{ github.base_ref }}"
-          [ -n "$BASE" ] || BASE=$(gh pr list --head "$REF" --state open --json baseRefName --jq '.[0].baseRefName // empty')
+          BASE="${{ needs.static.outputs.base }}"
+          [ -n "$BASE" ] && [ "${{ github.event_name }}" != workflow_dispatch ] || BASE=$(gh pr list --head "$REF" --state open --json baseRefName --jq '.[0].baseRefName // empty')
           [ -n "$BASE" ] || BASE=main
           git fetch -q origin "$BASE"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          # The check stays required; with no force-app changes it passes without using a scratch org. Release PRs and
-          # back-merges pass too: the staging regression (every test, the staging org) is required for them instead.
-          case "$REF" in release/*|backmerge-*) echo "none=true" >> "$GITHUB_OUTPUT"; echo "covered by the staging regression"; exit 0 ;; esac
           if git diff --quiet "origin/$BASE...HEAD" -- force-app; then echo "none=true" >> "$GITHUB_OUTPUT"; echo "No force-app changes against $BASE"; else echo "none=false" >> "$GITHUB_OUTPUT"; fi
-      - name: UI test needed?
-        if: github.event_name == 'pull_request'
-        env:
-          BASE: ${{ steps.delta.outputs.base }}
-        run: |
-          node .pipeline/pipeline/bin/pipe.mjs gate ui-needed --base "origin/$BASE" > ui.txt; cat ui.txt
-          if grep -q "^no UI-facing" ui.txt; then
-            node .pipeline/pipeline/bin/pipe.mjs status set pipeline/ui-test success "${{ github.event.pull_request.head.sha }}" "not needed: no UI-facing changes" --pr "${{ github.event.pull_request.number }}"
-          fi
       - uses: ./.pipeline/.github/actions/sf-auth
         if: steps.delta.outputs.none != 'true'
         with:
@@ -188,9 +201,11 @@ jobs:
   autofix:
     # Auto-chain (AI_AUTO_CHAIN + AI_FIX): a failed check on a story PR starts ai:fix, which reads the failed output.
     # ai-fix caps the rounds, so a failure it cannot fix stops at a person. Only failures in the change itself (static
-    # checks, its deploy, its tests): a lane timeout, a full Dev Hub or a login error is not Claude's to fix.
+    # checks, its deploy, its tests): a lane timeout, a full Dev Hub or a login error is not Claude's to fix. Story
+    # branches only (no '/', not a back-merge): decided here, so no runner starts otherwise. The blocked label is read
+    # live in the step: a person's push removes it after this event's payload was taken.
     needs: [static, apex]
-    if: failure() && (needs.static.result == 'failure' || needs.apex.outputs.code-failed == 'true') && github.event_name == 'pull_request' && vars.AI_AUTO_CHAIN == 'true' && vars.AI_FIX == 'true' && (startsWith(github.head_ref, 'issue-') || contains(github.head_ref, '-'))
+    if: failure() && (needs.static.result == 'failure' || needs.apex.outputs.code-failed == 'true') && github.event_name == 'pull_request' && vars.AI_AUTO_CHAIN == 'true' && vars.AI_FIX == 'true' && !contains(github.head_ref, '/') && !startsWith(github.head_ref, 'backmerge-')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -213,8 +228,9 @@ jobs:
           gh pr edit "$PR" --add-label ai:fix
   nudge:
     # After both required checks have finished (a separate job, so the checks are complete when the gate reads them).
+    # The Apex job may be skipped (nothing to deploy): that passes, so the nudge still runs.
     needs: [static, apex]
-    if: success() && github.event_name != 'push'
+    if: "!cancelled() && github.event_name != 'push' && needs.static.result == 'success' && (needs.apex.result == 'success' || needs.apex.result == 'skipped')"
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -224,6 +240,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: main }
+      - name: UI test not needed (no UI-facing changes)
+        if: github.event_name == 'pull_request' && needs.static.outputs.ui == 'false'
+        run: |
+          node pipeline/bin/pipe.mjs status set pipeline/ui-test success "${{ github.event.pull_request.head.sha }}" "not needed: no UI-facing changes" --pr "${{ github.event.pull_request.number }}"
       - name: Merge now if a person already approved
         env:
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}

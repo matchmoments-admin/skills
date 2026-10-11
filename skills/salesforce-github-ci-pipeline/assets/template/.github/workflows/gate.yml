@@ -168,6 +168,7 @@ jobs:
             case "$step" in
               staging) gh workflow run staging-deploy.yml --ref "$BASE" ;;      # on the release branch, so the check lands on the release PR's head
               release) gh workflow run release.yml --ref main -f sha="$SHA" -f validated_job="$JOB" -f validated_tree="$TREE" ;;   # quick-deploys only that exact tree
+              backmerge) gh workflow run back-merge.yml --ref main ;;   # a workflow fix reaches the open sprint's release branch
             esac
           done
           node pipeline/bin/pipe.mjs pr card "$PR"

@@ -89,7 +89,10 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   then runs its own selection (CI) or every test class (production). Flow tests are never part of it.
 - **Dashboards and report charts render inside an iframe in Lightning:** `page.getByText(...)` finds nothing on a
   dashboard page. Reach into it: `const dash = page.frameLocator("iframe").first();` then
-  `dash.getByText("Closed Won amount by Sales region")`, and pass that locator to `evidence()` (story #166).
+  `dash.getByText("Closed Won amount by Sales region")`, and pass that locator to `evidence()` (story #166). A new
+  dashboard shows "No data. Try refreshing the dashboard." until its first refresh: click
+  `dash.getByRole("button", { name: "Refresh", exact: true })`, then assert
+  `expect(dash.getByText("No data")).toHaveCount(0, { timeout: 90_000 })` so a dashboard that shows nothing fails.
 - **Reports in Apex tests** need `@IsTest(SeeAllData=true)` to find the org's report definitions; suppress
   `PMD.ApexUnitTestShouldNotUseSeeAllDataTrue` on exactly those methods and keep the data assertions in SOQL tests
   without SeeAllData.

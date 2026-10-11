@@ -56,6 +56,15 @@ jobs:
             gh pr edit "${{ github.event.pull_request.number }}" --remove-label blocked >/dev/null 2>&1 || true   # a person pushed: AI fixes may resume
             gh api "repos/$GH_REPO/compare/${{ github.event.before }}...${{ github.event.after }}" --jq '[.files[].filename] | map(select(startswith("e2e/") | not)) | length' | grep -qx 0 && { echo "spec-only push: no review"; exit 0; }
           fi
+          # nothing reviewable (no Salesforce source, no specs: a pipeline or docs change): say so here, so the review and
+          # verdict jobs never start a runner
+          BASE="${{ github.event.pull_request.base.sha }}"; HEAD="${{ github.event.pull_request.head.sha }}"
+          # compare lists at most 300 files: a bigger change always gets the review
+          N=$(gh api "repos/$GH_REPO/compare/$BASE...$HEAD" --jq 'if (.files | length) >= 300 then 300 else [.files[].filename] | map(select(startswith("force-app/") or startswith("e2e/"))) | length end')
+          if [ "$N" = "0" ]; then
+            gh api "repos/$GH_REPO/statuses/$HEAD" -f state=success -f context=pipeline/ai-review -f description="not needed: no Salesforce source or specs changed" >/dev/null
+            echo "nothing reviewable: no review"; exit 0
+          fi
           gh workflow run ai-review.yml --ref main -f pr="${{ github.event.pull_request.number }}"
   review:
     if: github.event_name == 'workflow_dispatch' && vars.AI_REVIEW == 'true'

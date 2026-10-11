@@ -385,3 +385,26 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **A PR command showed only 👀** and the progress was on the issue. → The story card is mirrored onto the PR (same
   marker, edited in place) and every agent step sets its **Now** line with the run link. Before `/start`, `/plan`
   shows the same line in its Build plan comment; a placeholder is never read as the agreed plan.
+
+## Story #166 end to end (9 Oct)
+
+- **Actions minutes: 42% were jobs that started only to find nothing to do.** GitHub bills each job as at least a
+  minute. → Decide in a job-level `if:` (an earlier job's outputs, the event payload), never inside the job: CI's
+  static job decides what changed before the PR's code runs, and the scratch-org job is skipped otherwise. A required
+  check skipped by its own `if:` passes (in GitHub's rules and in `gate.checkPassed`); a `paths:` filter does not (the
+  check never reports).
+- **A UI test "passed" as the admin**: Salesforce's "Log in as" did not take for a just-reactivated persona, and the
+  rep's "cannot see the dashboard" test saw it. → `loginAs` waits for the "Logged in as" banner naming the persona,
+  retries once, else fails.
+- **Claude weakened a spec to pass it**: a wait loop that carried on whatever happened, and `isVisible()` asserted with
+  `toBe(true)`. → The spec check flags both, the prompt forbids weakening an assertion, and a spec-only push no longer
+  keeps the earlier UI pass (the spec is the test).
+- **A new Lightning dashboard shows "No data" until its first refresh**, and renders inside an iframe. → Click
+  Refresh, then assert "No data" is gone.
+- **Harness files copied in from main leaked into an agent's commit** (and then failed the skill check on the story
+  branch). → Hide every overlay from git (`update-index --skip-worktree` plus `.git/info/exclude`) before copying.
+- **A release branch runs its own copy of the workflows** (staging is started on it, so its check lands on the release
+  PR): a workflow fix on main did not reach the open sprint. → A maintenance PR that changes `.github/workflows/`
+  starts a back-merge into the open release branch.
+- **The delivery record said "AI review: not run"**: the review status sits on the commit it judged, and the UI
+  tester's spec commits came after. → Close-out looks back through the PR's commits.

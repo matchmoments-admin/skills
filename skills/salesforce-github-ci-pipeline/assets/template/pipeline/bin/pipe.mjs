@@ -4,7 +4,7 @@
 //   context   [--key K] [--branch B] [--labels a,b]     names for a story / the open sprint, as KEY=value lines
 //   labels    sync                                       create or update every label the pipeline uses
 //   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits
-//   lane      acquire|release <org target> [--minutes M]  one job at a time per org, a queue that drops nobody
+//   lane      acquire|release <org target> [--minutes M] [--no-card]  one job at a time per org, a queue that drops nobody
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
 //   status    set <context> <state> <sha> <description> [--pr N]
@@ -94,11 +94,11 @@ const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a),
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 
-function orgLane(target) {
+function orgLane(target, { card = true } = {}) {
   const org = names.orgFor(target);
   if (!org) throw new Error(`Not an org target: ${target}`);
   const { GITHUB_RUN_ID: run, GITHUB_JOB: job, GITHUB_RUN_ATTEMPT: attempt, GITHUB_SHA: sha } = process.env;
-  const onWait = (h) => org.key && cards.refresh(org.key, { light: true, activity: { state: "running", what: `waiting for the story's scratch org: ${String(h.job).replace(/#\d+$/, "")} is using it`, url: `${host.repoUrl}/actions/runs/${h.run}` } }).catch(() => {});   // the card says why, not "deploying"
+  const onWait = (h) => card && org.key && cards.refresh(org.key, { light: true, activity: { state: "running", what: `waiting for the story's scratch org: ${String(h.job).replace(/#\d+$/, "")} is using it`, url: `${host.repoUrl}/actions/runs/${h.run}` } }).catch(() => {});   // the card says why, not "deploying"
   return { org, l: lane({ api: host.api, repo: host.repo, holder: { run, job: `${job}#${attempt || 1}`, sha }, sleep, log, onWait }) };
 }
 
@@ -147,7 +147,7 @@ const commands = {
     return say(r.username);
   },
   "lane acquire": () => {
-    const { org, l } = orgLane(arg(0));
+    const { org, l } = orgLane(arg(0), { card: !has("no-card") });   // --no-card: a read-only job (the UI spec run)
     const t0 = Date.now();
     l.acquire(org.lock, { timeoutMinutes: Number(flag("minutes", "45")) });
     const waited = Math.round((Date.now() - t0) / 1000);
@@ -195,7 +195,7 @@ const commands = {
     const sha = io.git(["rev-parse", arg(0) || "HEAD"]);
     const runs = io.ghPages(`repos/${host.repo}/commits/${sha}/check-runs?per_page=100`, "check_runs");
     const state = [names.CHECKS.static, names.CHECKS.apex].map((n) => [n, gate.latestCheck(runs, n)]);
-    output({ green: state.every(([, c]) => c === "success") });
+    output({ green: state.every(([, c]) => gate.checkPassed(c)) });
     return say(state.map(([n, c]) => `${n}: ${c}`).join("\n"));
   },
   "gate followups": () => {

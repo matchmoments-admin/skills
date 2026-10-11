@@ -94,8 +94,21 @@ export const removedComment = () => [EVIDENCE_MARK, `### ${EVIDENCE_TITLE}: remo
 export function specProblems(src) {
   const s = String(src || "");
   const problems = [];
-  const valueChecks = (s.match(/\.(toHaveText|toContainText|toHaveValue|toHaveCount|toEqual|toBe|toMatch|toHaveAttribute)\(/g) || []).length;
-  if (!valueChecks) problems.push("it only checks that things are visible: assert the values a criterion is about (rows, totals, a field's value)");
+  // isVisible() read into a boolean and asserted with toBe/toEqual is a visibility check, not a value (story #166);
+  // an isVisible() used for control flow (dismiss a dialog if shown) is neither
+  const visibleVars = [...s.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*await\s+[^;]*?\.isVisible\(\)/g)].map((m) => m[1]);
+  const visibilityAsValue = (s.match(/expect\(\s*await\s+[^;]*?\.isVisible\(\)\s*\)\.(toBe|toEqual)\(/g) || []).length
+    + visibleVars.reduce((n, v) => n + (s.match(new RegExp(`expect\\(\\s*${v}\\s*\\)\\.(toBe|toEqual)\\(`, "g")) || []).length, 0);
+  const valueChecks = (s.match(/\.(toHaveText|toContainText|toHaveValue|toHaveCount|toEqual|toBe|toMatch|toHaveAttribute)\(/g) || []).length - visibilityAsValue;
+  if (valueChecks <= 0) problems.push("it only checks that things are visible: assert the values a criterion is about (rows, totals, a field's value)");
+  // A polling loop (while ... waitForTimeout) whose condition is never asserted afterwards carries on whatever happened
+  // (story #166's "No data"). A fixed retry (for ...) followed by a real assertion is fine.
+  for (const m of s.matchAll(/\bwhile\s*\(([^)]*)\)\s*\{[^}]*waitForTimeout[^}]*\}/g)) {
+    const after = s.slice(m.index + m[0].length);
+    const polled = (m[1].match(/[A-Za-z_]\w*/g) || []).filter((v) => !/^(await|true|false|null|undefined)$/.test(v));
+    if (!polled.some((v) => new RegExp(`expect\\(\\s*(await\\s+)?${v}\\b`).test(after)))
+      problems.push("it waits in a loop and carries on whatever happened: assert the end state instead (expect(...).toHaveCount(0, { timeout }))");
+  }
   if (/getByRole\(\s*["']heading["']\s*\)\.first\(\)/.test(s)) problems.push("it uses getByRole(\"heading\").first(), which is Lightning's app name: name the heading");
   return problems;
 }

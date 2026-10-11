@@ -28,7 +28,9 @@ export function summarize({ days, prs, releases, runs, fixCommits = {}, transcri
 
   const workflows = {};
   for (const r of runs.filter((r) => r.conclusion && r.conclusion !== "skipped")) {
-    const w = (workflows[r.name] ||= { runs: 0, success: 0, minutes: [] });
+    // by workflow file: run names carry the PR number ("ai-fix PR #176"), which split one stage into many rows
+    const name = String(r.path || "").split("/").pop()?.replace(/\.ya?ml$/, "") || r.name;
+    const w = (workflows[name] ||= { runs: 0, success: 0, minutes: [] });
     w.runs++;
     if (r.conclusion === "success") w.success++;
     w.minutes.push((new Date(r.updated_at) - new Date(r.run_started_at)) / 60e3);

@@ -20,6 +20,9 @@ env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   open:
+    # A push by the pipeline's own App (Claude's build or fix) to a branch that already exists has its PR already:
+    # no runner for it. A new branch, a person's push or a dispatch always runs.
+    if: github.event_name == 'workflow_dispatch' || github.event.created || github.event.sender.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:

@@ -27,12 +27,15 @@ export function gateStatus(decision) {
   return { state: failed ? "failure" : "pending", description: `${first}${more}`.slice(0, 139) };
 }
 
-/** After a merge the gate did not make (an emergency bypass): the follow-ups the gate would have started. */
-export function followUps(pr, files = []) {
+/** What starts after a merge (staging, a release, a back-merge, deleting the story org): the gate uses it, and so does an emergency merge. */
+export function followUps(pr, files = [], { forceApp = files.some((f) => f.startsWith("force-app/")) } = {}) {
   const r = route(pr);
   if (!r) return [];
-  const forceApp = files.some((f) => f.startsWith("force-app/"));
-  return RULES[r].after.map((a) => (a === "release-if-force-app" ? (forceApp ? "release" : null) : a)).filter(Boolean);
+  // A release branch runs its own copy of the workflows (staging is started on it, so its check lands on the release
+  // PR): a workflow fix on main reaches the open sprint only by a back-merge (story #166's staging run).
+  const workflows = files.some((f) => f.startsWith(".github/workflows/"));
+  const when = { "release-if-force-app": forceApp ? "release" : null, "backmerge-if-workflows": workflows ? "backmerge" : null };
+  return RULES[r].after.map((a) => (a in when ? when[a] : a)).filter(Boolean);
 }
 export const TRUSTED_STATUS_CREATORS = ["github-actions[bot]"];
 
@@ -65,7 +68,7 @@ export const RULES = {
   // A back-merge carries code that is already approved and in production: green CI is enough, if it really is one.
   backmerge:   { checks: [CHECKS.static, CHECKS.apex], verdicts: false, approval: "none", validate: false, merge: "merge", after: ["staging"], trusted: true },
   // Pipeline maintenance into main (no story): CI and an approval; production work only if Salesforce source changed.
-  maintenance: { checks: [CHECKS.static, CHECKS.apex], verdicts: false, approval: "review", validate: "if-force-app", merge: "squash", after: ["release-if-force-app"] },
+  maintenance: { checks: [CHECKS.static, CHECKS.apex], verdicts: false, approval: "review", validate: "if-force-app", merge: "squash", after: ["release-if-force-app", "backmerge-if-workflows"] },
 };
 
 /** Latest conclusion of a named check run, by start time ("missing" if it never ran). */
@@ -73,6 +76,8 @@ export function latestCheck(checkRuns, name) {
   const runs = checkRuns.filter((c) => c.name === name).sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)));
   return runs.length ? runs[runs.length - 1].conclusion || runs[runs.length - 1].status || "pending" : "missing";
 }
+/** Does a required check's conclusion pass? A job skipped by its own `if:` (nothing to deploy) passes, as in GitHub's rules. */
+export const checkPassed = (conclusion) => conclusion === "success" || conclusion === "skipped";
 
 /** True if every file changed between a commit and the head is under e2e/ (the UI tester's spec). */
 const onlySpecsSince = (sha, head, diffsToHead) =>
@@ -84,7 +89,10 @@ export function verdictFor(context, { statuses = [], head, diffsToHead = {} }) {
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   if (!mine.length) return { state: "missing" };
   const last = mine[mine.length - 1];
-  if (!onlySpecsSince(last.sha, head, diffsToHead)) return { state: "stale", sha: last.sha };
+  // A spec-only push keeps a review or sign-off, but not the UI test: the spec IS that test, so a changed spec has
+  // not passed yet (story #166: a weakened spec rode on the earlier pass).
+  const carries = context === STATUS.ui ? last.sha === head : onlySpecsSince(last.sha, head, diffsToHead);
+  if (!carries) return { state: "stale", sha: last.sha };
   return { state: last.state, description: last.description || "", url: last.url || null };
 }
 
@@ -182,7 +190,7 @@ export function evaluate(facts) {
 
   for (const name of rules.checks) {
     const c = latestCheck(checkRuns, name);
-    if (c !== "success") reasons.push(`check "${name}" is ${c}`);
+    if (!checkPassed(c)) reasons.push(`check "${name}" is ${c}`);
   }
   if (rules.verdicts) {
     for (const v of requiredVerdicts(facts, storyOf(pr.headRefName))) {
@@ -228,7 +236,7 @@ export function evaluate(facts) {
 
   const forceApp = Boolean(compare.forceAppChanged);
   const validate = rules.validate === true || (rules.validate === "if-force-app" && forceApp);
-  const after = rules.after.map((a) => (a === "release-if-force-app" ? (forceApp ? "release" : null) : a)).filter(Boolean);
+  const after = followUps(pr, compare.prFiles || [], { forceApp });   // one rule for the gate and an emergency merge
   return { route: r, rules, reasons, mergeable: reasons.length === 0, story: storyOf(pr.headRefName), validate, after };
 }
 

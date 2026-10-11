@@ -5,7 +5,7 @@ name: scratch-janitor
 # unless production was rolled back. Run by hand any time.
 on:
   schedule:
-    - cron: "17 */6 * * *"   # every 6 hours: an orphan must not hold one of the Dev Hub's active slots for long
+    - cron: "17 */12 * * *"   # twice a day: an orphan must not hold one of the Dev Hub's active slots for long
   workflow_dispatch:
 permissions:
   contents: write       # the event log (orgs deleted); which sprint is open; main and tags for the watchdog

@@ -12,7 +12,7 @@ export const CARD_TITLE = "Pipeline status";
 export const CARD_MARK = "<!-- pipeline:story-card -->";
 
 const ICON = { done: "✅", running: "⏳", waiting: "⬜", failed: "❌", off: "➖" };
-const stateOf = (c) => (c === "success" ? "done" : ["failure", "error", "cancelled", "timed_out"].includes(c) ? "failed" : c === "missing" ? "waiting" : "running");
+const stateOf = (c) => (c === "success" || c === "skipped" ? "done" : ["failure", "error", "cancelled", "timed_out"].includes(c) ? "failed" : c === "missing" ? "waiting" : "running");
 
 /**
  * input: { key, repoUrl, branch, base, ai, pr?, facts?, decision? }
