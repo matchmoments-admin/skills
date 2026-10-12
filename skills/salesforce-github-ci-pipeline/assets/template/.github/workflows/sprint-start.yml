@@ -39,8 +39,9 @@ jobs:
           if [ -n "$OPEN" ] && [ "$OPEN" != "release/$SPRINT" ]; then echo "::error::$OPEN is still open. Ship it first."; exit 1; fi
           # The release branch rules require green CI on the commit a release branch starts from.
           if ! git ls-remote --exit-code --heads origin "release/$SPRINT" >/dev/null; then
-            node pipeline/bin/pipe.mjs gate checks HEAD > checks.txt; cat checks.txt
-            if grep -qv ": success" checks.txt; then echo "::error::CI on main's latest commit is not green yet (see above). Try again in a few minutes."; exit 1; fi
+            # gate.checkPassed decides (a skipped scratch-org job passes: nothing to deploy), not a grep for "success"
+            node pipeline/bin/pipe.mjs gate checks HEAD   # prints each check; writes green=
+            if ! grep -q '^green=true' "$GITHUB_OUTPUT"; then echo "::error::CI on main's latest commit is not green yet (see above). Try again in a few minutes."; exit 1; fi
           fi
           node pipeline/bin/pipe.mjs tracker open-sprint "$SPRINT"
           if git ls-remote --exit-code --heads origin "release/$SPRINT" >/dev/null; then echo "release/$SPRINT exists"; else git push origin "HEAD:refs/heads/release/$SPRINT"; fi

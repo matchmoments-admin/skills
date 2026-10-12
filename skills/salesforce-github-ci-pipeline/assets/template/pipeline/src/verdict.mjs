@@ -22,21 +22,6 @@ export const PR_BODY = (key) => [
   "`## Test plan`: how a person checks it in the scratch org.",
 ].join(" ");
 
-// The cheapest model that does each job well (repo variable AI_MODEL overrides every role).
-export const MODELS = {
-  implement: "claude-sonnet-5-5",
-  fix: "claude-sonnet-5-5",
-  plan: "claude-sonnet-5-5",
-  spec: "claude-sonnet-5-5",
-  review: "claude-sonnet-5-5",   // Haiku made confident false Salesforce blockers on PR #144, each costing a round
-  "ui-test": "claude-haiku-4-5-20251001",
-};
-export function modelFor(role, override = setting("AI_MODEL")) {
-  if (override && String(override).trim()) return String(override).trim();
-  if (!MODELS[role]) throw new Error(`Unknown AI role: ${role}`);
-  return MODELS[role];
-}
-
 // Claude Code blocks compound shell commands and variables it cannot check, and a backgrounded command
 // is lost when the job ends. Learned the hard way; every AI job gets this.
 export const SHELL_RULE =
@@ -59,7 +44,8 @@ export function instructions(role, { key = "N" } = {}) {
     case "spec":
       return `${common}\nDo not change any file except the spec file named in the prompt. Do not commit, push or comment. Read docs/agents/salesforce.md ("Specs") and docs/org/GLOSSARY.md first and use the org's words. In Decisions, include one line \`Persona: <RoleDeveloperName> role, <PermissionSet>, ...\` naming the user who uses the feature (UAT and story logins are made as that user, so a feature shared by role is visible to them). Write markdown with these sections, in order: \`### Problem\` (the user's side), \`### Solution\` (the user's side), \`### User stories\` (numbered: "As a <Salesforce persona>, I want ..., so that ..."; cover every case), \`### Decisions\` (per object touched: new fields, the automation (record-triggered Flow before/after save, or a trigger handler), the permission set, the page or layout, and the Access decision; no file paths), \`### Testing\` (the seams from docs/agents/salesforce.md and the prior art in the repo), \`### One-way doors\` (field deletes or retypes, org-wide default changes, production data changes; "none" if none), \`### Out of scope\`, \`### Open questions\` (numbered; only what the issue and the repo cannot answer).`;
     case "ui-test":
-      return `${common}\nCommit the spec as \`${COMMIT.uiTest(key)}\` and push. Never print or commit login URLs.`;
+      // E9: 40 turns spent re-running a spec whose failure screenshot showed the Activity tab, not the field
+      return `${common}\nWhen a run fails, open its failure screenshot with the Read tool before changing anything (test-results/<test>/test-failed-1.png, and error-context.md beside it): it shows what the page really displayed. A record page opens on its Activity or Related tab; click the Details tab (\`page.getByRole("tab", { name: "Details" })\`) before asserting a field. After about 20 turns, or 3 failed runs, stop: commit the spec as it is and end with a short report of what fails and why.\nCommit the spec as \`${COMMIT.uiTest(key)}\` and push. Never print or commit login URLs.`;
     default:
       throw new Error(`Unknown AI role: ${role}`);
   }

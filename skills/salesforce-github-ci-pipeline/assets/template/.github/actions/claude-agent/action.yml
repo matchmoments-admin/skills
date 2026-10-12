@@ -8,12 +8,12 @@ inputs:
   prompt: { required: true, description: "What to do, in plain words" }
   key: { required: false, default: "N", description: "Story key, used in commit formats" }
   pr: { required: false, default: "", description: "Pull request number, for the event log (fix rounds, cost per PR)" }
-  max-turns: { required: true, description: "Turn cap" }
+  max-turns: { required: false, default: "", description: "Turn cap override; empty = the role's budget (pipeline/src/roles.mjs)" }
   allowed-tools: { required: true, description: "Comma-separated tool allow-list" }
   oauth-token: { required: true, description: "secrets.CLAUDE_CODE_OAUTH_TOKEN" }
   github-token: { required: true, description: "Token Claude acts with on GitHub" }
   allowed-bots: { required: false, default: "", description: "Bot actors allowed to trigger this run (vars.PIPELINE_BOTS)" }
-  model: { required: false, default: "", description: "Model override (vars.AI_MODEL); empty = the role's cheapest model from pipeline/src/verdict.mjs" }
+  model: { required: false, default: "", description: "Model override (vars.AI_MODEL); empty = the role's model from pipeline/src/roles.mjs" }
 runs:
   using: composite
   steps:
@@ -33,8 +33,9 @@ runs:
           echo 'text<<__RULES__'
           node .pipeline/pipeline/bin/pipe.mjs verdict instructions "${{ inputs.role }}" --key "${{ inputs.key }}"
           echo '__RULES__'
-          echo "model=$(AI_MODEL="${{ inputs.model }}" node .pipeline/pipeline/bin/pipe.mjs verdict model "${{ inputs.role }}")"
         } >> "$GITHUB_OUTPUT"
+        AI_MODEL="${{ inputs.model }}" node .pipeline/pipeline/bin/pipe.mjs agent budget "${{ inputs.role }}"   # writes model= and turns=
+        [ -z "${{ inputs.max-turns }}" ] || echo "turns=${{ inputs.max-turns }}" >> "$GITHUB_OUTPUT"
     - id: claude
       uses: anthropics/claude-code-action@v1
       continue-on-error: true   # judged below from the transcript: a finished run that went past the turn cap is a success
@@ -49,7 +50,7 @@ runs:
           ${{ steps.rules.outputs.text }}
         claude_args: >-
           --model ${{ steps.rules.outputs.model }}
-          --max-turns ${{ inputs.max-turns }}
+          --max-turns ${{ steps.rules.outputs.turns }}
           --allowedTools "${{ inputs.allowed-tools }}"
     - name: Did the agent finish? (its own result, not the turn cap)
       shell: bash
@@ -61,7 +62,7 @@ runs:
         # the action fails a run that ended with a success result after more turns than --max-turns (story #143 took
         # 69 of 60 and opened its PR); that is a finished run. Anything else (an error result, no result) still fails.
         R=$( [ -s "$OUT" ] && jq -r '[.[] | select(.type == "result")] | last | "\(.subtype // "") \(.is_error | tostring)"' "$OUT" 2>/dev/null || echo "")
-        if [ "$R" = "success false" ]; then echo "::warning::The agent finished successfully but used more turns than ${{ inputs.max-turns }}: counted as success. Raise max-turns for this role if it keeps happening."; exit 0; fi
+        if [ "$R" = "success false" ]; then echo "::warning::The agent finished successfully but used more turns than ${{ steps.rules.outputs.turns }}: counted as success. Raise this role's turns in pipeline/src/roles.mjs if it keeps happening."; exit 0; fi
         echo "::error::The agent did not finish (result: ${R:-none})"; exit 1
     - name: Record the agent's cost and turns in the event log (needs contents write on the job's token)
       if: always()

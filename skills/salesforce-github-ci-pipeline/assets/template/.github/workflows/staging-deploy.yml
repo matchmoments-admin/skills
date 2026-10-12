@@ -22,7 +22,6 @@ jobs:
       GH_REPO: ${{ github.repository }}
     outputs:
       release: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
-      tested: ${{ steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.current.outputs.superseded != 'true' }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
@@ -131,6 +130,6 @@ jobs:
         run: |
           RPR=$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')
           [ -z "$RPR" ] || node pipeline/bin/pipe.mjs gate nudge "$RPR"   # also refreshes the release card
-          # UAT_ENABLED: keep UAT on the release PR's latest code (a newer head needs a new sign-off anyway)
-          # UAT follows only a run that really tested a new head (a skipped or superseded run must not reset a sign-off)
-          [ -z "$RPR" ] || [ "${{ vars.UAT_ENABLED }}" != "true" ] || [ "${{ needs.staging.outputs.tested }}" != "true" ] || gh workflow run uat-deploy.yml --ref main -f pr="$RPR"
+          # UAT_ENABLED: UAT when staging passed on the release PR's head and UAT does not have it yet (journey.mjs);
+          # a superseded or skipped run changes nothing, and the release PR opening later asks the same question
+          [ -z "$RPR" ] || node pipeline/bin/pipe.mjs next --after staging --pr "$RPR"

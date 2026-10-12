@@ -6,6 +6,8 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import * as names from "../src/conventions.mjs";
 import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
+import * as roles from "../src/roles.mjs";
+import * as journey from "../src/journey.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
 import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed } from "../src/org.mjs";
@@ -422,9 +424,9 @@ test("AI flags are off unless set to true; models are the cheapest per role, AI_
   assert.deepEqual(names.aiFeatures({}), { plan: false, implement: false, review: false, fix: false, uiTest: false, autoChain: false, triage: false });
   assert.equal(names.aiFeatures({ AI_REVIEW: "true", AI_FIX: "yes" }).review, true);
   assert.equal(names.aiFeatures({ AI_REVIEW: "true", AI_FIX: "yes" }).fix, false);
-  assert.match(verdict.modelFor("review", ""), /sonnet/);   // Haiku made false blockers (PR #144)
-  assert.match(verdict.modelFor("implement", ""), /sonnet/);
-  assert.equal(verdict.modelFor("review", "claude-opus-5-5"), "claude-opus-5-5");
+  assert.match(roles.modelFor("review", ""), /sonnet/);   // Haiku made false blockers (PR #144)
+  assert.match(roles.modelFor("implement", ""), /sonnet/);
+  assert.equal(roles.modelFor("review", "claude-opus-5-5"), "claude-opus-5-5");
 });
 
 const fakeJev = (answers, status = 200) => typesafeJev("apik-test", async (url, init) => {
@@ -745,7 +747,7 @@ test("plan comment: the next step follows from the size and the open questions; 
   assert.match(plans.planComment("### Proposed build\nx\nPLAN-SIZE: S", { started: true }), /\*\*Next:\*\* ready\. Comment \*\*\/build\*\*/);   // already started
   assert.match(plans.planComment("### Proposed build\nx\nPLAN-SIZE: S"), /\(size S\)\n\n### Proposed build/);
   assert.deepEqual(plans.criteria("### Summary\nx\n\n### Acceptance criteria\n- one\n* two\n\n### Where to see it\n- not this"), ["one", "two"]);
-  assert.equal(verdict.modelFor("plan", ""), "claude-sonnet-5-5");
+  assert.equal(roles.modelFor("plan", ""), "claude-sonnet-5-5");
   assert.match(verdict.instructions("plan"), /PLAN-SIZE: S/);
 });
 
@@ -1357,8 +1359,9 @@ test("correctness wiring: story PR base from the story, UAT never reset by a red
   assert.doesNotMatch(wf("story-pr"), /merge-base --is-ancestor/);
   assert.match(wf("uat-deploy"), /UAT already has/);
   assert.match(wf("staging-deploy"), /superseded by/);
-  assert.match(wf("staging-deploy"), /needs.staging.outputs.tested/);
-  assert.match(wf("gate"), /STATE=pending; DESC="Ready: validating against production before merging"/);
+  assert.match(wf("staging-deploy"), /pipe.mjs next --after staging --pr "\$RPR"/, "UAT only when the journey owes it: staging passed on the head, UAT lacks it");
+  assert.deepEqual(gate.gateStatus({ mergeable: true, validate: true, reasons: [] }), { state: "pending", description: "Ready: validating against production before merging" });
+  assert.doesNotMatch(wf("gate"), /STATE=pending/, "the decision's status is mapped in one place (gateStatus)");
   assert.match(wf("gate"), /status set pipeline\/gate failure "\$HEAD_SHA" "Production rejected it/);
   const did = [];
   actions.perform("uat", "", { number: 110, isPr: true, pr: { headRefName: "release/w45" } }, "dev", { host: { dispatch: (w, i) => did.push([w, i]) } });
@@ -1427,6 +1430,9 @@ test("Actions minutes: a job that has nothing to do never starts a runner (GitHu
   assert.match(wf("ai-review"), /pipe\.mjs start review --pr/, "the route decides (start.decide); the review job never starts for nothing");
   assert.match(wf("story-pr"), /github\.event\.sender\.type != 'Bot'/);
   assert.equal(gate.checkPassed("skipped"), true, "a skipped org job passes the gate, as it passes GitHub's rules");
+  // sprint-start read "skipped" as not green, so no sprint could start after a pipeline-only commit on main
+  assert.match(wf("sprint-start"), /grep -q '\^green=true' "\$GITHUB_OUTPUT"/);
+  assert.doesNotMatch(wf("sprint-start"), /grep -qv ": success"/);
   assert.equal(gate.checkPassed("failure"), false);
 });
 
@@ -1553,7 +1559,7 @@ test("a story made from a spec carries the whole spec to every agent; blockers m
 
 test("spec wiring: the agents' prompts, the spec issue form and the boxes", () => {
   assert.match(verdict.instructions("spec"), /### One-way doors/);
-  assert.throws(() => verdict.modelFor("tickets", ""), /Unknown AI role/, "no AI split any more");
+  assert.throws(() => roles.modelFor("tickets", ""), /Unknown AI role/, "no AI split any more");
   assert.match(newStoryCard({ key: "150", ai: { plan: true }, spec: true }), /act:spec/);
   assert.deepEqual(actions.command("/tickets"), { id: "story", arg: "" }, "the old command makes the story");
   assert.deepEqual(actions.command("/story"), { id: "story", arg: "" });
@@ -1811,7 +1817,9 @@ test("an agent run that finished successfully past its turn cap counts as succes
   assert.match(a, /id: claude\n\s+uses: anthropics\/claude-code-action@v1\n\s+continue-on-error: true/);
   assert.match(a, /if \[ "\$R" = "success false" \]; then echo "::warning::/);
   assert.match(a, /\\\(\.is_error \| tostring\)/, "false must print as false, not vanish under //");
-  assert.match(readFileSync(new URL("../../.github/workflows/ai-implement.yml", import.meta.url), "utf8"), /max-turns: "100"/);
+  assert.equal(roles.budget("implement", "").turns, 100);
+  assert.match(a, /--max-turns \$\{\{ steps.rules.outputs.turns \}\}/, "the role's budget from roles.mjs");
+  for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url))) assert.doesNotMatch(readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8"), /max-turns:/, `${f}: turn caps live in roles.mjs`);
   const plan = plans.storyFile({ key: "143", title: "Story: Regional reporting", url: "u", body: "b" }, { plan: null, answers: [] });
   assert.match(plan, /^# Story 143: Regional reporting\n/, "no doubled 'Story:'");
 });
@@ -1902,7 +1910,7 @@ test("a person can overrule a wrong AI review on the exact commit, with the reas
   assert.deepEqual(did[1], ["dispatch", "gate.yml", { pr: 144 }]);
   assert.match(r.said, /accepted this change over the AI review on `abc1234`: THIS_YEAR/);
   assert.deepEqual(actions.command("/review-ok because"), { id: "review-ok", arg: "because" });
-  assert.equal(verdict.modelFor("review", ""), "claude-sonnet-5-5");
+  assert.equal(roles.modelFor("review", ""), "claude-sonnet-5-5");
   const wf = readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8");
   assert.match(wf, /> "\$RUNNER_TEMP\/ci\.md"/);
   assert.match(wf, /never report it as a syntax or compile error/);
@@ -2263,6 +2271,20 @@ test("approver (enterprise B): the story's approver approves, never the person w
   assert.match(gate.approval({ ...signed, head: f.pr.headRefOid, ...team, lastPusher: "alice" }, { signOff: true }).refused[0].why, /pushed the latest change/);
 });
 
+test("who pushed last: GitHub's push record counts, so a commit email not linked to an account cannot dodge separation of duties (story #193)", () => {
+  const commits = [{ committedDate: "2026-10-12T09:22:00Z", authors: [{ login: "__owner__-pipeline" }, { login: "claude" }] },
+    { committedDate: "2026-10-12T09:41:00Z", authors: [{ name: "Brendan Milton" }] }];   // no login: the email is not linked
+  assert.equal(gate.lastPusherOf(commits), null, "commit authors alone miss the person");
+  const pushes = [{ activity_type: "push", actor: { login: "matchmoments-admin", type: "User" }, timestamp: "2026-10-12T09:41:32Z" },
+    { activity_type: "push", actor: { login: "__owner__-pipeline[bot]", type: "Bot" }, timestamp: "2026-10-12T09:22:05Z" }];
+  assert.equal(gate.lastPusherOf(commits, pushes), "matchmoments-admin");
+  // the pipeline pushing a person's change for them (Bring my Setup changes) still names the person, if newer
+  const setup = [{ committedDate: "2026-10-12T10:00:00Z", authors: [{ login: "__owner__-pipeline" }, { login: "carol" }] }];
+  assert.equal(gate.lastPusherOf(setup, [...pushes, { activity_type: "push", actor: { login: "__owner__-pipeline[bot]", type: "Bot" }, timestamp: "2026-10-12T10:00:05Z" }]), "carol");
+  // and the refusal follows
+  assert.match(gate.approvalProblem({ approvers: ["matchmoments-admin"], lastPusher: gate.lastPusherOf(commits, pushes) }, "matchmoments-admin"), /pushed the latest change/);
+});
+
 test("start decisions: a job that has nothing to do is decided before a runner starts, in main's code", async () => {
   const on = { review: true, fix: true, uiTest: true };
   // review
@@ -2286,8 +2308,8 @@ test("start decisions: a job that has nothing to do is decided before a runner s
   assert.equal(start.decide("ui-test", { ai: on, branch: "issue-12", mode: "run", hasSpec: true }).run, true);
   // branch kinds and CI's plan (a diff that failed assumes everything)
   assert.deepEqual(["issue-4", "LIFE-12", "release/2026-w47", "backmerge-9", "fix/gate"].map(start.branchKind), ["story", "story", "release", "backmerge", "maintenance"]);
-  assert.deepEqual(start.ciPlan({ ref: "issue-4", base: "release/2026-w47", files: ["force-app/main/default/layouts/A.layout-meta.xml"] }), { kind: "story", sf: true, org: true, ui: true, target: "issue-4", all: false });
-  assert.deepEqual(start.ciPlan({ ref: "backmerge-9", base: "release/2026-w47", files: [] }), { kind: "backmerge", sf: false, org: false, ui: false, target: "sprint:2026-w47", all: true });
+  assert.deepEqual(start.ciPlan({ ref: "issue-4", base: "release/2026-w47", files: ["force-app/main/default/layouts/A.layout-meta.xml"] }), { kind: "story", sf: true, org: true, ui: true, target: "issue-4", all: false, carried: "" });
+  assert.deepEqual(start.ciPlan({ ref: "backmerge-9", base: "release/2026-w47", files: [] }), { kind: "backmerge", sf: false, org: false, ui: false, target: "sprint:2026-w47", all: true, carried: "" });
   assert.equal(start.ciPlan({ ref: "issue-4", base: "main", files: null }).ui, true, "fails closed");
   // the job starter acts on the decision: dispatch, or post the verdict and say why
   const did = [];
@@ -2504,6 +2526,10 @@ test("delivery record: the AI review is found on the commit it judged when later
   // with APPROVERS set, alice pushed the latest change: her own sign-off was refused by the gate, so the record names nobody
   process.env.PIPELINE_VARS = JSON.stringify({ APPROVERS: "alice,bob" });
   assert.equal(gatherDelivery("166", io, { tag: "v1", sprint: "2026-w47", repo: "o/r" }).approved, null, "a refused approver is never recorded");
+  // ...but once the gate recorded the approval it accepted as it merged, a later APPROVERS change does not rewrite it (E17)
+  data[`${R}/commits/spec2/statuses?per_page=100`].push({ context: "pipeline/approval", state: "success", description: "@alice (ticked Sign off, 2026-10-08T12:00Z)", created_at: "2026-10-08T12:01:00Z", creator: BOT });
+  assert.deepEqual(gatherDelivery("166", io, { tag: "v1", sprint: "2026-w47", repo: "o/r" }).approved, { by: "alice", how: "ticked Sign off", at: "2026-10-08T12:00:00Z" });
+  data[`${R}/commits/spec2/statuses?per_page=100`].pop();
   process.env.PIPELINE_VARS = "{}";
   // a review status posted by anyone but the pipeline does not count
   data[`${R}/commits/code/statuses?per_page=100`][0].creator = { login: "mallory" };
@@ -2718,4 +2744,231 @@ test("every workflow file parses as YAML (an unquoted ': ' in a step name broke 
     const doc = yaml.load(readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8"));
     assert.ok(doc && doc.jobs, `${f} parses and has jobs`);
   }
+});
+
+// ---------------------------------------------------------------- 13 Oct: the journey, Standing everywhere, org lifecycle,
+// the gate's record, agent roles (architecture review after story #193; E12-E19)
+const st_ = (over = {}) => ({ route: "feature", review: { state: "missing" }, ui: { state: "missing" }, uat: { state: "missing" }, checks: {}, ...over });
+
+test("Standing's carry rules are one table: specs-only, exact head, and no-force-app for CI's Salesforce tests", () => {
+  assert.equal(gate.carries("specs", "a", "h", ["e2e/s.spec.ts"]), true);
+  assert.equal(gate.carries("specs", "a", "h", ["force-app/x"]), false);
+  assert.equal(gate.carries("exact", "a", "h", ["e2e/s.spec.ts"]), false, "the UI test and UAT need the exact head");
+  assert.equal(gate.carries("no-sf", "a", "h", ["e2e/s.spec.ts", "docs/x.md"]), true, "a spec-only push needs no deploy");
+  assert.equal(gate.carries("no-sf", "a", "h", ["force-app/main/default/flows/F.flow-meta.xml"]), false);
+  assert.equal(gate.carries("no-sf", "a", "h", null), false, "an unknown diff never carries");
+  assert.equal(gate.carries("no-sf", "a", "h", [".github/workflows/ci.yml"]), false, "a pass under the branch's own workflows is no pass (forgeable)");
+  const changed = { c3: ["e2e/s.spec.ts"], c2: ["e2e/s.spec.ts", "force-app/x"], c1: ["force-app/x"] };
+  assert.equal(gate.carriedFrom("no-sf", { head: "h", passed: ["c3", "c1"], changedSince: (s) => changed[s] }), "c3");
+  assert.equal(gate.carriedFrom("no-sf", { head: "h", passed: ["c2", "c1"], changedSince: (s) => changed[s] }), null);
+  // CI's plan: no org job when the Salesforce tests carry (story #193 deployed five times, three for spec-only pushes)
+  const p = start.ciPlan({ ref: "issue-4", base: "release/w1", files: ["force-app/x", "e2e/story-4.spec.ts"], carried: "c3" });
+  assert.deepEqual([p.sf, p.org, p.carried], [true, false, "c3"]);
+  // ciCarry reads the branch's commits and their checks through git and the host
+  const git = (a) => (a[0] === "rev-list" ? "c3\nc2" : a[0] === "rev-parse" ? "h" : a[0] === "diff" ? (a[2] === "c3" ? "e2e/s.spec.ts" : "force-app/x") : null);
+  const host = { repo: "o/r", api: (m, path) => ({ check_runs: path.includes("/c3/") || path.includes("/c2/") ? [{ conclusion: "success", started_at: "1" }] : [] }) };
+  assert.equal(start.ciCarry({ ref: "issue-4", base: "release/w1", git, host }), "c3");
+  const rerunFailed = { repo: "o/r", api: () => ({ check_runs: [{ conclusion: "success", started_at: "1" }, { conclusion: "failure", started_at: "2" }] }) };
+  assert.equal(start.ciCarry({ ref: "issue-4", base: "release/w1", git, host: rerunFailed }), null, "the newest run on that commit is the truth");
+  assert.equal(start.ciCarry({ ref: "release/2026-w1", base: "main", git, host }), null, "release PRs test in staging");
+  const wf = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(wf, /checks: read +# "What changed\?" only/);
+  assert.match(wf, /org advance "\$\{\{ steps.org.outputs.alias \}\}" --sha "\$SHA"/, "the story org holds the tested commit: no second deploy by the UI test");
+});
+
+test("start decisions read Standing: a review or Claude's UI test that still stands is not started again unless a person asks (E13, E14)", () => {
+  const on = { review: true, uiTest: true, fix: true };
+  const passed = { state: "success", sha: "abc1234" };
+  assert.equal(start.decide("review", { ai: on, branch: "issue-1", review: passed }).run, false);
+  assert.match(start.decide("review", { ai: on, branch: "issue-1", review: { state: "failure", sha: "abc" } }).why, /still stands \(asked for changes/);
+  assert.equal(start.decide("review", { ai: on, branch: "issue-1", review: passed, explicit: true }).run, true, "the card's Run the AI review again");
+  assert.equal(start.decide("review", { ai: on, branch: "issue-1", review: { state: "stale" } }).run, true);
+  assert.equal(start.decide("ui-test", { ai: on, branch: "issue-1", mode: "ai", ui: passed }).run, false);
+  assert.equal(start.decide("ui-test", { ai: on, branch: "issue-1", mode: "ai", ui: { state: "pending" } }).run, false, "one is running");
+  assert.equal(start.decide("ui-test", { ai: on, branch: "issue-1", mode: "ai", ui: passed, explicit: true }).run, true);
+  assert.equal(start.decide("ui-test", { ai: on, branch: "issue-1", mode: "run", hasSpec: true, ui: passed }).run, true, "running the committed spec is always a person's ask");
+  for (const f of ["ai-review", "ui-test"]) assert.match(readFileSync(new URL(`../../.github/workflows/${f}.yml`, import.meta.url), "utf8"), /--explicit/);
+  // starting Claude's UI test marks it running on the head, so a second writer is not started meanwhile
+  const posted = [];
+  const host = { repo: "o/r", api: () => ({}), dispatch: () => {}, status: (...a) => posted.push(a), prFacts: () => ({ pr: { headRefName: "issue-1", baseRefName: "release/w1", headRefOid: "h" }, statuses: [], reviews: [], checkRuns: [] }) };
+  const gh = () => ({ state: "OPEN", labels: [], headRefName: "issue-1", baseRefName: "release/w1", headRefOid: "h" });
+  return start.startJob("ui-test", 1, { host, gh, ai: on, mode: "ai" }).then((d) => {
+    assert.equal(d.run, true);
+    assert.deepEqual(posted[0].slice(0, 3), ["h", "pipeline/ui-test", "pending"]);
+  });
+});
+
+test("nudge reads the gate's own carry rule: a sign-off on an earlier commit counts only if specs alone changed since", () => {
+  const io = (files) => ({
+    gh: (a) => (a.includes("commits") ? { commits: [{ oid: "s1" }, { oid: "h" }] } : a[0] === "api" ? { status: "ahead", files: files.map((filename) => ({ filename })) } : { state: "OPEN", labels: [], headRefName: "issue-5", baseRefName: "release/w45", headRefOid: "h" }),
+    ghPages: (p) => (p.includes("/reviews") ? [] : p.includes("/s1/") ? [{ context: "pipeline/sign-off", state: "success", created_at: "t", creator: { login: "github-actions[bot]" } }] : []),
+  });
+  assert.equal(gate.nudge(5, io(["e2e/story-5.spec.ts"])).action, "dispatch");
+  assert.equal(gate.nudge(5, io(["force-app/x"])).action, "none");
+});
+
+test("the journey decides what starts next from Standing: after a review, after staging, when the release PR opens or a slot frees (E14, E15)", () => {
+  const ai = { autoChain: true, fix: true, uiTest: true };
+  assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "failure" } }), { ai }).map((x) => x.start), ["fix"]);
+  assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "success" } }), { ai, uiNeeded: true }).map((x) => [x.start, x.mode]), [["ui-test", "ai"]]);
+  assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "success" }, ui: { state: "success" } }), { ai }), [], "a UI test that passed on this commit stands");
+  assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "success" } }), { ai, uiNeeded: false }), []);
+  assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "failure" } }), { ai: { ...ai, autoChain: false } }), []);
+  assert.deepEqual(journey.nextSteps("review", st_({ route: "release", review: { state: "failure" } }), { ai }), []);
+  const rel = (staging, uat) => st_({ route: "release", checks: { [names.CHECKS.staging]: { state: staging } }, uat: { state: uat } });
+  for (const after of ["staging", "release-pr", "org-freed"]) {
+    assert.deepEqual(journey.nextSteps(after, rel("passed", "missing"), { uat: true, pr: 197 }).map((x) => [x.dispatch, x.inputs]), [["uat-deploy.yml", { pr: "197" }]], after);
+  }
+  assert.deepEqual(journey.nextSteps("staging", rel("passed", "stale"), { uat: true, pr: 1 }).length, 1, "a newer head needs UAT again");
+  assert.deepEqual(journey.nextSteps("staging", rel("passed", "pending"), { uat: true, pr: 1 }), [], "UAT already has this commit");
+  assert.deepEqual(journey.nextSteps("release-pr", rel("running", "missing"), { uat: true, pr: 1 }), [], "staging's end starts it");
+  assert.deepEqual(journey.nextSteps("staging", rel("passed", "missing"), { uat: false, pr: 1 }), []);
+  assert.throws(() => journey.nextSteps("lunch", st_()), /unknown stage/);
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  assert.match(wf("ai-review"), /pipe.mjs next --after review --pr "\$PR"/);
+  assert.doesNotMatch(wf("ai-review"), /gate ui-needed|label=ai:test/, "no chain decided in shell");
+  assert.match(wf("release-cut"), /pipe.mjs next --after release-pr/);
+  assert.doesNotMatch(wf("release-cut") + wf("staging-deploy"), /gh workflow run uat-deploy/, "UAT is started only by the journey");
+  assert.match(wf("gate"), /types: \[labeled, ready_for_review, converted_to_draft\]/, "a draft never keeps an earlier success (E12)");
+});
+
+test("journey.next finds the open release PR when none is named, and acts through the start decision or a dispatch", async () => {
+  const did = [];
+  const facts = { pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: "success", started_at: "t" }], statuses: [], reviews: [], compare: { prFiles: ["force-app/x"] } };
+  const host = { openRelease: () => "origin/release/2026-w1", prFacts: () => facts, dispatch: (w, i) => did.push([w, i]) };
+  const gh = (a) => (a[0] === "pr" && a[1] === "list" ? [{ number: 197 }] : null);
+  const r = await journey.next("org-freed", null, { host, gh, ai: {}, uat: true, startJob: async () => {} });
+  assert.deepEqual(did, [["uat-deploy.yml", { pr: "197" }]]);
+  assert.match(r.said, /uat-deploy/);
+  const none = await journey.next("staging", null, { host: { openRelease: () => null }, gh, ai: {}, uat: true });
+  assert.match(none.said, /no pull request/);
+});
+
+test("after a merge: deleting the story org lets UAT try again; a change to the gate's rules re-decides open PRs (E12, E15)", async () => {
+  const seen = [];
+  await start.startFollowUps("delete-story-org regate", { pr: null, story: "193" }, { host: { dispatch: () => {} }, gh: () => null, cards: { refreshPr: async () => {} },
+    removeOrg: () => true, orgFreed: async () => seen.push("org-freed"), regate: () => { seen.push("regate"); return [5]; } });
+  assert.deepEqual(seen, ["org-freed", "regate"]);
+  const m = { headRefName: "fix/gate", baseRefName: "main" };
+  assert.ok(gate.followUps(m, ["pipeline/src/gate.mjs"]).includes("regate"));
+  assert.ok(!gate.followUps(m, ["pipeline/src/card.mjs"]).includes("regate"));
+  const { regate } = await import("../src/shipping.mjs");
+  const out = [];
+  const io = { gh: () => [{ number: 5, headRefOid: "a" }, { number: 6, headRefOid: "b" }], ghPages: (p) => (p.includes("/a/") ? [{ context: "pipeline/gate", state: "success", creator: { login: "github-actions[bot]" } }] : [{ context: "pipeline/gate", state: "pending", creator: { login: "github-actions[bot]" } }]) };
+  assert.deepEqual(regate(io, { repo: "o/r", dispatch: (w, i) => out.push(i.pr) }), [5]);
+  assert.deepEqual(out, [5], "only PRs whose head carries a success the old rules gave");
+});
+
+test("org lifecycle: capacity names who holds the slots; a merged story's org is never rebuilt and is swept; an outdated shape is refreshed once (E5, E6, E16)", async () => {
+  const { capacityProblem, createRefusal, shapeOutdated, isPipelineOrg, findOrphans, mergedBefore, doneStoryOrgs } = await import("../src/org.mjs");
+  const full = capacityProblem({ active: { remaining: 0, max: 3 }, daily: { remaining: 5, max: 6 } }, ["staging-2026-w48", "snapshot-src", "HubSpot dev"]);
+  assert.match(full, /No free scratch org slot \(3 active.*In use: staging-2026-w48, snapshot-src, HubSpot dev \(not this pipeline\)/);
+  assert.equal(capacityProblem({ active: { remaining: 1, max: 3 }, daily: { remaining: 1 } }, []), null);
+  assert.equal(capacityProblem({ active: {}, daily: {} }, []), null, "unknown limits: Salesforce's own error decides");
+  assert.match(capacityProblem({ active: { remaining: 1, max: 3 }, daily: {} }, ["issue-9"], 1), /ORG_RESERVE.*issue-9/);
+  assert.deepEqual(["issue-193", "LIFE-2", "uat-2026-w48", "ci-123", "HubSpot"].map(isPipelineOrg), [true, true, true, true, false]);
+  const story = { kind: "story", key: "193" };
+  assert.match(createRefusal(story, "MERGED"), /PR is merged: its org is not rebuilt/);
+  assert.equal(createRefusal(story, "OPEN"), null);
+  assert.equal(createRefusal(story, null), null, "a job without a PR (start, build; a reopened story) may create it");
+  assert.equal(createRefusal({ kind: "sprint" }, "MERGED"), null);
+  // the janitor: an org made before its story merged is left over; one made after (a reopened story) is not
+  const merged = [{ state: "MERGED", mergedAt: "2026-10-12T09:57:00Z" }];
+  assert.equal(mergedBefore(merged, "2026-10-11T19:43:00Z"), true);
+  assert.equal(mergedBefore(merged, "2026-10-13T08:00:00Z"), false);
+  assert.equal(mergedBefore([...merged, { state: "OPEN" }], "2026-10-11T19:43:00Z"), false);
+  const done = await doneStoryOrgs([{ Description: "issue-193", CreatedDate: "2026-10-11T19:43:00Z" }, { Description: "staging-w1" }], { tracker: { story: async () => ({ state: "OPEN" }) }, gh: () => merged });
+  assert.deepEqual([...done], ["issue-193"]);
+  assert.ok(shapeOutdated("ERROR: The org shape version is outdated. Recreate the org shape."));
+  assert.ok(!shapeOutdated("No free scratch org slot"));
+  const recs = [{ Description: "issue-193", SignupUsername: "u193", CreatedDate: new Date().toISOString() }];
+  assert.equal(findOrphans(recs, { isStoryDone: (d) => d === "issue-193" })[0].why, "story merged or closed");
+  // the registry refuses before creating anything, and retries an outdated shape once after refreshing it
+  const calls = [];
+  let creates = 0;
+  const sf = (a) => {
+    calls.push(a.slice(0, 3).join(" "));
+    if (a[0] === "data" && a[1] === "query") return { records: [] };
+    if (a[0] === "limits") return [{ name: "ActiveScratchOrgs", remaining: 2, max: 3 }, { name: "DailyScratchOrgs", remaining: 4, max: 6 }];
+    if (a[0] === "org" && a[1] === "create" && a[2] === "scratch" && creates++ === 0) throw new Error("The org shape version is outdated");
+    if (a[0] === "org" && a[1] === "list" && a[2] === "shape") return [{ status: "Active", createdDate: new Date().toISOString() }];
+    if (a[0] === "org" && a[1] === "display") return { username: "admin@x", clientId: "c" };
+    return {};
+  };
+  const reg = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off", SCRATCH_SNAPSHOT: "off" } });
+  assert.throws(() => reg.ready("story:193", { refusal: () => "story 193 has merged" }), /has merged/);
+  assert.ok(!calls.includes("org create scratch"), "nothing created for a merged story");
+  reg.create({ kind: "story", alias: "issue-7", description: "issue-7", definition: "config/scratch-dev.json", days: 7 });
+  assert.equal(creates, 2, "created again after the shape refresh");
+  assert.ok(calls.includes("org create shape"));
+});
+
+test("CI's tested commit moves the story org's ready marker only when the org was ready with the same baseline and seed, on a straight line the delta covered", async () => {
+  const { advanceCovered } = await import("../src/org.mjs");
+  let title = "pipeline: ready 0123456789ab";
+  const sf = (a) => (a[1] === "display" ? { username: "u" } : a[1] === "query" ? { records: [{ Title: title }] } : a[1] === "update" ? ((title = a[a.length - 1].replace(/^Title='|'$/g, "")), {}) : {});
+  const reg = orgRegistry({ sf, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } });
+  assert.equal(reg.advance("issue-7", "fedcba9876543210"), false, "never without proof the deploy covered the move");
+  let held = null;
+  assert.equal(reg.advance("issue-7", "fedcba9876543210", (h) => { held = h; return true; }), true);
+  assert.equal(held, "0123456789ab");
+  assert.equal(title, "pipeline: ready fedcba987654");
+  // the git proof: ancestor, no merge since, no deletion, every file moved is in the delta
+  const git = (r) => (a) => r[a[0] === "diff" ? `diff ${a[1]}` : a[0]] ?? null;
+  const base = { "merge-base": "", "rev-list": "", "diff --name-status": "M\tforce-app/a.cls", "diff --name-only": "force-app/a.cls\nforce-app/b.cls" };
+  assert.equal(advanceCovered(git(base), { held: "x", head: "h", base: "origin/b" }), true);
+  assert.equal(advanceCovered(git({ ...base, "merge-base": null }), { held: "x", head: "h", base: "origin/b" }), false, "not an ancestor (force-push)");
+  assert.equal(advanceCovered(git({ ...base, "rev-list": "m1" }), { held: "x", head: "h", base: "origin/b" }), false, "the base was merged in");
+  assert.equal(advanceCovered(git({ ...base, "diff --name-status": "D\tforce-app/a.cls" }), { held: "x", head: "h", base: "origin/b" }), false, "a deletion");
+  assert.equal(advanceCovered(git({ ...base, "diff --name-status": "M\tforce-app/z.layout-meta.xml" }), { held: "x", head: "h", base: "origin/b" }), false, "reverted to the base: not in the delta");
+  title = "pipeline: ready 0123456789ab bdeadbeef00";
+  assert.equal(reg.advance("issue-7", "fedcba9876543210"), false, "made with another baseline: provisioning must finish it");
+  title = "something else";
+  assert.equal(reg.advance("issue-7", "fedcba9876543210"), false, "never marks an org provisioning did not finish");
+});
+
+test("the gate records the approval it accepted on the head as it merges; close-out reads that record (E17)", () => {
+  const a = { ok: true, who: [{ login: "alice", how: "ticked Sign off", at: "2026-10-12T09:56:30Z" }] };
+  assert.equal(gate.approvalRecord(a), "@alice (ticked Sign off, 2026-10-12T09:56Z)");
+  assert.deepEqual(gate.readApprovalRecord(gate.approvalRecord(a)), { by: "alice", how: "ticked Sign off", at: "2026-10-12T09:56:00Z" });
+  assert.equal(gate.readApprovalRecord("no approval needed (route)"), null);
+  assert.equal(gate.CARRY[gate.STATUS.approval], "exact", "a record is for the exact commit merged");
+  const wf = readFileSync(new URL("../../.github/workflows/gate.yml", import.meta.url), "utf8");
+  assert.ok(wf.indexOf("status set pipeline/approval success") > wf.indexOf("name: Merge (only the head"), "recorded after the merge, never before production validation");
+});
+
+test("agent roles: one table for model and turns; the UI writer reads its failure screenshot and stops to report; triage sees CI (E9, E10)", async () => {
+  assert.deepEqual(roles.budget("ui-test", ""), { model: "claude-haiku-4-5-20251001", turns: 30 });
+  assert.equal(roles.budget("review", "claude-opus-5-5").model, "claude-opus-5-5");
+  assert.throws(() => roles.modelFor("poet", "x"), /Unknown AI role/, "an unknown role fails even with an override");
+  assert.equal(roles.ciResults([{ name: "Salesforce tests", conclusion: "failure", started_at: "1" }, { name: "Salesforce tests", conclusion: "success", started_at: "2", output: { title: "18 passed" } }]), "- Salesforce tests: success (18 passed)");
+  assert.equal(roles.ciResults([]), "- (no CI results on this commit)");
+  const ui = verdict.instructions("ui-test", { key: "9" });
+  assert.match(ui, /test-failed-1\.png/);
+  assert.match(ui, /Details tab/);
+  assert.match(ui, /about 20 turns, or 3 failed runs, stop/);
+  let sent = null;
+  await triageUiFailure(async (input, q) => { sent = { input, q }; return { ok: true, answers: { kind: { choice: "test", confidence: 0.9 } } }; }, { log: "x", story: "s", ci: "- Salesforce tests: success" });
+  assert.equal(sent.input.ci_results_on_this_commit, "- Salesforce tests: success");
+  assert.match(sent.q.kind.instructions, /prefer test or flake/);
+  assert.match(readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8"), /triage ui --log .* --ci ci\.md/);
+});
+
+test("the baseline drops empty shells and never-modified platform members (drift PR #192: I6, I20)", async () => {
+  const { isEmptyMetadata, manifestFor } = await import("../src/baseline.mjs");
+  const x = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  assert.ok(isEmptyMetadata("objects/Lead/Lead.object-meta.xml", `${x}<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"></CustomObject>`));
+  assert.ok(isEmptyMetadata("matchingRules/ContactPointEmail.matchingRule-meta.xml", `${x}<MatchingRules xmlns="http://soap.sforce.com/2006/04/metadata"/>\n`));
+  assert.ok(!isEmptyMetadata("objects/Lead/Lead.object-meta.xml", `${x}<CustomObject xmlns="x"><enableHistory>true</enableHistory></CustomObject>`));
+  assert.ok(!isEmptyMetadata("objects/A__c/A__c.object-meta.xml", `${x}<CustomObject xmlns="x">\n  <label>A</label>\n</CustomObject>`));
+  const m = manifestFor({ MatchingRules: [{ fullName: "ContactPointEmail", lastModifiedByName: "Brendan Milton", lastModifiedDate: "1970-01-01T00:00:00.000Z" }, { fullName: "Lead", lastModifiedByName: "Brendan Milton", lastModifiedDate: "2026-09-01T00:00:00.000Z" }] }, { config: {}, orgCreated: "2026-01-01" });
+  assert.deepEqual(m, { MatchingRules: ["Lead"] });
+});
+
+test("every pipe command is reachable: a one-word command is keyed with its trailing space (`pipe next` was unreachable on 13 Oct)", () => {
+  const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  const keys = [...src.slice(src.indexOf("const commands = {")).matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]);
+  assert.ok(keys.length > 40);
+  for (const k of keys) assert.match(k, /^[a-z-]+ ([a-z-]+)?$/, `"${k}" can never be looked up as "<command> <sub>"`);
+  assert.ok(keys.includes("next "));
 });

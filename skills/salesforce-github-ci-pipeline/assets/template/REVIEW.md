@@ -15,6 +15,8 @@ finding. Comments on the story and its spec since they were written win over the
 - **major**: a new or changed Apex test class without `@IsTest(testFor='ApexClass:X,ApexTrigger:Y')` naming the classes
   and triggers it tests (class level). CI and the production validation run `RunRelevantTests`: an unannotated test
   is only picked by Salesforce's own dependency analysis, which can miss it. Sharing and access tests also say `critical=true`.
+  `testFor` names only Apex classes and triggers: a test class whose subject is a Flow (or other metadata) with no
+  class or trigger to name uses `@IsTest(critical=true)` instead, and that is correct (never ask for `testFor='Flow:...'`).
 - **minor**: naming, duplication, comment quality, small clarity issues.
 
 ## Flows

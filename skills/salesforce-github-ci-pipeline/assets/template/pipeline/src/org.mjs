@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { orgFor } from "./conventions.mjs";
+import { orgFor, storyOf } from "./conventions.mjs";
 import { PIPELINE_ROOT } from "./io.mjs";
 import { baselineId as idOf, composeProject, excluded, DIR as BASELINE_DIR } from "./baseline.mjs";
 
@@ -14,21 +14,94 @@ const definitionPath = (d) => join(PIPELINE_ROOT, d);
 /**
  * Which live scratch orgs nothing needs any more (pure). Orgs whose description the pipeline did not make are left alone.
  *   ci-*                 a CI run's temporary org older than tempHours: its run failed before its cleanup, or died
- *   issue-N / KEY-N      the story is closed (isStoryClosed)
+ *   issue-N / KEY-N      the story merged or closed (isStoryDone): a merged story's org that a late job rebuilt (E16)
  *   staging-S, uat-S     sprint S is not the open sprint (shipped or abandoned)
  */
-export function findOrphans(records, { now = new Date(), isStoryClosed = () => false, openSprint = null, tempHours = 2 } = {}) {
+export function findOrphans(records, { now = new Date(), isStoryClosed = () => false, isStoryDone = isStoryClosed, openSprint = null, tempHours = 2 } = {}) {
   const out = [];
   for (const r of records) {
     const d = r.Description || "";
     const age = (now - new Date(r.CreatedDate || now)) / 3600e3;
     let why = null;
     if (/^ci-/.test(d) && age > tempHours) why = `CI org ${Math.round(age)} h old (its run did not clean up)`;
-    else if (/^issue-\d+$|^[A-Z][A-Z0-9]+-\d+$/.test(d) && isStoryClosed(d)) why = "story closed";
+    else if (/^issue-\d+$|^[A-Z][A-Z0-9]+-\d+$/.test(d) && isStoryDone(d)) why = "story merged or closed";
     else if (/^(staging|uat)-(.+)$/.test(d) && d.replace(/^(staging|uat)-/, "") !== openSprint) why = "sprint no longer open";
     if (why) out.push({ username: r.SignupUsername, description: d, why });
   }
   return out;
+}
+
+/** Is a Description one of this pipeline's orgs? (story, staging, UAT, CI temporary, snapshot source) */
+export const isPipelineOrg = (d) => /^(issue-\d+|[A-Z][A-Z0-9]+-\d+|staging-.+|uat-.+|ci-.+|snapshot-.+)$/.test(String(d || ""));
+
+/**
+ * Why a new org cannot be created now, or null. Names who holds the slots (another project's orgs share the Dev Hub's
+ * limit: story #193's /start failed on one), and keeps `reserve` slots free for staging, UAT and CI. Unknown limits
+ * (the call failed) do not block: creation then fails with Salesforce's own message. Pure.
+ */
+export function capacityProblem({ active = {}, daily = {} }, holders = [], reserve = 0) {
+  const who = () => {
+    const ours = holders.filter(isPipelineOrg), others = holders.filter((d) => !isPipelineOrg(d));
+    return ` In use: ${[...ours, ...others.map((d) => `${d || "(no description)"} (not this pipeline)`)].join(", ") || "unknown"}.`;
+  };
+  if (reserve && active.remaining <= reserve) return `Only ${active.remaining} scratch org slot(s) free and ${reserve} kept for staging, UAT and CI (ORG_RESERVE): merge or close a story first.${who()}`;
+  if (active.remaining === 0) return `No free scratch org slot (${active.max} active is the Dev Hub's limit). Merge or delete a story first, or run scratch-janitor.${who()}`;
+  if (daily.remaining === 0) return `The Dev Hub has created its ${daily.max} scratch orgs for today; the count resets at 00:00 UTC.`;
+  return null;
+}
+
+/** Salesforce refuses an org from a shape that a release has aged (E5): refresh the shape and try once more. */
+export const shapeOutdated = (message) => /shape.{0,40}(outdated|out of date|expired)|outdated.{0,40}shape/i.test(String(message || ""));
+
+/** A job for a PR never rebuilds the story org once that PR is no longer open (a late UI test rebuilt issue-193 after
+ *  its merge and took the slot UAT needed, E16). Jobs without a PR (start, build) always may: a reopened story gets its
+ *  org back. Pure: prState is the job's PR's state, or null. */
+export function createRefusal(org, prState = null) {
+  if (org?.kind !== "story" || !prState || prState === "OPEN") return null;
+  return `story ${org.key}'s PR is ${String(prState).toLowerCase()}: its org is not rebuilt (the job that wanted it is too late)`;
+}
+
+/** createRefusal() for a job that names its PR (--pr), its state read through the gh seam. */
+export const storyRefusal = (gh, pr) => (org) => (pr ? createRefusal(org, gh(["pr", "view", String(pr), "--json", "state"], { allowFail: true })?.state || null) : null);
+
+/** Is a story org left over from a merge? The branch's latest PR merged, none is open, and the org was made before that
+ *  merge (one made after belongs to a story reopened and started again). Pure. */
+export const mergedBefore = (prs = [], orgCreated) => {
+  if (prs.some((p) => p.state === "OPEN")) return false;
+  const merged = prs.filter((p) => p.state === "MERGED").map((p) => String(p.mergedAt || "")).sort().pop();
+  return Boolean(merged && orgCreated && String(orgCreated) < merged);
+};
+
+/** The live orgs whose story is done: closed in the tracker, or merged after the org was made (mergedBefore). records:
+ *  [{ Description, CreatedDate }]; gh reads the branch's PRs. For sweep(). */
+export async function doneStoryOrgs(records, { tracker, gh, log = () => {} }) {
+  const done = new Set();
+  for (const r of records) {
+    const d = r.Description || "", key = storyOf(d);
+    if (!key) continue;
+    try {
+      const prs = gh(["pr", "list", "--head", d, "--state", "all", "--limit", "20", "--json", "state,mergedAt"], { allowFail: true }) || [];
+      if (mergedBefore(prs, r.CreatedDate) || (await tracker.story(key)).state === "CLOSED") done.add(d);
+    } catch (e) { log(`skipped ${d}: ${e.message}`); }
+  }
+  return done;
+}
+
+/**
+ * Did CI's delta deploy (base...head) bring an org that held `held` to exactly `head`? Only on a straight line: held is
+ * an ancestor of head, no merge since (a merged base brings files the delta omits), no force-app deletion (a delta
+ * without members skips its destructive manifest), and every force-app file changed since held is in the delta (a file
+ * reverted to the base is not). git is the io seam; base is a ref ("origin/release/..."). Fails closed.
+ */
+export function advanceCovered(git, { held, head, base }) {
+  const ok = (a) => git(a, { allowFail: true });
+  if (ok(["merge-base", "--is-ancestor", held, head]) === null) return false;
+  if ((ok(["rev-list", "--merges", `${held}..${head}`]) ?? "x").trim()) return false;
+  const moved = ok(["diff", "--name-status", held, head, "--", "force-app"]);
+  const delta = ok(["diff", "--name-only", `${base}...${head}`, "--", "force-app"]);
+  if (moved === null || delta === null) return false;
+  const inDelta = new Set(delta.split("\n").filter(Boolean));
+  return moved.split("\n").filter(Boolean).every((l) => { const [st, ...paths] = l.split("\t"); return !st.startsWith("D") && paths.every((p) => inDelta.has(p)); });
 }
 
 /** Managed packages production has, which Org Shape does not copy: config/packages.json,
@@ -146,13 +219,15 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
      * Creation tries the current snapshot (SCRATCH_SNAPSHOT) first and falls back to production's shape.
      * opts: { commit, manifest (deploy only these), hotfix }. Returns the org with { created, completed, fresh }.
      */
-    ready(target, { commit = null, manifest = null, ...opts } = {}) {
+    ready(target, { commit = null, manifest = null, refusal = () => null, ...opts } = {}) {
       const existing = self.find(target, opts);
       const org = existing ? self.attach(existing) : resolve(target, opts);
       const want = readyMarker(commit, baseline(), seedId());
       if (existing && self.isReady(org.alias, want)) { log(`${org.alias} already holds ${commit ? String(commit).slice(0, 7) : "its source"}`); return { ...org, created: false, fresh: true }; }
       if (existing) log(`${org.alias} exists: bringing it to ${commit ? String(commit).slice(0, 7) : "its source"}`);
       else {
+        const no = refusal(org);
+        if (no) throw new Error(no);
         self.assertCapacity(org.kind === "story" ? Number(env.ORG_RESERVE || 0) : 0);
         const how = self.create(org);
         if (!how.fromSnapshot) { self.enableLoginAs(org.alias); self.rebuildRoles(org.alias); }   // roles before the deploy: shares attach to them
@@ -188,8 +263,28 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         self.removeTagged(org.description);   // a half-made attempt must not hold a slot
       }
       log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
-      sf([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]);
+      try { sf([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]); } catch (e) {
+        if (!shapeOutdated(e.message)) throw e;
+        log(`::warning::production's org shape is outdated: refreshing it, then creating ${org.alias} once more`);
+        record("shape", { action: "refresh", org: org.description });
+        self.removeTagged(org.description);   // a half-made attempt must not hold a slot
+        self.refreshShape();
+        sf([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]);
+      }
       return { fromSnapshot: false };
+    },
+
+    /** Capture production's shape again and wait until it is usable (about 2 to 10 minutes). */
+    refreshShape({ waitMinutes = 15 } = {}) {
+      const before = new Date().toISOString();
+      sf(["org", "create", "shape", "-o", DEVHUB]);
+      for (let i = 0; i < waitMinutes * 2; i++) {
+        const shapes = sf(["org", "list", "shape"], { allowFail: true });
+        const list = Array.isArray(shapes) ? shapes : shapes?.orgShapes || [];
+        if (list.some((x) => String(x.status || x.Status).toLowerCase() === "active" && String(x.createdDate || x.CreatedDate || "") >= before.slice(0, 10))) return;
+        sleep(30_000);
+      }
+      throw new Error(`production's org shape did not become active within ${waitMinutes} minutes: run org-shape-refresh`);
     },
 
     /**
@@ -329,10 +424,24 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     /** Fail with a clear message instead of a half-made org when the Dev Hub has no room. */
     /** reserve: slots a story org must leave free for staging, UAT and CI (repository variable ORG_RESERVE). */
     assertCapacity(reserve = 0) {
-      const { active, daily } = self.limits();
-      if (reserve && active.remaining <= reserve) throw new Error(`Only ${active.remaining} scratch org slot(s) free and ${reserve} kept for staging, UAT and CI (ORG_RESERVE): merge or close a story first.`);
-      if (active.remaining === 0) throw new Error(`No free scratch org slot (${active.max} active is the Dev Hub's limit). Merge or delete a story first, or run scratch-janitor.`);
-      if (daily.remaining === 0) throw new Error(`The Dev Hub has created its ${daily.max} scratch orgs for today; the count resets at 00:00 UTC.`);
+      const l = self.limits();
+      const no = capacityProblem(l, l.active.remaining === 0 || (reserve && l.active.remaining <= reserve) ? active().map((r) => r.Description || "") : [], reserve);
+      if (no) throw new Error(no);
+    },
+
+    /** CI deployed (base..head delta) and tested `commit` in an org that was ready for an earlier commit with the same
+     *  baseline and seed: it now holds that commit, so the UI test does not deploy everything again. Only when
+     *  coversMove(held) says the delta brought the org from `held` to `commit` (advanceCovered). Returns whether it moved. */
+    advance(alias, commit, coversMove = () => false) {
+      const username = sf(["org", "display", "-o", alias], { allowFail: true })?.username;
+      const title = username && sf(["data", "query", "-o", alias, "-q", `SELECT Title FROM User WHERE Username = '${username}'`], { allowFail: true })?.records?.[0]?.Title;
+      const m = String(title || "").match(/^pipeline: ready ([0-9a-f]{7,40})((?: b\S+)?(?: s\S+)?)$/);
+      const want = readyMarker(commit, baseline(), seedId());
+      if (!m || `${readyMarker(commit)}${m[2]}` !== want) { log(`${alias}: not marked (it was not ready with this baseline and seed)`); return false; }
+      if (!coversMove(m[1])) { log(`${alias}: not marked (the deploy did not bring it from ${m[1].slice(0, 7)} to ${String(commit).slice(0, 7)})`); return false; }
+      self.markReady(alias, want);
+      log(`${alias} now holds ${String(commit).slice(0, 7)}`);
+      return true;
     },
 
     /** A throwaway org for one CI run, deleted by the caller (from the snapshot when there is one, untracked). */

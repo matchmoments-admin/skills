@@ -36,6 +36,7 @@ export function manifestFor(listings, { config, orgCreated }) {
       if (m.namespacePrefix || ["installed", "released", "beta", "deleted", "deprecated"].includes(m.manageableState)) return false;
       if (type === "CustomObject" && !CUSTOM_OBJECT.test(m.fullName)) return false;
       if (/^(salesforce|automated process|platform integration)/i.test(m.lastModifiedByName || "")) return false;   // the platform's own (features, Dev Hub objects)
+      if (String(m.lastModifiedDate || "").startsWith("1970-01-01")) return false;   // never modified: the platform's own (ContactPointEmail matching rules, I6)
       const onStandard = CHILD_TYPES.includes(type) && !CUSTOM_OBJECT.test(String(m.fullName).split(".")[0]);
       if ((config.customisedOnly || []).includes(type) || onStandard) {
         if (/salesforce/i.test(m.lastModifiedByName || "") || new Date(m.lastModifiedDate || 0).getTime() <= created) return false;
@@ -73,12 +74,16 @@ export function sanitize(path, xml) {
 
 const walk = (dir) => (existsSync(dir) ? readdirSync(dir).flatMap((f) => { const p = join(dir, f); return statSync(p).isDirectory() ? walk(p) : [p]; }) : []);
 
-/** Remove sharing-rule files that hold no rules (production lists one per object, even empty; a scratch org may not
- *  have the object). Returns the removed paths. */
+/** Remove files that hold nothing: sharing-rule files with no rules (production lists one per object, even empty; a
+ *  scratch org may not have the object), and empty shells a retrieve leaves (a standard object's
+ *  <CustomObject></CustomObject> once force-app owns its field, story #193; <MatchingRules/>), which showed as
+ *  drift (I6, I20). Returns the removed paths. */
+export const isEmptyMetadata = (path, xml) => (/\.sharingRules-meta\.xml$/.test(path) ? !/<sharing(Criteria|Owner|Guest|Territory)Rules[\s>/]/.test(xml)
+  : /<(CustomObject|MatchingRules)\b[^>]*(\/>|>\s*<\/\1>)\s*$/.test(String(xml).replace(/<\?xml[^>]*\?>/, "").trim()));
 export function dropEmpty(baselineDir) {
   const removed = [];
-  for (const f of walk(baselineDir).filter((x) => /\.sharingRules-meta\.xml$/.test(x))) {
-    if (!/<sharing(Criteria|Owner|Guest|Territory)Rules[\s>/]/.test(readFileSync(f, "utf8"))) { rmSync(f); removed.push(relative(baselineDir, f)); }
+  for (const f of walk(baselineDir).filter((x) => /\.(sharingRules|object|matchingRule)-meta\.xml$/.test(x))) {
+    if (isEmptyMetadata(f, readFileSync(f, "utf8"))) { rmSync(f); removed.push(relative(baselineDir, f)); }
   }
   return removed;
 }

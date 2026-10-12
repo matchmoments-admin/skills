@@ -47,7 +47,8 @@ jobs:
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       # flag off, or nothing to run (no committed spec: that is the verdict, posted here): decided in main's code
       # (pipeline/src/start.mjs) before a test runner starts
-      - run: node pipeline/bin/pipe.mjs start ui-test --pr "$PR" --mode "$([ "$LABEL" = "ai:test" ] && echo ai || echo run)"
+      # a label is a person asking (auto-chain dispatches directly): Claude rewrites the spec even if one stands
+      - run: node pipeline/bin/pipe.mjs start ui-test --pr "$PR" --mode "$([ "$LABEL" = "ai:test" ] && echo ai || echo run)" --explicit
   write:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'ai' && vars.AI_UI_TEST == 'true'
     runs-on: ubuntu-latest
@@ -103,7 +104,7 @@ jobs:
       - name: Attach, deploy this head and prepare the story's org; fetch the story
         id: org
         run: |
-          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH")   # this head, deployed and prepared (once)
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH" --pr "$PR")   # this head, deployed and prepared (once); never rebuilt for a merged PR
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           echo "SCRATCH_ALIAS=$ALIAS" >> "$GITHUB_ENV"
@@ -126,7 +127,6 @@ jobs:
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ steps.id.outputs.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots (auto-chain labels as the App); empty = none
-          max-turns: "40"
           allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(npx playwright test:*),Bash(git:*)"
           prompt: |
             You are the UI tester for story ${{ steps.org.outputs.key }} (pull request #${{ env.PR }}). The story is in ${{ runner.temp }}/story.md: its acceptance criteria and "Where to see it" are your test plan.
@@ -213,8 +213,10 @@ jobs:
       - name: Deploy this exact head to the story's org and prepare it
         id: deploy
         if: steps.spec.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}   # read-only: is the PR still open (no org rebuilt for a merged one)
         run: |
-          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH")   # this head, deployed and prepared (once)
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH" --pr "$PR")   # this head, deployed and prepared (once); never rebuilt for a merged PR
           echo "SCRATCH_ALIAS=$ALIAS" >> "$GITHUB_ENV"
           # loginAs reads these: once the Dev Hub is logged out (next step), `sf org display` fails
           sf org display -o "$ALIAS" --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
@@ -297,8 +299,9 @@ jobs:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           node pipeline/bin/pipe.mjs tracker story "$KEY" --out story.md || true
+          node pipeline/bin/pipe.mjs ci results "$HEAD_SHA" --out ci.md >/dev/null || true   # CI green on this commit: the feature likely works
           LOG=$(find art -name playwright.log | head -1)
-          node pipeline/bin/pipe.mjs triage ui --log "${LOG:-/dev/null}" --story story.md
+          node pipeline/bin/pipe.mjs triage ui --log "${LOG:-/dev/null}" --story story.md --ci ci.md
       - name: Does the spec check a criterion? (a spec that only waits for things to be visible proves nothing)
         id: speccheck
         if: env.OUTCOME == 'success' && env.HAS_SPEC == 'true'

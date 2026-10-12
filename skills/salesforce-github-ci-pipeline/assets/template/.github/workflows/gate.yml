@@ -6,7 +6,7 @@ name: gate
 # Runs only main's code: the PR is checked out to a side directory purely as data to validate.
 on:
   pull_request:
-    types: [labeled]
+    types: [labeled, ready_for_review, converted_to_draft]   # a draft must not keep an earlier success (E12)
   pull_request_review:
     types: [submitted]
   workflow_dispatch:
@@ -25,7 +25,9 @@ env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   decide:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready' || github.event.review.state == 'approved'
+    if: >-
+      github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready' || github.event.review.state == 'approved' ||
+      github.event.action == 'ready_for_review' || github.event.action == 'converted_to_draft'
     runs-on: ubuntu-latest
     concurrency:
       group: gate-${{ github.event.pull_request.number || inputs.pr }}   # one decision per PR at a time
@@ -44,6 +46,7 @@ jobs:
       validate: ${{ steps.gate.outputs.validate }}
       after: ${{ steps.gate.outputs.after }}
       lock: ${{ steps.gate.outputs.lock }}
+      approval: ${{ steps.gate.outputs.approval }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: main }
@@ -58,13 +61,9 @@ jobs:
       - name: The gate's verdict on this commit (pipeline/gate, required by the branch rules)
         if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != ''
         env:
-          STATE: ${{ steps.gate.outputs.gate_state }}
+          STATE: ${{ steps.gate.outputs.gate_state }}   # gate.gateStatus: pending while a route validates against production
           DESC: ${{ steps.gate.outputs.gate_description }}
-          VALIDATE: ${{ steps.gate.outputs.validate }}
-        run: |
-          # a route that validates against production keeps the merge button locked until production accepts it
-          if [ "$STATE" = success ] && [ "$VALIDATE" = true ]; then STATE=pending; DESC="Ready: validating against production before merging"; fi
-          node pipeline/bin/pipe.mjs status set pipeline/gate "$STATE" "${{ steps.gate.outputs.head }}" "$DESC"
+        run: node pipeline/bin/pipe.mjs status set pipeline/gate "$STATE" "${{ steps.gate.outputs.head }}" "$DESC"
       - name: Explain what is missing (PRs without a card only, e.g. pipeline maintenance; once per distinct reason list)
         if: steps.gate.outputs.open == 'true' && steps.gate.outputs.route != '' && steps.gate.outputs.mergeable != 'true' && steps.gate.outputs.story == '' && steps.gate.outputs.route != 'release'
         env:
@@ -152,6 +151,11 @@ jobs:
           # the commit that ships: the release checks it has the tree validated above, or validates again
           for _ in 1 2 3 4 5; do SHA=$(gh pr view "$PR" --json mergeCommit --jq '.mergeCommit.oid // empty'); [ -n "$SHA" ] && break; sleep 3; done
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      - name: Record the approval the gate accepted (the delivery record reads this, not the rule as it is later)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVAL: ${{ needs.decide.outputs.approval }}
+        run: node pipeline/bin/pipe.mjs status set pipeline/approval success "$HEAD_SHA" "$APPROVAL" --pr "$PR"
       - name: Follow-ups (start the next workflows first; org cleanup cannot fail the merge)
         env:
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}

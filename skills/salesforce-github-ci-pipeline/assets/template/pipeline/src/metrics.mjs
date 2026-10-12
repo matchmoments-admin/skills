@@ -138,3 +138,13 @@ function transcripts(io, repo, since) {
   }
   return out;
 }
+
+/** The metrics report: the event log first; workflow health from GitHub's run history (transcripts only for windows
+ *  before the log). events: the events module (readLog, summarize, toMarkdown). */
+export function report(io, { days = 28, events }) {
+  const log = events.readLog(io, { days });
+  const covered = log.some((e) => e.kind === "release");   // the log has seen a release: its DORA is the one to trust
+  const gh = summarize(gather(io, { days, transcripts: !log.some((e) => e.kind === "agent"), prDetails: !covered }));
+  const older = toMarkdown(gh, { dora: !covered }).replace(/^## Delivery metrics, last \d+ days/, covered ? "## Workflow health (GitHub's run history)" : "## From GitHub's history (PRs, releases, workflow runs)");
+  return [events.toMarkdown(events.summarize(log, { days })), "", older].join("\n");
+}

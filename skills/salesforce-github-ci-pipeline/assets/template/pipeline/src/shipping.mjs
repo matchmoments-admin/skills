@@ -7,6 +7,8 @@
 // re-runs, retries and a newer release replacing a queued older one are all safe. Close-out works from the SHA and the
 // release before it, never from wherever main has moved to since.
 
+import { GATE_STATUS, TRUSTED_STATUS_CREATORS } from "./gate.mjs";
+
 export const TAG_GLOB = "v*";
 
 /** The newest release tag reachable from a ref (the previous release), or null before the first one. */
@@ -64,6 +66,16 @@ export function renudge({ gh }, host, { base, except }, nudge) {
   const prs = gh(["pr", "list", "--base", base, "--state", "open", "--limit", "1000", "--json", "number"]) || [];
   const again = prs.map((p) => p.number).filter((n) => String(n) !== String(except) && nudge(n).action === "dispatch");
   for (const n of again) host.dispatch("gate.yml", { pr: n });
+  return again;
+}
+
+/** Re-decide the gate on every open PR whose head carries a pipeline/gate success (one decided under rules that have
+ *  since changed must not keep the merge button unlocked). Returns the PR numbers dispatched. */
+export function regate({ gh, ghPages }, host, log = () => {}) {
+  const prs = gh(["pr", "list", "--state", "open", "--limit", "200", "--json", "number,headRefOid"]) || [];
+  const again = prs.filter((p) => ghPages(`repos/${host.repo}/commits/${p.headRefOid}/statuses?per_page=100`)
+    .some((s) => s.context === GATE_STATUS && s.state === "success" && TRUSTED_STATUS_CREATORS.includes(s.creator?.login))).map((p) => p.number);
+  for (const n of again) { host.dispatch("gate.yml", { pr: n }); log(`re-deciding #${n}`); }
   return again;
 }
 

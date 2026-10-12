@@ -108,7 +108,7 @@ jobs:
         env:
           READ_TOKEN: ${{ github.token }}   # reading run logs needs actions: read, which the Actions token has
         run: |
-          node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH"   # attaches or rebuilds; deploys this head unless the org already holds it
+          node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH" --pr "$PR"   # attaches or rebuilds (never for a merged PR); deploys this head unless the org holds it
           {
             echo "# Feedback on PR #$PR"
             gh pr view "$PR" --json comments --jq '.comments[] | select(.body | startswith("/") | not) | "\n## Comment by \(.author.login)\n\(.body)"'
@@ -141,7 +141,6 @@ jobs:
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ steps.id.outputs.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots; empty = none
-          max-turns: "40"
           allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(sf:*),Bash(git:*),Bash(npm run:*),Bash(npm install:*),Bash(npx prettier:*),Bash(npx sfdx-lwc-jest:*),Bash(ls:*),Bash(jq:*),Bash(gh pr edit:*)"
           prompt: |
             Fix the review findings and any failed CI checks on pull request #${{ env.PR }}. All feedback (review comments, inline comments, and the errors of a failed CI run, if any) is in ${{ runner.temp }}/review-feedback.md.

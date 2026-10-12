@@ -59,9 +59,11 @@ export const UI_FAILURE = {
 const MIN_CONFIDENCE = 0.6;
 
 /** Classify a failed Playwright run. Returns { kind: "flake"|"test"|"feature"|"unknown", confidence, why }. */
-export async function triageUiFailure(jev, { log, story = "" }) {
-  const r = await jev({ playwright_output: clip(log), story: clip(story).slice(0, 4000) }, {
-    kind: { type: "choice", instructions: "A Playwright UI test of a Salesforce feature failed. Which best explains the failure?", criteria: UI_FAILURE },
+export async function triageUiFailure(jev, { log, story = "", ci = "" }) {
+  // CI's results on the same commit (roles.ciResults): with its Apex and Flow tests green, the feature most likely works
+  // and the test is the suspect (story #193: "feature" was guessed with every test passing, E10)
+  const r = await jev({ playwright_output: clip(log), story: clip(story).slice(0, 4000), ...(ci ? { ci_results_on_this_commit: String(ci).slice(0, 2000) } : {}) }, {
+    kind: { type: "choice", instructions: `A Playwright UI test of a Salesforce feature failed. Which best explains the failure?${ci ? " CI's Apex and Flow tests on the same commit are listed: if they passed, the feature's logic works, so prefer test or flake unless the output shows the feature itself missing." : ""}`, criteria: UI_FAILURE },
   });
   if (!r.ok) return { kind: "unknown", confidence: 0, why: `Jev unavailable (${r.reason})` };
   const a = r.answers.kind;

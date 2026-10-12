@@ -9,6 +9,7 @@ permissions:
   pull-requests: write
   issues: write         # the release card
   checks: read          # the card reads the PR's checks (the gate's facts)
+  statuses: read        # whether UAT already has the release head (pipe next)
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
@@ -41,7 +42,6 @@ jobs:
           gh pr create --base main --head "$REL" --title "Release $SPRINT" --body-file notes.md --label release
           GH_TOKEN="${{ github.token }}" node pipeline/bin/pipe.mjs pr card "$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number')" || true
           [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$REL" -f ref="$REL"
-          # UAT_ENABLED: the release candidate goes to UAT for business sign-off
-          if [ "${{ vars.UAT_ENABLED }}" = "true" ]; then
-            GH_TOKEN="${{ github.token }}" gh workflow run uat-deploy.yml --ref main -f pr="$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number')"
-          fi
+          # UAT_ENABLED: the release candidate goes to UAT once the staging regression has passed on it (journey.mjs);
+          # if staging is still running, its end starts UAT instead
+          GH_TOKEN="${{ github.token }}" node pipeline/bin/pipe.mjs next --after release-pr --pr "$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number')"

@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read        # runs the PR's own code (lint, unit tests): no token that can post a verdict
+      checks: read          # "What changed?" only: did an earlier commit already pass the Salesforce tests
     env:
       REF: ${{ inputs.ref || github.head_ref || github.ref_name }}
     outputs:
@@ -61,6 +62,11 @@ jobs:
         # The code analyzer runs only on Salesforce changes. A diff that cannot be read assumes everything.
         # The checkout's own pipe.mjs, like the access check: this job holds no secrets, and the guard above keeps a
         # story's pipeline/ identical to its base (a pipeline PR is tested with the commands it adds).
+        # A read-only token for this step alone: an earlier commit whose Salesforce tests passed, with nothing under
+        # force-app changed since, carries (no deploy, no Apex run; the skipped check passes, gate.CARRY).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
           node pipeline/bin/pipe.mjs ci plan --ref "$REF" --base "$BASE"
@@ -185,7 +191,10 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           # release PRs and back-merges carry many stories: everything; a story runs what it changed
           ALL: ${{ needs.static.outputs.all == 'true' && '--all' || '' }}
-        run: node .pipeline/pipeline/bin/pipe.mjs tests run "${{ steps.org.outputs.alias }}" --base "origin/$BASE" --sha "$SHA" --out test-results $ALL
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs tests run "${{ steps.org.outputs.alias }}" --base "origin/$BASE" --sha "$SHA" --out test-results $ALL
+          # the story org now holds this commit: the UI test's org provisioning finds it ready instead of deploying again
+          [ "${{ steps.org.outputs.temp }}" = true ] || [ "${{ needs.static.outputs.kind }}" != story ] || node .pipeline/pipeline/bin/pipe.mjs org advance "${{ steps.org.outputs.alias }}" --sha "$SHA" --base "origin/$BASE" || true
       - uses: actions/upload-artifact@v4
         if: always() && steps.delta.outputs.none != 'true'
         with: { name: apex-results, path: test-results }

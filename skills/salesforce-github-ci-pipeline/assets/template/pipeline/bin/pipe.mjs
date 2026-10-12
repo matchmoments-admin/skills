@@ -4,6 +4,8 @@
 //   context   [--key K] [--branch B] [--labels a,b]     names for a story / the open sprint, as KEY=value lines
 //   labels    sync                                       create or update every label the pipeline uses
 //   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits
+//             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
+//   next      --after review|staging|release-pr|org-freed [--pr N]   what the journey owes next, started (journey.mjs)
 //   lane      acquire|release <org target> [--minutes M] [--no-card]  one job at a time per org, a queue that drops nobody
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
@@ -11,7 +13,8 @@
 //   verdict   instructions <role> [--key K] · model <role> · review <pr> --since T · rounds --pr N
 //   start     review|fix|ui-test --pr N [--mode ai|run] [--before S --after S]   run the job, or say why not (no runner)
 //             followups --after "a b" --pr N --base B --sha S [--job J --tree T] [--story K]   what starts after a merge
-//   ci        plan --ref R --base B                     which CI jobs need a runner: kind, sf, org, ui, target, all
+//   ci        plan --ref R --base B (kind, sf, org, ui, target, all, carried) · results <sha> [--out f]   CI's results for agents
+//   agent     budget <role>                             the role's model and turns (pipeline/src/roles.mjs)
 //   harness   overlay implement|fix|ui-test|staging [--from DIR]   main's rules and harness over the checkout, hidden
 //   tracker   story <key> [--out file] [--pack [--base B]] · comment <key> <text> · open-sprint <sprint> · assign <key> --sprint S
 //   story     card <key> | --branch B [--base B] [--tag T] [--now "what" [--failed] [--retry "how"]] [--starting]
@@ -24,7 +27,7 @@
 //             renudge --base B --except N · watchdog      shipping keyed by commit (pipeline/src/shipping.mjs)
 //   release   notes <sprint>
 //   closeout  plan|run --tag T --sha S [--previous TAG]  from the shipped SHA and the release before it
-//   triage    ui --log file [--story file] · review --base B --head H   (Jev, behind AI_TRIAGE; falls back safely)
+//   triage    ui --log file [--story file] [--ci file] · review --base B --head H   (Jev, behind AI_TRIAGE; falls back safely)
 //   event     agent --role R --file transcript [--key K] [--pr N] · rollback --tag T --sha S   (the event log; the
 //             commands above record their own: stage, tests, validation, gate, org, verdict, lane, release)
 //   metrics   [--days N] [--out file]                   DORA and pipeline telemetry as markdown
@@ -48,7 +51,7 @@ import * as plans from "../src/plan.mjs";
 import { storyCards } from "../src/card.mjs";
 import * as tests from "../src/tests.mjs";
 import * as production from "../src/production.mjs";
-import { orgRegistry, personaOf as orgPersona } from "../src/org.mjs";
+import { orgRegistry, personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered } from "../src/org.mjs";
 import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
@@ -62,9 +65,11 @@ import * as evidence from "../src/evidence.mjs";
 import * as baseline from "../src/baseline.mjs";
 import * as start from "../src/start.mjs";
 import * as harness from "../src/harness.mjs";
+import * as journey from "../src/journey.mjs";
+import * as roles from "../src/roles.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -97,6 +102,7 @@ const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, 
 // a snapshot Salesforce refused is marked with a tag (snapshot-refused-<name>) so no later run spends a daily org on it
 const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;
 const refuseSnapshot = (n) => { const sha = host.api("GET", `repos/${host.repo}/git/ref/heads/main`)?.object?.sha; if (sha) host.api("POST", `repos/${host.repo}/git/refs`, { ref: `refs/tags/snapshot-refused-${n}`, sha }); };
+const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, log });
 const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT"), BASELINE: names.setting("BASELINE") } });
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
@@ -122,10 +128,11 @@ const commands = {
 
   // ---- orgs and lanes
   "org ready": () => {   // Org provisioning: the target's org, holding the code in the working directory (org.mjs ready)
-    const o = orgs().ready(arg(0), { hotfix: has("hotfix"), commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), manifest: flag("manifest") });
+    const o = orgs().ready(arg(0), { hotfix: has("hotfix"), commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), manifest: flag("manifest"), refusal: storyRefusal(io.gh, flag("pr")) });
     if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
     output({ alias: o.alias, created: o.created }); return say(o.alias);
   },
+  "org advance": () => say(orgs().advance(arg(0), flag("sha"), (held) => advanceCovered(io.git, { held, head: flag("sha"), base: flag("base") })) ? `${arg(0)} holds ${flag("sha").slice(0, 7)}` : `${arg(0)} left as it was`),   // CI tested this commit
   "org attach": () => { const o = orgs().attach(arg(0)); output({ alias: o.alias }); return say(o.alias); },
   "org remove": () => { const o = names.orgFor(arg(0)); if (orgs().remove(arg(0))) record("org", { action: "deleted", org: o?.description, story: o?.key }); },
   "org remove-tagged": () => { if (orgs().removeTagged(arg(0))) record("org", { action: "deleted", org: arg(0) }); },
@@ -135,13 +142,10 @@ const commands = {
   "org changes": () => { const o = orgs(), c = o.retrieveChanges(arg(0), o.setupChanges(arg(0), { exclude: JSON.parse(readFileSync("config/baseline.json", "utf8")).exclude })); output({ count: c.length }); return say(c.map((x) => `${x.type}:${x.name}`).join("\n") || "no Setup changes"); },
   "org limits": () => { const l = orgs().limits(); return say(`active scratch orgs ${l.active.remaining}/${l.active.max} free, created today ${l.daily.max - l.daily.remaining}/${l.daily.max}`); },
   "org sweep": async () => {
-    // every orphan: CI orgs whose run died, closed stories' orgs, staging and UAT orgs of sprints no longer open
-    const closed = new Set();
-    for (const d of (io.sf(["data", "query", "-o", "devhub", "-q", "SELECT Description FROM ScratchOrgInfo WHERE Status = 'Active'"]).records || []).map((r) => r.Description || "")) {
-      const key = names.storyOf(d);
-      try { if (key && (await tracker.story(key)).state === "CLOSED") closed.add(d); } catch (e) { log(`skipped ${d}: ${e.message}`); }
-    }
-    const gone = orgs().sweep({ isStoryClosed: (d) => closed.has(d), openSprint: names.sprintOf(host.openRelease() || "") });
+    // every orphan: CI orgs whose run died, merged or closed stories' orgs, staging and UAT orgs of sprints no longer open
+    const live = io.sf(["data", "query", "-o", "devhub", "-q", "SELECT Description, CreatedDate FROM ScratchOrgInfo WHERE Status = 'Active'"]).records || [];
+    const done = await doneStoryOrgs(live, { tracker, gh: io.gh, log });
+    const gone = orgs().sweep({ isStoryDone: (d) => done.has(d), openSprint: names.sprintOf(host.openRelease() || "") });
     for (const g of gone) record("org", { action: "deleted", org: g.description, why: g.why });
     return say(`deleted ${gone.length} orphan org(s)${gone.length ? `: ${gone.map((o) => `${o.description} (${o.why})`).join(", ")}` : ""}`);
   },
@@ -169,12 +173,12 @@ const commands = {
     const pr = arg(0);
     const facts = host.prFacts(pr);
     const d = gate.evaluate(facts);
-    record("gate", { pr: Number(pr), story: d.story, route: d.route, mergeable: d.mergeable, reasons: d.reasons, sha: facts.pr.headRefOid });
+    record("gate", { pr: Number(pr), story: d.story, route: d.route, mergeable: d.mergeable, reasons: d.reasons, sha: facts.pr.headRefOid, approvedBy: d.standing?.approval?.who || [] });
     const gs = gate.gateStatus(d);
     output({
       gate_state: gs.state, gate_description: gs.description, route: d.route || "", mergeable: d.mergeable, story: d.story || "",
       reasons: d.reasons.map((r) => `- ${r}`).join("\n"), head: facts.pr.headRefOid, open: facts.pr.state === "OPEN", merge: d.rules?.merge || "",
-      validate: d.validate || false, after: (d.after || []).join(" "), lock: ["release", "hotfix", "maintenance"].includes(d.route) ? "main" : `pr-${pr}`,
+      validate: d.validate || false, after: (d.after || []).join(" "), approval: d.standing ? gate.approvalRecord(d.standing.approval) : "", lock: ["release", "hotfix", "maintenance"].includes(d.route) ? "main" : `pr-${pr}`,
     });
     if (has("card")) await cards.refreshPr(pr);   // the same facts: one gather for the decision and the card
     return say(JSON.stringify({ route: d.route, mergeable: d.mergeable, reasons: d.reasons, story: d.story, validate: d.validate, after: d.after }, null, 2));
@@ -228,7 +232,7 @@ const commands = {
   },
 
   // ---- verdicts and AI roles
-  "verdict model": () => say(verdict.modelFor(arg(0))),
+  "verdict model": () => say(roles.modelFor(arg(0))),
   "verdict instructions": () => say(verdict.instructions(arg(0), { key: flag("key", "N") })),
   "verdict review": () => {
     const v = verdict.reviewVerdict(verdict.reviewComments(io.gh(["pr", "view", String(arg(0)), "--json", "comments"]).comments, flag("since"))) || "none";
@@ -246,20 +250,30 @@ const commands = {
   "start ui-test": () => startCmd("ui-test"),
   "start followups": async () => {   // after a merge: what the gate (or an emergency merge) starts, one way
     const steps = await start.startFollowUps(flag("after"), { pr: flag("pr"), base: flag("base"), sha: flag("sha"), job: flag("job", ""), tree: flag("tree", ""), story: flag("story", "") },
-      { host, gh: io.gh, cards, removeOrg: (t) => { const o = names.orgFor(t); if (orgs().remove(t)) record("org", { action: "deleted", org: o?.description, story: o?.key }); }, log });
+      { host, gh: io.gh, cards, removeOrg: (t) => { const o = names.orgFor(t); if (orgs().remove(t)) record("org", { action: "deleted", org: o?.description, story: o?.key }); return true; }, log,
+        orgFreed: async () => log((await nextAfter("org-freed")).said),   // UAT may have been waiting for that slot
+        regate: () => shipping.regate(io, host, log) });
     return say(`follow-ups: ${steps.join(" ") || "none"}`);
   },
   "ci plan": () => {   // which CI jobs need a runner, from what changed (a failed diff assumes everything)
     const base = flag("base", "main");
     const out = io.git(["diff", "--name-only", `origin/${base}...HEAD`], { allowFail: true });
-    const p = start.ciPlan({ ref: flag("ref"), base, files: out === null ? null : out.split("\n").filter(Boolean) });
+    const ref = flag("ref");
+    const carried = out === null || !process.env.GH_TOKEN ? null : start.ciCarry({ ref, base, git: io.git, host });   // needs the step's read-only token
+    const p = start.ciPlan({ ref, base, files: out === null ? null : out.split("\n").filter(Boolean), carried });
     output({ ...p, base });
     return say(JSON.stringify(p));
   },
+  "next ": async () => { const r = await nextAfter(flag("after"), flag("pr")); output({ next: r.steps.map((x) => x.start || x.dispatch).join(" ") }); return say(r.said); },
+  "ci results": () => {   // CI's results on a commit, for an agent or Jev (code CI deployed and tested compiles and runs)
+    const text = roles.ciResults(io.ghPages(`repos/${host.repo}/commits/${arg(0)}/check-runs?per_page=100`, "check_runs"));
+    if (flag("out")) writeFileSync(flag("out"), text); return say(text);
+  },
+  "agent budget": () => { const b = roles.budget(arg(0)); output(b); return say(`${arg(0)}: ${b.model}, ${b.turns} turns`); },
   "harness overlay": () => say(`main's ${harness.overlay(arg(0), { git: io.git, from: flag("from", ".pipeline") }).join(", ")} over the checkout, hidden from git`),
   "triage ui": async () => {
-    const read = (f) => (f ? readFileSync(f, "utf8") : "");
-    const t = await triageUiFailure(jev(), { log: read(flag("log")), story: read(flag("story")) });
+    const read = (f) => (f && existsSync(f) ? readFileSync(f, "utf8") : "");
+    const t = await triageUiFailure(jev(), { log: read(flag("log")), story: read(flag("story")), ci: read(flag("ci")) });
     output({ kind: t.kind, confidence: t.confidence, why: t.why });
     return say(`${t.kind} (${t.why})`);
   },
@@ -456,21 +470,11 @@ const commands = {
     return say(`recorded ${flag("role")}: $${(Number(r.total_cost_usd) || 0).toFixed(2)}, ${r.num_turns} turns`);
   },
   "event rollback": () => { record("rollback", { tag: flag("tag"), sha: flag("sha") }); return say(`recorded rollback to ${flag("tag")}`); },
-  "metrics ": () => {
-    // the event log first; workflow health from GitHub's run history (transcripts only for windows before the log)
-    const days = Number(flag("days", "28"));
-    const log_ = events.readLog(io, { days });
-    const covered = log_.some((e) => e.kind === "release");   // the log has seen a release: its DORA is the one to trust
-    const gh = metrics.summarize(metrics.gather(io, { days, transcripts: !log_.some((e) => e.kind === "agent"), prDetails: !covered }));
-    const older = metrics.toMarkdown(gh, { dora: !covered }).replace(/^## Delivery metrics, last \d+ days/, covered ? "## Workflow health (GitHub's run history)" : "## From GitHub's history (PRs, releases, workflow runs)");
-    const md = [events.toMarkdown(events.summarize(log_, { days })), "", older].join("\n");
-    if (flag("out")) writeFileSync(flag("out"), md + "\n");
-    return say(md);
-  },
+  "metrics ": () => { const md = metrics.report(io, { days: Number(flag("days", "28")), events }); if (flag("out")) writeFileSync(flag("out"), md + "\n"); return say(md); },
 };
 
 async function startCmd(kind) {
-  const d = await start.startJob(kind, flag("pr"), { host, gh: io.gh, cards, ai: names.aiFeatures(), mode: flag("mode", "run"), before: flag("before"), after: flag("after"), log });
+  const d = await start.startJob(kind, flag("pr"), { host, gh: io.gh, cards, ai: names.aiFeatures(), mode: flag("mode", "run"), before: flag("before"), after: flag("after"), explicit: has("explicit"), log });
   output({ run: d.run, why: d.why || "" });
   return say(d.run ? `started ${kind} for PR #${flag("pr")}` : `not started: ${d.why}`);
 }

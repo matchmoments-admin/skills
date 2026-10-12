@@ -56,6 +56,15 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   Apex class needs tests; exceptions in `config/test-exceptions.json`). Flow coverage from the Apex tests is reported
   with the test results (`FLOW_COVERAGE_MIN` makes it a minimum). Flow tests never run in a deploy: production's
   validation runs Apex only, so CI and the staging regression are where Flow tests run.
+- UI specs (Playwright): a record page opens on its Activity, Chatter or Related tab, so click the **Details** tab
+  (`page.getByRole("tab", { name: "Details" })`) before asserting a field's value; match a field's value exactly
+  (`toHaveText`), since a label and a help text can both contain it (story #193: 31 agent minutes on both). When a run
+  fails, read its failure screenshot (`test-results/<test>/test-failed-1.png`) before changing the spec.
+- UI specs, editing a field: the pencil (`getByRole("button", { name: "Edit <Field label>" })`) opens the **whole
+  record** in edit mode. A picklist there is a combobox: open it first, then choose
+  (`getByRole("combobox", { name: "<Field label>" }).click()`, then `getByRole("option", { name: "<Value>" }).click()`),
+  then the form's `getByRole("button", { name: "Save", exact: true })`. A validation error shows in the form (and in a
+  "We hit a snag" summary): assert its exact text. Story #200: a spec clicked the option without opening the combobox.
 
 ## Facts agents got wrong (check these before flagging or "fixing" them)
 
@@ -90,7 +99,10 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   at class level (not on methods), and sharing or access tests add `critical=true` (they always run). CI and the
   production validation use `RunRelevantTests` (Salesforce beta, API 66+): the platform picks the tests a change
   affects, and each deployed class still needs 75% coverage on its own. It can run 0 tests and pass; the pipeline
-  then runs its own selection (CI) or every test class (production). Flow tests are never part of it.
+  then runs its own selection (CI) or every test class (production). Flow tests are never part of it. `testFor`
+  names only Apex classes and triggers (`ApexClass:`, `ApexTrigger:`): a test class for a Flow with no class or
+  trigger behind it declares `@IsTest(critical=true)`, so it runs in every deployment (story #193's review asked
+  for `testFor='Flow:...'`, which is not a documented target).
 - **Dashboards and report charts render inside an iframe in Lightning:** `page.getByText(...)` finds nothing on a
   dashboard page. Reach into it: `const dash = page.frameLocator("iframe").first();` then
   `dash.getByText("Closed Won amount by Sales region")`, and pass that locator to `evidence()` (story #166). A new

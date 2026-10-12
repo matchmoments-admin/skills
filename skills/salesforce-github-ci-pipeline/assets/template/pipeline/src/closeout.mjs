@@ -1,7 +1,7 @@
 // Close-out after a production release (see GLOSSARY.md). plan() is pure; gather() reads GitHub and git;
 // apply() acts through the tracker and the org registry.
 import { storyOf, sprintOf, releaseBranch, setting } from "./conventions.mjs";
-import { approverOf, gather as gateGather, standing, TRUSTED_STATUS_CREATORS } from "./gate.mjs";
+import { approverOf, gather as gateGather, standing, readApprovalRecord, TRUSTED_STATUS_CREATORS } from "./gate.mjs";
 
 /**
  * Inputs:
@@ -116,7 +116,7 @@ const hoursBetween = (a, b) => (a && b ? Math.round(((new Date(b) - new Date(a))
 /**
  * What a shipped story's trail says, from GitHub (io: the gh and ghPages seams): who approved and when, the AI review or
  * the person who overruled it (the full reason, from their PR comment), the UI test and its evidence, the UAT sign-off,
- * the production validation, and the timeline. Approval and verdicts come from the gate's own Standing (gate.standing on
+ * the production validation, and the timeline. The approval is the one the gate recorded when it merged; verdicts come from the gate's own Standing (gate.standing on
  * gate.gather of the merged PR), so the record says exactly what the gate accepted: trusted statuses only, an earlier
  * review only if nothing but specs changed since, never a refused approver. sprint: null for a hotfix. Fields it
  * cannot find stay null.
@@ -131,8 +131,11 @@ export function gatherDelivery(key, io, { tag, sprint = null, now = new Date(), 
   if (!pr) throw new Error(`no merged pull request for story ${key}`);
   const facts = gateGather(String(pr.number), io);
   const st = standing(facts);
+  // the approval the gate recorded as it merged (pipeline/approval); a PR merged before that record existed falls back
+  // to Standing under today's rules
+  const recorded = st.record.state === "success" ? readApprovalRecord(st.record.description) : null;
   const a = st.approval.who?.[0] || null;
-  const approved = a ? { by: a.login, at: a.at, how: a.how } : null;
+  const approved = recorded || (a ? { by: a.login, at: a.at, how: a.how } : null);
   const review = ["missing", "stale"].includes(st.review.state) ? null : st.review;
   const overruled = /overruled by @([A-Za-z0-9-]+)/.exec(review?.description || "");
   const reason = overruled ? (api(`repos/${repo}/issues/${pr.number}/comments?per_page=100`) || []).map((c) => String(c.body || ""))
