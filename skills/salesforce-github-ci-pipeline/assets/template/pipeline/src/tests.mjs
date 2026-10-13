@@ -174,17 +174,27 @@ export function runForCheckout(io, { host, alias, base, sha, all = false, min = 
   const relevant = plan.mode === "relevant" && level === "RunRelevantTests" ? runRelevant(io, { alias, changed: src.changed.filter((p) => src.files.includes(p)), sleep, onProgress: progress, log }) : null;
   // Salesforce picks tests by the code that changed, never a changed test class (live, story #166: 7 of 9 changed
   // tests not run): those run as well, and the results are merged
-  const changedTests = relevant ? plan.apex.filter((t) => src.changed.some((p) => p.endsWith(`/${t}.cls`)) && !relevant.chosen.includes(t)) : [];
+  const code = changedCode(src.changed, src.files, src.read);
+  const changedTests = relevant ? [...new Set([...plan.apex.filter((t) => src.changed.some((p) => p.endsWith(`/${t}.cls`)) && !relevant.chosen.includes(t)),
+    ...recheckTests({ ours: plan.apex, code, coverage: relevant.state.coverage, read: (t) => (classPath(t) ? src.read(classPath(t)) : "") })])] : [];
   if (relevant) Object.assign(plan, { apex: [...relevant.chosen, ...changedTests], why: `${plan.why}; Apex tests chosen by Salesforce (RunRelevantTests)${changedTests.length ? `, plus the changed test classes ${changedTests.join(", ")}` : ""}`, chosenBy: "salesforce" });
   let state = runTests(io, { alias, plan, sleep, outDir, onProgress: progress, apexDone: relevant?.state });
   if (changedTests.length) {
     const more = runTests(io, { alias, plan: { mode: "relevant", apex: changedTests, flows: [] }, sleep, outDir, onProgress: (st) => progress(merged(state, st)) });
     state = merged(state, more);
   }
-  const result = verdict(state, { plan, changedCode: changedCode(src.changed, src.files, src.read), min });
+  const result = verdict(state, { plan, changedCode: code, min });
   check.update(checkOutput(state, { plan, result, classPath }), result.ok ? "success" : "failure");
   for (const f of [...state.apex.failures, ...state.flows.failures]) log(`  FAIL ${f.test}: ${f.message}`);
   return { plan, state, result, seconds: Math.round((Date.now() - started) / 1000) };
+}
+
+/** Our selected test classes that name changed code RunRelevantTests returned no coverage for: they run again with
+ *  RunSpecifiedTests, which reports coverage (live, story #241: a new trigger and handler, the chosen test passed, its
+ *  validation's coverage had neither). Pure. */
+export function recheckTests({ ours, code, coverage, read }) {
+  const uncovered = code.filter((c) => coverage[c] === undefined);
+  return uncovered.length ? ours.filter((t) => uncovered.some((c) => new RegExp(`\\b${c}\\b`).test(read(t) || ""))) : [];
 }
 
 /**

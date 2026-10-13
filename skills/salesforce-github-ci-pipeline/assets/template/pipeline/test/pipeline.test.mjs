@@ -2772,7 +2772,15 @@ test("RunRelevantTests never skips a changed test class (live, story #166: Sales
   assert.deepEqual([m.apex.ran, m.apex.passed, m.apex.failed, m.apex.classes], [15, 14, 1, 3]);
   assert.deepEqual(m.coverage, { AccountSelector: 100, CaseTriggerHandler: 90 });
   const src = readFileSync(new URL("../src/tests.mjs", import.meta.url), "utf8");
-  assert.match(src, /changedTests = relevant \? plan\.apex\.filter/);
+  assert.match(src, /changedTests = relevant \? \[\.\.\.new Set\(\[\.\.\.plan\.apex\.filter/);
+});
+
+test("RunRelevantTests without coverage for new code: our test classes that name it run again (live, story #241)", () => {
+  const srcs = { ServiceReviewTest: "@IsTest(testFor='ApexClass:ServiceReviewTriggerHandler,ApexTrigger:ServiceReviewTrigger')", SiteVisitTest: "SiteVisitTriggerHandler", AccountTierTest: "x" };
+  const read = (t) => srcs[t];
+  assert.deepEqual(tests.recheckTests({ ours: Object.keys(srcs), code: ["ServiceReviewTriggerHandler", "ServiceReviewTrigger"], coverage: { SiteVisitTriggerHandler: 90 }, read }), ["ServiceReviewTest"]);
+  assert.deepEqual(tests.recheckTests({ ours: Object.keys(srcs), code: ["ServiceReviewTriggerHandler"], coverage: { ServiceReviewTriggerHandler: 95 }, read }), [], "covered: nothing runs twice");
+  assert.deepEqual(tests.recheckTests({ ours: ["SiteVisitTest"], code: ["SiteVisitTrigger"], coverage: {}, read }), [], "a name is matched whole, not as a prefix");
 });
 
 test("UI tests log in as a persona after the Dev Hub is logged out (story #166: `sf org display` failed there)", () => {
