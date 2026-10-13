@@ -129,7 +129,18 @@ export function packageList(file = join(PIPELINE_ROOT, "config/packages.json")) 
 const DEVHUB = "devhub";
 /** Written to the scratch org admin user's Title when ready() has finished every step, with the commit it holds. */
 export const READY = "pipeline: ready";
-export const readyMarker = (commit, baseline = null, seed = null) => (commit ? `${READY} ${String(commit).slice(0, 12)}${baseline ? ` b${baseline}` : ""}${seed ? ` s${seed}` : ""}` : READY);
+/**
+ * Did anything deployable change from `held` to `head`? A check for ready() (see sameSource there), from a compare
+ * (GitHub's compare API: it works on a shallow checkout). Same source: head descends from held, and nothing under
+ * force-app/ or config/ changed. Unknown (an error, a capped list of 300 files) counts as changed. Pure.
+ */
+export const sameSourceVia = (compare) => (held, head) => {
+  const c = compare(held, head);
+  const files = c?.files || [];
+  return ["ahead", "identical"].includes(c?.status) && files.length < 300 && !files.some((f) => [f.filename, f.previous_filename].some((p) => /^(force-app|config)\//.test(p || "")));
+};
+
+export const readyMarker =(commit, baseline = null, seed = null) => (commit ? `${READY} ${String(commit).slice(0, 12)}${baseline ? ` b${baseline}` : ""}${seed ? ` s${seed}` : ""}` : READY);
 
 /**
  * The roles an Org Shape scratch org arrives with cannot be given to a user ("invalid cross reference id"; a role made
@@ -238,7 +249,9 @@ export function permissionSets(dir = "force-app") {
 export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key`, packages = packageList(), env = process.env,
   baselineDir = join(PIPELINE_ROOT, BASELINE_DIR), seedDir = join(PIPELINE_ROOT, "data/seed"), record = () => {},
   // a snapshot Salesforce refused once is never tried again (each attempt spends a daily scratch org): marked by the caller
-  snapshotRefused = () => false, refuseSnapshot = () => {} }) {
+  snapshotRefused = () => false, refuseSnapshot = () => {},
+  // (held, head) => true when nothing deployable changed between them (sameSourceVia): ready() then only re-marks the org
+  sameSource = () => false }) {
   // the production baseline (BASELINE: off | soft (default) | strict), from main's trusted checkout, never the branch's
   const baselineMode = String(env.BASELINE || "soft").toLowerCase();
   const baseline = () => (baselineMode !== "off" && existsSync(baselineDir) ? idOf(baselineDir) : null);
@@ -282,6 +295,9 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       const org = existing ? self.attach(existing) : resolve(target, opts);
       const want = readyMarker(commit, baseline(), seedId());
       if (existing && self.isReady(org.alias, want)) { log(`${org.alias} already holds ${commit ? String(commit).slice(0, 7) : "its source"}`); return { ...org, created: false, fresh: true }; }
+      // the head moved on with nothing deployable (the UI test's own spec commit, a doc): the org already holds this
+      // source, so it is re-marked, not redeployed (a full deploy was about 4 minutes of every AI UI test, #241)
+      if (existing && commit && self.advance(org.alias, commit, (held) => sameSource(held, commit))) return { ...org, created: false, fresh: true };
       if (existing) log(`${org.alias} exists: bringing it to ${commit ? String(commit).slice(0, 7) : "its source"}`);
       else {
         const no = refusal(org);

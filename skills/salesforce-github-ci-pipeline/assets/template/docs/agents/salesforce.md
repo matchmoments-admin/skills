@@ -61,6 +61,11 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   Apex class needs tests; exceptions in `config/test-exceptions.json`). Flow coverage from the Apex tests is reported
   with the test results (`FLOW_COVERAGE_MIN` makes it a minimum). Flow tests never run in a deploy: production's
   validation runs Apex only, so CI and the staging regression are where Flow tests run.
+- Dates a Flow computes (`{!$Flow.CurrentDate} + 2`, `TODAY()` in a formula) and `Date.today()` in the Apex test can
+  read "today" in different time zones (the org's default, the running user's), so for part of every day they differ
+  by one. Assert such a date within one day of `Date.today()` plus the offset, and no wider. An exact assertion passes
+  in CI and fails production validation hours later (stories #218 and #241: the CI user in Sydney, the org in Los
+  Angeles).
 - UI specs (Playwright): a record page opens on its Activity, Chatter or Related tab, so click the **Details** tab
   (`page.getByRole("tab", { name: "Details" })`) before asserting a field's value; match a field's value exactly
   (`toHaveText`), since a label and a help text can both contain it (story #193: 31 agent minutes on both). When a run

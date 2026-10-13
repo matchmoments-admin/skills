@@ -8,9 +8,11 @@ import { createHash } from "node:crypto";
 export const LABEL = "pipeline-improvement";
 export const MARK = "<!-- improve:";
 
-// Steps whose failure is the story's own. `storyIf` narrows it: only when the log says so (a deploy or a validation can
-// also fail for the pipeline's reasons: a signup error, an expired login).
+// Steps whose failure is the story's own. `storyIf` narrows it: only when the log says so (a deploy can also fail for
+// the pipeline's reasons: a signup error, an expired login).
 // (matched against the step's output only: its script, printed above it, names force-app on every run)
+// Only the story's own gates are here. Staging, UAT and production validation test code that already passed them, so a
+// failure there escaped the story's checks (a too-tight timeout, a time-zone-dependent test: E43, E44): always a ticket.
 const STORY_COMPONENT = /Component Failures|component failures|tests? failed|Test failure|coverage|FIELD_CUSTOM_VALIDATION|No such column|Invalid type|Variable does not exist|DUPLICATE_|REQUIRED_FIELD_MISSING/i;
 const STORY_STEPS = [
   { step: /^Story PRs may not change pipeline code/ },
@@ -19,10 +21,7 @@ const STORY_STEPS = [
   { step: /^Code analyzer/ },
   { step: /^Deploy what changed against the base/, storyIf: STORY_COMPONENT },
   { step: /^Tests for this change/, storyIf: STORY_COMPONENT },
-  { step: /^Full regression|^UI regression/ },
   { step: /^Run the committed spec|^Does the spec check a criterion|^Verdict to a commit status/ },
-  { step: /^Validate against production|^Production validation/, storyIf: STORY_COMPONENT },
-  { step: /^Deploy the release candidate|^Deploy the release branch to staging/, storyIf: STORY_COMPONENT },
   { step: /^The gate's verdict on this commit|^Decide/ },
 ];
 /** Never the story's, whatever the step: the pipeline broke (a crash's stack trace too) or Salesforce/GitHub had a moment. */

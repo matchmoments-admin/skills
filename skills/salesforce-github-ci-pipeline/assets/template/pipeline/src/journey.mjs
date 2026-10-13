@@ -47,6 +47,8 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
     if (st.route !== "release" || !uat) return out;
     const staging = st.checks?.[CHECKS.staging];
     if (staging?.state === "passed" && owed(st.uat)) out.push({ dispatch: "uat-deploy.yml", inputs: { pr: String(pr) }, why: "staging passed on this commit and UAT does not have it" });
+    // the release PR opened before staging passed: build UAT's org now, alongside staging, so UAT after it is quick
+    else if (after === "release-pr" && owed(st.uat)) out.push({ dispatch: "uat-deploy.yml", inputs: { pr: String(pr), warm: "true" }, why: "UAT's org is built while staging runs" });
     return out;
   }
   throw new Error(`journey: unknown stage "${after}" (review, ci, staging, release-pr or org-freed)`);

@@ -10,7 +10,7 @@ import * as roles from "../src/roles.mjs";
 import * as journey from "../src/journey.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
-import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed } from "../src/org.mjs";
+import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed, sameSourceVia } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
 import * as plans from "../src/plan.mjs";
@@ -2111,6 +2111,21 @@ test("Org provisioning: ready() holds the commit once; creates from the snapshot
   o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).ready("issue-12", { commit: "abc123456789ffff" });
   assert.ok(calls.some((c) => c.startsWith("project deploy start")));
   assert.ok(calls.some((c) => /Title='pipeline: ready abc123456789'/.test(c)));
+  // marked for an older commit, and nothing deployable changed since (the UI test's spec commit): re-marked, no deploy
+  ({ sf, calls } = provisionSf({ live: [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }], title: "pipeline: ready 000000000000" }));
+  const asked = [];
+  o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" }, sameSource: (held, head) => (asked.push([held, head]), true) }).ready("issue-12", { commit: "abc123456789ffff" });
+  assert.equal(o.fresh, true);
+  assert.deepEqual(asked, [["000000000000", "abc123456789ffff"]]);
+  assert.ok(!calls.some((c) => c.startsWith("project deploy")), "nothing redeployed");
+  assert.ok(calls.some((c) => /Title='pipeline: ready abc123456789'/.test(c)));
+  const same = (status, files) => sameSourceVia(() => ({ status, files: files.map((filename) => ({ filename })) }))("a", "b");
+  assert.equal(same("ahead", ["e2e/story-241.spec.ts", "docs/x.md"]), true);
+  assert.equal(same("ahead", ["force-app/main/default/classes/X.cls"]), false);
+  assert.equal(same("ahead", ["config/packages.json"]), false);
+  assert.equal(same("diverged", ["e2e/x.spec.ts"]), false, "a rewritten branch is not the same source");
+  assert.equal(sameSourceVia(() => ({ status: 404 }))("a", "b"), false, "unknown counts as changed");
+  assert.equal(same("ahead", Array.from({ length: 300 }, (_, i) => `e2e/${i}.spec.ts`)), false, "a capped file list counts as changed");
   // none live, a snapshot set: created from it
   ({ sf, calls } = provisionSf());
   orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env: { SCRATCH_SNAPSHOT: "LCB26100912", BASELINE: "off", SEED: "off" } }).ready("story:12", { commit: "abc" });
@@ -2931,7 +2946,8 @@ test("the journey decides what starts next from Standing: after a review, after 
   }
   assert.deepEqual(journey.nextSteps("staging", rel("passed", "stale"), { uat: true, pr: 1 }).length, 1, "a newer head needs UAT again");
   assert.deepEqual(journey.nextSteps("staging", rel("passed", "pending"), { uat: true, pr: 1 }), [], "UAT already has this commit");
-  assert.deepEqual(journey.nextSteps("release-pr", rel("running", "missing"), { uat: true, pr: 1 }), [], "staging's end starts it");
+  assert.deepEqual(journey.nextSteps("release-pr", rel("running", "missing"), { uat: true, pr: 1 }).map((x) => x.inputs), [{ pr: "1", warm: "true" }], "staging's end starts UAT; its org is built meanwhile");
+  assert.deepEqual(journey.nextSteps("staging", rel("running", "missing"), { uat: true, pr: 1 }), [], "only the release PR opening warms UAT");
   assert.deepEqual(journey.nextSteps("staging", rel("passed", "missing"), { uat: false, pr: 1 }), []);
   assert.throws(() => journey.nextSteps("lunch", st_()), /unknown stage/);
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
@@ -3298,6 +3314,10 @@ test("#220: a warning in the log does not make a story's failure the pipeline's;
     "  FAIL Site_Visit_Negative_Follow_Up.Site_Visit_Negative_Follow_Up_Negative_Creates_Task: \n##[error]tests failed: 1 Flow test(s) failed";
   assert.equal(improve.classify({ step: "Tests for this change (Apex and Flow), live on the PR as \"Salesforce tests\"", logTail: tail }), "story");
   assert.equal(improve.classify({ step: "A step nobody listed", logTail: "##[error]gh: Resource not accessible by integration (HTTP 403)" }), "pipeline", "as the error itself it still is");
+  // after the story's gates, a failure is an escape: staging, UAT and production validation always ticket (E43, E44)
+  for (const step of ["UI regression (every spec in e2e/)", "Full regression (every Apex and Flow test)", "Validate against production (check-only, all tests)", "Deploy the release branch to staging and prepare it"]) {
+    assert.equal(improve.classify({ step, logTail: "  1 failed\n Test failure: SiteVisitTest" }), "pipeline", step);
+  }
   // a job with its own permissions replaces the workflow's: one that refreshes a card must keep statuses (the card reads verdicts)
   for (const n of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((f) => f.endsWith(".yml"))) {
     const y = readFileSync(new URL(`../../.github/workflows/${n}`, import.meta.url), "utf8");

@@ -5,6 +5,8 @@ name: uat-deploy
 # scratch org standing in. Marks pipeline/uat pending on that commit; a person signs off with /uat-pass (or
 # /uat-fail <why>) on the release PR, and the gate ships only on a sign-off for the current code.
 # Started by release-cut, and again by each staging regression while the release PR is open (UAT stays current).
+# warm=true (the journey, when the release PR opens): builds the scratch org standing in for UAT while staging runs, so
+# UAT after staging finds it ready for that commit (an org from nothing took 14 minutes); no sign-off is asked.
 on:
   workflow_dispatch:
     inputs:
@@ -13,6 +15,10 @@ on:
         required: true
       again:
         description: "true = deploy again even if UAT already has this commit (the card's 'Deploy to UAT again')"
+        required: false
+        default: "false"
+      warm:
+        description: "true = only build the UAT org for this commit (while staging runs); no sign-off asked"
         required: false
         default: "false"
 permissions:
@@ -71,6 +77,7 @@ jobs:
           UAT_LOGIN: ${{ vars.SF_UAT_LOGIN_URL }}
           CLIENT_ID: ${{ secrets.SF_CI_CONSUMER_KEY }}
           SPRINT: ${{ steps.pr.outputs.sprint }}
+          WARM: ${{ inputs.warm }}
         run: |
           if [ -n "$UAT_USER" ]; then
             sf org login jwt --client-id "$CLIENT_ID" --jwt-key-file "$SF_CI_KEY_FILE" --username "$UAT_USER" \
@@ -79,7 +86,9 @@ jobs:
             echo "url=$(sf org display -o uat --json | jq -r .result.instanceUrl)" >> "$GITHUB_OUTPUT"
           else
             # Org provisioning, from the release candidate itself: create or attach, deploy, prepare, seed, marked ready
-            (cd candidate && node "$GITHUB_WORKSPACE/pipeline/bin/pipe.mjs" org ready "uat:$SPRINT" >/dev/null)
+            # (a warm-up that cannot get a slot now is not a failure: UAT builds it after staging, as before)
+            (cd candidate && node "$GITHUB_WORKSPACE/pipeline/bin/pipe.mjs" org ready "uat:$SPRINT" >/dev/null) || {
+              [ "$WARM" = "true" ] && { echo "::notice::UAT not warmed now; it is built when staging passes"; exit 0; }; exit 1; }
             echo "kind=scratch org standing in for a UAT sandbox" >> "$GITHUB_OUTPUT"
             echo "url=$(sf org display -o uat --json | jq -r .result.instanceUrl)" >> "$GITHUB_OUTPUT"   # its login page (no session)
           fi
@@ -88,7 +97,7 @@ jobs:
         working-directory: candidate
         run: sf project deploy start -o uat -d force-app --ignore-conflicts --wait 40
       - name: Ask for the sign-off
-        if: steps.seen.outputs.skip != 'true'
+        if: steps.seen.outputs.skip != 'true' && inputs.warm != 'true'
         env:
           SHA: ${{ steps.pr.outputs.sha }}
           KIND: ${{ steps.org.outputs.kind }}

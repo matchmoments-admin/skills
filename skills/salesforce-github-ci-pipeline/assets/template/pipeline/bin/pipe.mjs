@@ -51,7 +51,7 @@ import * as plans from "../src/plan.mjs";
 import { storyCards } from "../src/card.mjs";
 import * as tests from "../src/tests.mjs";
 import * as production from "../src/production.mjs";
-import { orgRegistry, personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered, packageList } from "../src/org.mjs";
+import { orgRegistry, personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered, packageList, sameSourceVia } from "../src/org.mjs";
 import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
@@ -102,7 +102,7 @@ const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;
 const refuseSnapshot = (n) => { const sha = host.api("GET", `repos/${host.repo}/git/ref/heads/main`)?.object?.sha; if (sha) host.api("POST", `repos/${host.repo}/git/refs`, { ref: `refs/tags/snapshot-refused-${n}`, sha }); };
 const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, log });
 const freed = async () => { try { log((await nextAfter("org-freed")).said); } catch (e) { log(`::warning::could not start what waited for a slot: ${e.message}`); } };   // UAT first, else the story waiting longest
-const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT"), BASELINE: names.setting("BASELINE"), VOLUME_RECORDS: names.setting("VOLUME_RECORDS") || undefined } });
+const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, sameSource: sameSourceVia((a, b) => host.api("GET", `repos/${host.repo}/compare/${a}...${b}`)), env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT"), BASELINE: names.setting("BASELINE"), VOLUME_RECORDS: names.setting("VOLUME_RECORDS") || undefined } });
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 
