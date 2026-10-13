@@ -2756,7 +2756,7 @@ test("every workflow file parses as YAML (an unquoted ': ' in a step name broke 
 
 // ---------------------------------------------------------------- 13 Oct: the journey, Standing everywhere, org lifecycle,
 // the gate's record, agent roles (architecture review after story #193; E12-E19)
-const st_ = (over = {}) => ({ route: "feature", review: { state: "missing" }, ui: { state: "missing" }, uat: { state: "missing" }, checks: {}, ...over });
+const st_ = (over = {}) => ({ route: "feature", review: { state: "missing" }, ui: { state: "missing" }, uat: { state: "missing" }, checks: { [names.CHECKS.apex]: { state: "passed" } }, ...over });
 
 test("Standing's carry rules are one table: specs-only, exact head, and no-force-app for CI's Salesforce tests", () => {
   assert.equal(gate.carries("specs", "a", "h", ["e2e/s.spec.ts"]), true);
@@ -3211,4 +3211,18 @@ test("#227: CI's rule checks run main's pipeline code, so a rule fixed on main r
   for (const cmd of ["access check", "tests flow-gaps"]) assert.match(ci, new RegExp(`node \\.pipeline/pipeline/bin/pipe\\.mjs ${cmd}`), cmd);
   const statik = ci.split(/\n  apex:\n/)[0];
   assert.ok(statik.indexOf("Trusted pipeline code (main)") < statik.indexOf(".pipeline/pipeline/bin/pipe.mjs access check"), "main's code is checked out first");
+});
+
+test("#230: Claude's UI test starts only once CI's org job passed on the head; CI's finish starts it when the review passed first", () => {
+  const ai = { autoChain: true, fix: true, uiTest: true };
+  const running = { checks: { [names.CHECKS.apex]: { state: "running" } } };
+  assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "success" }, ...running }), { ai }), [], "CI still holds the story org: no runner waits for it");
+  assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "failure" }, ...running }), { ai }).map((x) => x.start), ["fix"], "a fix does not wait");
+  assert.deepEqual(journey.nextSteps("ci", st_({ review: { state: "success" } }), { ai }).map((x) => [x.start, x.mode]), [["ui-test", "ai"]], "CI finished after the review");
+  assert.deepEqual(journey.nextSteps("ci", st_({ review: { state: "running" } }), { ai }), [], "the review's own finish starts it");
+  assert.deepEqual(journey.nextSteps("ci", st_({ review: { state: "success" }, ui: { state: "pending" } }), { ai }), [], "one already running stands");
+  assert.deepEqual(journey.nextSteps("ci", st_({ review: { state: "success" }, checks: { [names.CHECKS.apex]: { state: "failed" } } }), { ai }), []);
+  assert.deepEqual(journey.nextSteps("ci", st_({ route: "release", review: { state: "success" } }), { ai }), []);
+  const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(ci.split(/\n  nudge:\n/)[1], /pipe\.mjs next --after ci --pr/);
 });

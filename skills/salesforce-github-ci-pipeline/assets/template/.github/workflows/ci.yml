@@ -256,3 +256,7 @@ jobs:
           PRN="${{ github.event.pull_request.number }}"
           [ -n "$PRN" ] || PRN=$(gh pr list --head "$REF" --state open --json number --jq '.[0].number // empty')
           [ -z "$PRN" ] || node pipeline/bin/pipe.mjs gate nudge "$PRN"
+      # Auto-chain: a review that passed before CI finished left Claude's UI test to CI (journey.mjs, #230)
+      - name: What comes next
+        if: vars.AI_AUTO_CHAIN == 'true' && github.event_name == 'pull_request'
+        run: node pipeline/bin/pipe.mjs next --after ci --pr "${{ github.event.pull_request.number }}"

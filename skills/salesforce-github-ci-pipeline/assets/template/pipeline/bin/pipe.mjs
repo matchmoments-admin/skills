@@ -5,7 +5,7 @@
 //   labels    sync                                       create or update every label the pipeline uses
 //   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
-//   next      --after review|staging|release-pr|org-freed [--pr N]   what the journey owes next, started (journey.mjs)
+//   next      --after review|ci|staging|release-pr|org-freed [--pr N]   what the journey owes next, started (journey.mjs)
 //   lane      acquire|release <org target> [--minutes M] [--no-card]  one job at a time per org, a queue that drops nobody
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base

@@ -8,15 +8,17 @@ import { CHECKS, uiFacing } from "./conventions.mjs";
 
 /** The stages, in order. Story PRs: into the sprint's release branch; the release PR: into main, then production. */
 export const STAGES = {
-  story: ["start", "build", "ci", "review", "fix", "ui-test", "sign-off", "merge", "staging"],
+  story: ["start", "build", "ci", "review", "fix", "ui-test", "sign-off", "merge", "staging"],   // ci and review in parallel
   release: ["release-pr", "ci", "staging", "uat", "approval", "validation", "merge", "production", "close-out"],
 };
 
 // A result that still needs its stage: none on the head, or one an earlier commit had that no longer carries.
 const owed = (v) => !v || ["missing", "stale"].includes(v.state);
+// CI's org job on the head: passed, or skipped because nothing needed an org (a carried result counts as passed)
+const ciPassed = (st) => st.checks?.[CHECKS.apex]?.state === "passed";
 
 /**
- * What starts after `after` finished (review | staging | release-pr | org-freed), given the head's Standing (st, from
+ * What starts after `after` finished (review | ci | staging | release-pr | org-freed), given the head's Standing (st, from
  * gate.standing) and settings: { ai: { fix, uiTest, autoChain }, uat, uiNeeded }. Returns
  * [{ start: "fix" | "ui-test", mode? } | { dispatch: workflow, inputs }] with a why on each; [] when nothing is owed.
  */
@@ -25,8 +27,15 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
   if (after === "review") {
     if (!ai.autoChain || !["feature", "hotfix"].includes(st.route)) return out;
     if (st.review.state === "failure" && ai.fix) out.push({ start: "fix", why: "the AI review asks for changes" });
-    // the UI test only when its verdict on this exact commit is owed (one that passed or is running still stands)
-    if (st.review.state === "success" && ai.uiTest && uiNeeded && owed(st.ui)) out.push({ start: "ui-test", mode: "ai", why: "the review passed and the change is UI-facing" });
+    // the UI test only when its verdict on this exact commit is owed (one that passed or is running still stands), and
+    // only once CI's org job has passed on it: both need the story org, and a UI test started while CI held the org
+    // waited on a billed runner, then superseded CI with its spec push (#230). CI's own finish starts it otherwise.
+    if (st.review.state === "success" && ai.uiTest && uiNeeded && owed(st.ui) && ciPassed(st)) out.push({ start: "ui-test", mode: "ai", why: "the review passed and the change is UI-facing" });
+    return out;
+  }
+  if (after === "ci") {
+    if (!ai.autoChain || !["feature", "hotfix"].includes(st.route)) return out;
+    if (st.review.state === "success" && ai.uiTest && uiNeeded && owed(st.ui) && ciPassed(st)) out.push({ start: "ui-test", mode: "ai", why: "CI passed after the review did, and the change is UI-facing" });
     return out;
   }
   if (["staging", "release-pr", "org-freed"].includes(after)) {
@@ -37,7 +46,7 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
     if (staging?.state === "passed" && owed(st.uat)) out.push({ dispatch: "uat-deploy.yml", inputs: { pr: String(pr) }, why: "staging passed on this commit and UAT does not have it" });
     return out;
   }
-  throw new Error(`journey: unknown stage "${after}" (review, staging, release-pr or org-freed)`);
+  throw new Error(`journey: unknown stage "${after}" (review, ci, staging, release-pr or org-freed)`);
 }
 
 /**
