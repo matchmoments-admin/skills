@@ -22,7 +22,7 @@ import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
 import * as shipping from "../src/shipping.mjs";
 import * as closeout from "../src/closeout.mjs";
-import { lane, jobId, wakeNext } from "../src/lane.mjs";
+import { lane, jobId, wakeAll, waiterJob } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
 import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
@@ -988,7 +988,7 @@ function fakeRefs({ runs = {} } = {}) {
     if (method === "POST" && path.endsWith("/git/commits") && failClaims > 0) { failClaims--; return { status: 422, message: "tree not found" }; }
     if (method === "POST" && path.endsWith("/git/commits")) { const sha = `c${++n}`; commits[sha] = { message: body.message, parents: body.parents, tree: { sha: body.tree } }; return { sha }; }
     if (method === "GET" && path.includes("/git/commits/")) return commits[path.split("/").pop()];
-    if (method === "GET" && path.includes("/actions/runs/")) return { status: runs[path.split("/").pop()] || "in_progress" };
+    if (method === "GET" && path.includes("/actions/runs/")) return { status: runs[/actions\/runs\/(\d+)/.exec(path)[1]] || "in_progress" };
     const name = path.split("/git/")[1];
     if (method === "POST" && path.endsWith("/git/refs")) { if (refs[body.ref]) return { status: 422 }; refs[body.ref] = body.sha; return { ref: body.ref }; }
     if (method === "GET") return refs[name] ? { object: { sha: refs[name] } } : { status: 404 };
@@ -1029,6 +1029,9 @@ test("lane park (#236): busy, the job parks and gives its runner back; the same 
   let t = 1000;
   const waits = [];
   const mk = (run, job) => lane({ api: f.api, repo: "o/r", holder: { run, job, sha: "base" }, now: () => t++, sleep: () => {}, log: () => {}, onWait: (h) => waits.push(h.run) });
+  const realApi = f.api;
+  f.api = (m, path, body) => (/actions\/jobs\/22$/.test(path) ? { run_id: 2, name: "fix", status: "completed", run_attempt: 1 }
+    : /actions\/runs\/2$/.test(path) && m === "GET" ? { path: ".github/workflows/ai-fix.yml", event: "workflow_dispatch", run_attempt: 1, status: "completed" } : realApi(m, path, body));
   const ui = mk("1", "write#1"), fix = mk("2", "fix#1"), fix2 = mk("3", "fix#1");
   assert.deepEqual(ui.park("org-issue-9", { kind: "write", jobId: "11" }), { held: true }, "free: held at once");
   const p = fix.park("org-issue-9", { kind: "fix", jobId: "22" });
@@ -1038,11 +1041,9 @@ test("lane park (#236): busy, the job parks and gives its runner back; the same 
   assert.deepEqual(fix.waiters("org-issue-9").map((w) => [w.kind, w.run, w.jobId]), [["fix", "2", "22"]]);
   assert.equal(fix2.park("org-issue-9", { kind: "fix", jobId: "33" }).dropped, true, "a second fix while one waits");
   assert.equal(fix.waiters("org-issue-9").length, 1);
-  assert.equal(fix.wake("org-issue-9"), null, "the holder is still running: nobody wakes");
+  assert.equal(fix.free("org-issue-9"), false, "the holder is still running");
   ui.release("org-issue-9");
-  const w = fix.wake("org-issue-9");
-  assert.deepEqual([w.kind, w.jobId], ["fix", "22"]);
-  assert.equal(fix.waiters("org-issue-9").length, 0, "taken off the queue");
+  assert.equal(fix.free("org-issue-9"), true);
   // the holder lets go between the first look and the waiter ref: the second look takes the lane, no stray waiter
   const g = fakeRefs();
   const a = lane({ api: g.api, repo: "o/r", holder: { run: "5", job: "ci#1", sha: "base" }, now: () => 0, sleep: () => {}, log: () => {} });
@@ -1053,41 +1054,61 @@ test("lane park (#236): busy, the job parks and gives its runner back; the same 
   assert.equal(b.waiters("org-x").length, 0);
 });
 
-test("lane wake (#236): the parked job is re-run once its run has ended; the job id is this runner's in-progress job", () => {
+test("lane wake (#236): real parked jobs of free lanes are re-run once their run has ended; a forged waiter never is", () => {
   const f = fakeRefs({ runs: { 1: "completed" } });
-  const status = { 2: ["in_progress", "completed"] }, calls = [];
+  const runs = { 2: { path: ".github/workflows/ai-fix.yml", event: "workflow_dispatch", run_attempt: 1, st: ["in_progress", "completed"] },
+    3: { path: ".github/workflows/ui-test.yml", event: "workflow_dispatch", run_attempt: 1, st: ["completed"] },
+    4: { path: ".github/workflows/release.yml", event: "workflow_dispatch", run_attempt: 1, st: ["completed"] } };
+  const jobs = { 22: { run_id: 2, name: "fix", status: "completed", run_attempt: 1 }, 33: { run_id: 3, name: "write", status: "completed", run_attempt: 1 },
+    44: { run_id: 4, name: "fix", status: "completed", run_attempt: 1 }, 55: { run_id: 5, name: "run", status: "completed", run_attempt: 1 } };
+  const calls = [];
   const api = (m, path, body) => {
-    if (m === "GET" && /actions\/runs\/2$/.test(path)) return { status: status[2].shift() || "completed" };
-    if (m === "POST" && path.includes("/actions/jobs/")) { calls.push(path); return {}; }
+    let x;
+    if (m === "GET" && (x = /actions\/runs\/(\d+)$/.exec(path)) && runs[x[1]]) { const r = runs[x[1]]; return { ...r, status: r.st.length > 1 ? r.st.shift() : r.st[0] }; }
+    if (m === "GET" && (x = /actions\/jobs\/(\d+)$/.exec(path))) return jobs[x[1]] || { status: 404 };
+    if (m === "POST" && path.includes("/actions/jobs/")) { calls.push(path.split("/")[5]); return {}; }
     return f.api(m, path, body);
   };
-  const l = lane({ api, repo: "o/r", holder: { run: "2", job: "fix#1", sha: "base" }, now: () => 5, sleep: () => {}, log: () => {} });
-  f.api("POST", "repos/o/r/git/refs", { ref: "refs/locks/org-x", sha: f.api("POST", "repos/o/r/git/commits", { message: JSON.stringify({ run: "1", job: "ci#1" }), tree: "T", parents: [] }).sha });
-  f.api("POST", "repos/o/r/git/refs", { ref: "refs/lane-waits/org-x/5-fix-2-22", sha: "base" });
-  f.api("POST", "repos/o/r/git/refs", { ref: "refs/lane-waits/org-x/9-write-3-33", sha: "base" });
+  const claim = (run) => f.api("POST", "repos/o/r/git/commits", { message: JSON.stringify({ run, job: "ci#1" }), tree: "T", parents: [] }).sha;
+  f.api("POST", "repos/o/r/git/refs", { ref: "refs/locks/org-x", sha: claim("1") });   // its run has ended: free to take over
+  f.api("POST", "repos/o/r/git/refs", { ref: "refs/locks/org-busy", sha: claim("9") });   // still running
+  for (const r of ["org-x/5-fix-2-22", "org-x/6-write-3-33", "org-x/7-fix-4-44", "org-x/8-run-5-55", "org-busy/1-run-3-33"]) f.api("POST", "repos/o/r/git/refs", { ref: `refs/lane-waits/${r}`, sha: "base" });
+  const l = lane({ api, repo: "o/r", holder: {}, now: () => 5, sleep: () => {}, log: () => {} });
   let t = 0, slept = 0;
-  const w = wakeNext({ api, repo: "o/r", l, name: "org-x", sleep: () => { slept++; t += 15e3; }, now: () => t });
-  assert.equal(w.jobId, "22", "oldest first; the holder's run had finished");
+  const woken = wakeAll({ api, repo: "o/r", l, sleep: () => { slept++; t += 15e3; }, now: () => t });
+  assert.deepEqual(woken.map((w) => w.jobId), ["22", "33"], "every real waiter of the free lane, oldest first");
+  assert.deepEqual(calls, ["22", "33"], "a release job (forged ref) and an unknown job are never re-run");
   assert.equal(slept, 1, "waited for the parked run to end");
-  assert.deepEqual(calls, ["repos/o/r/actions/jobs/22/rerun"]);
-  assert.equal(l.waiters("org-x").length, 1, "the next waits for the next release");
-  const jobs = { jobs: [{ id: 1, status: "completed", runner_name: "r1" }, { id: 2, status: "in_progress", runner_name: "r2" }, { id: 3, status: "in_progress", runner_name: "r3" }] };
-  assert.equal(jobId({ api: () => jobs, repo: "o/r", env: { GITHUB_RUN_ID: "1", RUNNER_NAME: "r2" } }), "2");
+  assert.deepEqual(Object.keys(f.refs).filter((r) => r.includes("lane-waits")), ["refs/lane-waits/org-busy/1-run-3-33"], "forged refs removed; the busy lane's waiter stays");
+  assert.equal(waiterJob(api, "o/r", { kind: "fix", run: "2", jobId: "33" }), "bad", "a job of another run");
+  jobs[22].run_attempt = 1; runs[2].run_attempt = 2;
+  assert.equal(waiterJob(api, "o/r", { kind: "fix", run: "2", jobId: "22" }), "bad", "its run was re-run since");
+  const list = { jobs: [{ id: 1, status: "completed", runner_name: "r1" }, { id: 2, status: "in_progress", runner_name: "r2" }, { id: 3, status: "in_progress", runner_name: "r3" }] };
+  assert.equal(jobId({ api: () => list, repo: "o/r", env: { GITHUB_RUN_ID: "1", RUNNER_NAME: "r2" } }), "2");
   assert.equal(jobId({ api: () => ({ status: 403 }), repo: "o/r", env: { RUNNER_NAME: "r2" } }), null, "unknown: the job waits the old way");
+});
+
+test("lane: a holder is stale by its own attempt, so a re-run of its run does not revive a dead claim", () => {
+  const f = fakeRefs();
+  const api = (m, path, body) => (m === "GET" && /actions\/runs\/7\/attempts\/1$/.test(path) ? { status: "completed" } : m === "GET" && /actions\/runs\/7$/.test(path) ? { status: "in_progress" } : f.api(m, path, body));
+  lane({ api, repo: "o/r", holder: { run: "7", job: "write#1", sha: "base" }, now: () => 0, sleep: () => {}, log: () => {} }).acquire("org-y");
+  const run2 = lane({ api, repo: "o/r", holder: { run: "7", job: "run#2", sha: "base" }, now: () => 0, sleep: () => {}, log: () => {} });
+  assert.equal(run2.free("org-y"), true);
+  assert.deepEqual(run2.park("org-y", { kind: "run", jobId: "70" }), { held: true }, "taken over from the dead attempt");
 });
 
 test("parking jobs skip their work when parked, and lane-wake re-runs them with the least permissions", () => {
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
   for (const [n, kinds] of [["ai-fix", ["fix"]], ["ui-test", ["write", "run"]]]) {
     const y = wf(n);
-    for (const k of kinds) assert.match(y, new RegExp(`--park ${k} `), `${n} parks its ${k} job`);
+    for (const k of kinds) assert.match(y, new RegExp(`--park ${k}\\b`), `${n} parks its ${k} job`);
     assert.match(y, /uses: \.\/\.pipeline\/\.github\/actions\/claude-agent\n\s+if: steps\.lane\.outputs\.parked != 'true'/, `${n}: no agent while parked`);
   }
   assert.match(wf("ui-test"), /needs\.write\.outputs\.parked != 'true'/, "the spec run waits for the writer's re-run");
   const w = wf("lane-wake");
   assert.match(w, /types: \[lane-freed\]/);
   assert.match(w, /permissions:\n  actions: write .*\n  contents: write .*\n(?!  \w)/, "only actions and contents");
-  assert.match(w, /lane wake "\$TARGET"/);
+  assert.match(w, /pipe.mjs lane wake\n/, "no target from the event: every lane is scanned");
   for (const n of ["ci", "staging-deploy"]) assert.doesNotMatch(wf(n), /--park/, `${n} is a required check: it waits, never parks`);
 });
 

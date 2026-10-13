@@ -62,7 +62,7 @@ jobs:
       id-token: write
       checks: read
       statuses: read
-    timeout-minutes: 30
+    timeout-minutes: 75   # 45 of them may be waiting for the story org's lane (when it cannot park)
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -102,7 +102,7 @@ jobs:
         id: lane
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --park write --minutes 15
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --park write
       - name: Attach, deploy this head and prepare the story's org; fetch the story
         if: steps.lane.outputs.parked != 'true'
         id: org
@@ -172,7 +172,7 @@ jobs:
       actions: read         # the org lane checks whether the holder's run has ended (lane.mjs)
       contents: write       # the org's lane only (a ref under refs/locks/); the spec step never sees a token
       pull-requests: read
-    timeout-minutes: 30
+    timeout-minutes: 70   # 45 of them may be waiting for the story org's lane (when it cannot park)
     env:
       GH_REPO: ${{ github.repository }}
       PR: ${{ inputs.pr }}
@@ -217,7 +217,7 @@ jobs:
         if: steps.spec.outputs.exists == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --no-card --park run --minutes 15   # this job cannot write the card (read-only)
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --no-card --park run   # this job cannot write the card (read-only)
       - name: Deploy this exact head to the story's org and prepare it
         id: deploy
         if: (steps.spec.outputs.exists == 'true') && steps.lane.outputs.parked != 'true'

@@ -57,7 +57,7 @@ jobs:
       is-app: ${{ steps.id.outputs.is-app }}
       branch: ${{ steps.pr.outputs.branch }}
       before: ${{ steps.lane.outputs.parked != 'true' && steps.head.outputs.before || '' }}   # parked: no follow-up
-    timeout-minutes: 30
+    timeout-minutes: 75   # 45 of them may be waiting for the story org's lane (when it cannot park)
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -103,7 +103,7 @@ jobs:
         id: lane
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --park fix --minutes 15   # a second fix while one waits is dropped
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --park fix   # a second fix while one waits is dropped
       - name: Attach the story's org and collect the feedback (review comments and failed CI)
         if: steps.lane.outputs.parked != 'true'
         id: org

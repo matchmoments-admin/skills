@@ -6,7 +6,7 @@
 //   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
 //   next      --after review|ci|staging|release-pr|org-freed [--pr N]   what the journey owes next, started (journey.mjs)
-//   lane      acquire|release|wake <org target> [--minutes M] [--no-card] [--park KIND]  one job at a time per org (parked jobs re-run)
+//   lane      acquire|release <org target> [--minutes M] [--no-card] [--park KIND] · wake   one job at a time per org; parked jobs re-run
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
 //   status    set <context> <state> <sha> <description> [--pr N]
@@ -56,7 +56,7 @@ import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
 import * as shipping from "../src/shipping.mjs";
-import { lane, jobId, wakeNext } from "../src/lane.mjs";
+import { lane, jobId, wakeAll } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
 import * as actions from "../src/actions.mjs";
@@ -167,8 +167,8 @@ const commands = {
     if (waited > 30) record("lane", { lane: org.lock, waitedSeconds: waited, story: org.key });
     output({ lane: org.lock }); return say(org.lock);
   },
-  "lane release": () => { const { org, l } = orgLane(arg(0)); if (l.release(org.lock) && l.waiters(org.lock).length) host.repoDispatch("lane-freed", { target: arg(0) }); },
-  "lane wake": () => { const { org, l } = orgLane(arg(0), { card: false }); wakeNext({ api: host.api, repo: host.repo, l, name: org.lock, sleep, log }); },
+  "lane release": () => { const { org, l } = orgLane(arg(0)); if (l.release(org.lock) && l.waiters(org.lock).length) host.repoDispatch("lane-freed"); },
+  "lane wake": () => say(`re-ran ${wakeAll({ api: host.api, repo: host.repo, l: lane({ api: host.api, repo: host.repo, holder: {}, sleep, log }), sleep, log }).length} parked job(s)`),
 
   // ---- the gate
   "gate evaluate": async () => {

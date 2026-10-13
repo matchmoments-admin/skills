@@ -1,20 +1,18 @@
 name: lane-wake
 # A job that found its org's lane busy parked instead of waiting on a billed runner (pipe lane acquire --park,
-# pipeline/src/lane.mjs). When the holder lets go it sends lane-freed; this re-runs the oldest parked job, which takes
-# the lane (or parks again if another job got in first). repository_dispatch always runs main's copy of this file.
+# pipeline/src/lane.mjs). When a holder lets go it sends lane-freed; this re-runs every parked job of every free lane
+# (one takes the lane, the rest park again). It re-runs only real parked jobs of ai-fix and ui-test (lane.waiterJob):
+# a waiter ref is data anyone with contents: write can write. repository_dispatch runs main's copy of this file.
+# Run it by hand to wake a job whose holder's runner died without letting go.
 on:
   repository_dispatch:
     types: [lane-freed]
   workflow_dispatch:
-    inputs:
-      target:
-        description: The org target whose parked job to re-run (a story branch, sprint:<name>)
-        required: true
 permissions:
   actions: write        # re-run the parked job
   contents: write       # take its waiter ref off the queue (refs/lane-waits/)
 concurrency:
-  group: lane-wake-${{ github.event.client_payload.target || inputs.target }}
+  group: lane-wake   # one wake at a time: two would re-run the same job twice
   cancel-in-progress: false
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}
@@ -25,8 +23,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      TARGET: ${{ github.event.client_payload.target || inputs.target }}   # data, never run: pipe checks it is an org target
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
-      - run: node pipeline/bin/pipe.mjs lane wake "$TARGET"
+      - run: node pipeline/bin/pipe.mjs lane wake

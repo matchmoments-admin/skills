@@ -11,11 +11,36 @@
 //
 // Parking (#236): a job that can wait cheaply does not poll on a billed runner. `park` looks once; if the lane is busy
 // the job writes a waiter ref, refs/lane-waits/<lane>/<ms>-<kind>-<run>-<jobId>, and ends, giving its runner back.
-// The holder's release sends a lane-freed event; lane-wake.yml then re-runs the oldest waiter's job (`wake`). A second
-// waiter of the same kind in the same lane is dropped: the one already queued does the same work when it runs.
+// The holder's release sends a lane-freed event; lane-wake.yml then re-runs every waiter of every free lane (`wakeAll`):
+// one takes the lane, the rest park again, so a woken job that fails early strands nobody. A waiter ref is only data
+// (the agent jobs' token can write refs): lane-wake re-runs a job only if it really is a finished, latest-attempt
+// parked job of ai-fix or ui-test (`waiterJob`). A second waiter of the same kind in a lane is dropped: the one
+// already queued does the same work when it runs.
 
 const WAITING = Symbol("waiting");
-const WAIT_REF = /^(\d+)-(.+)-(\d+)-(\d+)$/;
+const WAIT_REF = /^refs\/lane-waits\/([^/]+)\/(\d+)-(.+)-(\d+)-(\d+)$/;
+const WAITER_WORKFLOW = { fix: "ai-fix.yml", write: "ui-test.yml", run: "ui-test.yml" };   // the only jobs that park
+const failed = (r) => typeof r?.status === "number";   // the api seam's { status } for an HTTP error
+
+/** Every parked job, oldest first: [{ ref, lock, at, kind, run, jobId }]. */
+export function allWaiters(api, repo) {
+  const refs = api("GET", `repos/${repo}/git/matching-refs/lane-waits/`);
+  return (Array.isArray(refs) ? refs : []).map((r) => [r.ref, WAIT_REF.exec(r.ref)]).filter(([, m]) => m)
+    .map(([ref, m]) => ({ ref, lock: m[1], at: Number(m[2]), kind: m[3], run: m[4], jobId: m[5] })).sort((a, b) => a.at - b.at);
+}
+
+/** Is a waiter ref a real parked job? "ok": a finished job named as its kind, the latest attempt of a finished
+ *  workflow_dispatch run of the kind's workflow. "busy": the same, but its run has not ended yet (try later). "bad":
+ *  anything else (forged, re-run since, gone): never re-run it. */
+export function waiterJob(api, repo, w) {
+  const wf = WAITER_WORKFLOW[w.kind];
+  if (!wf) return "bad";
+  const job = api("GET", `repos/${repo}/actions/jobs/${w.jobId}`), run = api("GET", `repos/${repo}/actions/runs/${w.run}`);
+  if (failed(job) || failed(run) || !job || !run) return "bad";
+  if (String(job.run_id) !== String(w.run) || job.name !== w.kind || job.status !== "completed") return "bad";
+  if (run.path !== `.github/workflows/${wf}` || run.event !== "workflow_dispatch" || job.run_attempt !== run.run_attempt) return "bad";
+  return run.status === "completed" ? "ok" : "busy";
+}
 const STALE_CHECK_MS = 3 * 60e3;
 
 export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = () => {}, ttlMinutes = 150, onWait = () => {} }) {
@@ -34,10 +59,12 @@ export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = (
   function stale(h) {
     if (!h.run) return true;
     if (now() - new Date(h.at || 0).getTime() > ttlMinutes * 60e3) return true;
-    const last = runChecked.get(h.run);
+    // the holder's own attempt: a job of the same run re-run since (a parked job woken) must not revive a dead claim
+    const attempt = /#(\d+)$/.exec(h.job || "")?.[1], key = `${h.run}#${attempt || ""}`;
+    const last = runChecked.get(key);
     if (last && now() - last.at < STALE_CHECK_MS) return last.done;
-    const done = api("GET", `repos/${repo}/actions/runs/${h.run}`)?.status === "completed";
-    runChecked.set(h.run, { at: now(), done });
+    const done = api("GET", `repos/${repo}/actions/runs/${h.run}${attempt ? `/attempts/${attempt}` : ""}`)?.status === "completed";
+    runChecked.set(key, { at: now(), done });
     return done;
   }
   const holders = new Map();   // commit sha -> holder (commits never change)
@@ -71,12 +98,8 @@ export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = (
   // commit, which is replaced when the base moves; a claim on its tree then fails, which once looked like waiting.)
   const mainTree = () => api("GET", `repos/${repo}/commits/main`)?.commit?.tree?.sha;
   const waitPath = (name) => `refs/lane-waits/${name}/`;
-  /** The lane's parked jobs, oldest first: { ref, at, kind, run, jobId }. */
-  const waiters = (name) => {
-    const refs = api("GET", `repos/${repo}/git/matching-refs/${waitPath(name).slice(5)}`);
-    return (Array.isArray(refs) ? refs : []).map((r) => [r.ref, WAIT_REF.exec(r.ref.slice(waitPath(name).length))])
-      .filter(([, m]) => m).map(([ref, m]) => ({ ref, at: Number(m[1]), kind: m[2], run: m[3], jobId: m[4] })).sort((a, b) => a.at - b.at);
-  };
+  /** The lane's parked jobs, oldest first. */
+  const waiters = (name) => allWaiters(api, repo).filter((w) => w.lock === name);
   const unpark = (w) => api("DELETE", `repos/${repo}/git/${w.ref}`);
 
   return {
@@ -91,7 +114,10 @@ export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = (
       let r = look();
       if (r === true) return { held: true };
       const waitingFor = r?.waitingFor || {};
-      if (waiters(name).some((w) => w.kind === kind)) return { dropped: true, waitingFor };
+      for (const w of waiters(name).filter((x) => x.kind === kind)) {   // a stale ref (its run re-run or cancelled since) is cleared, never obeyed
+        if (waiterJob(api, repo, w) !== "bad") return { dropped: true, waitingFor };
+        unpark(w);
+      }
       const sha = api("GET", `repos/${repo}/commits/main`)?.sha;
       const me = { ref: `${waitPath(name)}${now()}-${kind}-${holder.run}-${jobId}` };
       const made = api("POST", `repos/${repo}/git/refs`, { ref: me.ref, sha });
@@ -103,14 +129,13 @@ export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = (
       return { parked: true, waitingFor: h };
     },
 
-    /** The oldest parked job, taken off the queue, if the lane is free or its holder has finished; else null. The
-     *  caller re-runs its job (which then parks again if another job got in first). */
-    wake(name) {
+    unpark,
+
+    /** Is the lane free, or is its holder gone (so a woken job can take it over)? */
+    free(name) {
       const cur = api("GET", path(name));
-      if (cur?.object?.sha && !stale(read(api("GET", `repos/${repo}/git/commits/${cur.object.sha}`)?.message))) return null;
-      const w = waiters(name)[0];
-      if (w) unpark(w);
-      return w || null;
+      if (cur?.status === 404) return true;
+      return Boolean(cur?.object?.sha) && stale(read(api("GET", `repos/${repo}/git/commits/${cur.object.sha}`)?.message));
     },
 
     /** Wait for the lane and hold it. Throws after timeoutMinutes. */
@@ -154,13 +179,23 @@ export function jobId({ api, repo, env = process.env }) {
   return mine.length === 1 ? String(mine[0].id) : null;
 }
 
-/** Re-run the oldest parked job if the lane is free. A job can be re-run only once its whole run has ended, which a
- *  parked job's run does within a minute or two (its later jobs skip): wait up to waitMinutes for that. */
-export function wakeNext({ api, repo, l, name, sleep, log = () => {}, now = () => Date.now(), waitMinutes = 5 }) {
-  const w = l.wake(name);
-  if (!w) return log(`lane ${name}: nobody to wake (busy, or no one parked)`) || null;
-  for (const until = now() + waitMinutes * 60e3; api("GET", `repos/${repo}/actions/runs/${w.run}`)?.status !== "completed" && now() < until;) sleep(15e3);
-  const r = api("POST", `repos/${repo}/actions/jobs/${w.jobId}/rerun`);
-  log(r?.status ? `::warning::lane ${name}: could not re-run job ${w.jobId} of run ${w.run} (${r.status}: ${r.message || ""})` : `lane ${name}: re-ran ${w.kind} (job ${w.jobId}, run ${w.run}), parked since ${new Date(w.at).toISOString()}`);
-  return w;
+/** Re-run every real parked job of every free lane (one takes the lane, the others park again). A job re-runs only
+ *  once its whole run has ended, which a parked job's run does within a minute or two: a "busy" waiter is waited for,
+ *  up to waitMinutes in all. Its ref goes only once the re-run is accepted; a failed re-run stays for the next wake. */
+export function wakeAll({ api, repo, l, sleep, log = () => {}, now = () => Date.now(), waitMinutes = 5 }) {
+  const until = now() + waitMinutes * 60e3, woken = [], free = new Map();
+  for (const w of allWaiters(api, repo)) {
+    if (!free.has(w.lock)) free.set(w.lock, l.free(w.lock));
+    if (!free.get(w.lock)) continue;
+    let v = waiterJob(api, repo, w);
+    while (v === "busy" && now() < until) { sleep(15e3); v = waiterJob(api, repo, w); }
+    if (v === "bad") { log(`::warning::lane ${w.lock}: ${w.ref} is not a parked job: removed`); l.unpark(w); continue; }
+    if (v === "busy") { log(`lane ${w.lock}: run ${w.run} has not ended: left for the next wake`); continue; }
+    const r = api("POST", `repos/${repo}/actions/jobs/${w.jobId}/rerun`);
+    if (failed(r)) { log(`::warning::lane ${w.lock}: could not re-run job ${w.jobId} of run ${w.run} (${r.status}: ${r.message || ""})`); continue; }
+    l.unpark(w);
+    log(`lane ${w.lock}: re-ran ${w.kind} (job ${w.jobId}, run ${w.run}), parked since ${new Date(w.at).toISOString()}`);
+    woken.push(w);
+  }
+  return woken;
 }
