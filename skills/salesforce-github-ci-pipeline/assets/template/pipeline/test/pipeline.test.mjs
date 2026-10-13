@@ -2918,6 +2918,11 @@ test("the journey decides what starts next from Standing: after a review, after 
   assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "success" } }), { ai, uiNeeded: true }).map((x) => [x.start, x.mode]), [["ui-test", "ai"]]);
   assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "success" }, ui: { state: "success" } }), { ai }), [], "a UI test that passed on this commit stands");
   assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "success" } }), { ai, uiNeeded: false }), []);
+  const pushed = (m) => st_({ review: { state: "success" }, ctx: { pr: { commits: [{ messageHeadline: "feat: x" }, { messageHeadline: m }] } } });
+  for (const after of ["ci", "review"]) {
+    assert.deepEqual(journey.nextSteps(after, pushed("test(e2e): story 241"), { ai }), [], `${after}: the UI test that pushed the spec reports on it (#242 ran 4)`);
+    assert.equal(journey.nextSteps(after, pushed("fix: y"), { ai }).length, 1, `${after}: a person's push still needs the UI test`);
+  }
   assert.deepEqual(journey.nextSteps("review", st_({ review: { state: "failure" } }), { ai: { ...ai, autoChain: false } }), []);
   assert.deepEqual(journey.nextSteps("review", st_({ route: "release", review: { state: "failure" } }), { ai }), []);
   const rel = (staging, uat) => st_({ route: "release", checks: { [names.CHECKS.staging]: { state: staging } }, uat: { state: uat } });

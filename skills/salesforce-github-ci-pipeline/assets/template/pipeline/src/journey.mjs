@@ -16,6 +16,9 @@ export const STAGES = {
 const owed = (v) => !v || ["missing", "stale"].includes(v.state);
 // CI's org job on the head: passed, or skipped because nothing needed an org (a carried result counts as passed)
 const ciPassed = (st) => st.checks?.[CHECKS.apex]?.state === "passed";
+// The head is the AI UI test's own spec commit: the run that pushed it is still going and reports on that commit. Its
+// push started CI, and CI ending before that report started a second UI test, which pushed again (4 runs on #242).
+const specPush = (st) => /^test\(e2e\): story [\w-]+$/.test(st.ctx?.pr?.commits?.at(-1)?.messageHeadline || "");
 
 /**
  * What starts after `after` finished (review | ci | staging | release-pr | org-freed), given the head's Standing (st, from
@@ -30,12 +33,12 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
     // the UI test only when its verdict on this exact commit is owed (one that passed or is running still stands), and
     // only once CI's org job has passed on it: both need the story org, and a UI test started while CI held the org
     // waited on a billed runner, then superseded CI with its spec push (#230). CI's own finish starts it otherwise.
-    if (st.review.state === "success" && ai.uiTest && uiNeeded && owed(st.ui) && ciPassed(st)) out.push({ start: "ui-test", mode: "ai", why: "the review passed and the change is UI-facing" });
+    if (st.review.state === "success" && ai.uiTest && uiNeeded && owed(st.ui) && ciPassed(st) && !specPush(st)) out.push({ start: "ui-test", mode: "ai", why: "the review passed and the change is UI-facing" });
     return out;
   }
   if (after === "ci") {
     if (!ai.autoChain || !["feature", "hotfix"].includes(st.route)) return out;
-    if (st.review.state === "success" && ai.uiTest && uiNeeded && owed(st.ui) && ciPassed(st)) out.push({ start: "ui-test", mode: "ai", why: "CI passed after the review did, and the change is UI-facing" });
+    if (st.review.state === "success" && ai.uiTest && uiNeeded && owed(st.ui) && ciPassed(st) && !specPush(st)) out.push({ start: "ui-test", mode: "ai", why: "CI passed after the review did, and the change is UI-facing" });
     return out;
   }
   if (["staging", "release-pr", "org-freed"].includes(after)) {
