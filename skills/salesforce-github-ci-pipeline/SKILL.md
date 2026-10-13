@@ -44,7 +44,13 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
 13. **Approvers.** Who approves stories (`APPROVERS`, default first, e.g. the lead). With it set, nobody approves a
     change they pushed, and each story names its approver ([`references/enterprise.md`](references/enterprise.md), *People*).
 
-Done when: all thirteen answers are written down.
+14. **Load.** How many people build stories, how many stories a sprint, how long a sprint, and the CI budget. Size it
+    with [`references/capacity.md`](references/capacity.md). The Dev Hub's edition caps the stories in flight, the
+    test org's user licences cap parallel persona tests, and runner CPU caps browsers per runner. Record the expected
+    settings (`UI_SHARDS`, `UI_RUNNER`, `UI_WORKERS`, a UAT sandbox) and the monthly estimate. After Phase 2, confirm
+    them with `node pipeline/bin/pipe.mjs org capacity --devs <N>`.
+
+Done when: all fourteen answers are written down.
 
 ## Phase 1 — Repo from the template
 
@@ -110,4 +116,6 @@ Done when: a GitHub Release tag exists for both, the change is visible in produc
 - Cards are the UI: story cards and a **release card** say what is happening now, what is next, and offer **tick boxes** (`card-actions.yml`: the card before and after an edit -> `pipe act`, the same as the comment commands in `commands.yml`; `pipeline/src/actions.mjs`). A ticked sign-off is the trusted status `pipeline/sign-off`.
 - Shipping is keyed by commit (`pipeline/src/shipping.mjs`): the gate validates its own candidate (base tip + head) under the `main` lock; `release.yml` takes the merge SHA and the validated tree and quick-deploys only on a match; close-out works from that SHA and the previous `v*` tag; `pipe ship renudge` and the janitor's `pipe ship watchdog` make sure nothing queued is lost.
 - Agent context and access: every agent's story file ends with the **context pack** (`pipe tracker story --pack`: what exists for the objects the story touches, and production's org-wide defaults from `EntityDefinition`); `ai-implement` merges the base into the story branch first. CLAUDE.md's **Access** rules, the plan's **Access** section and CI's **access check** (`pipe access check`: profiles, admin permissions, View All/Modify All, sharing keywords, unexplained `without sharing`, ungranted new fields/objects) keep access least-privilege with or without AI; PMD's Apex security rules are raised to High in `code-analyzer.yml`. Exceptions: `config/access-exceptions.json`.
+- Load: re-run `pipe org capacity` when the team or the UI suite grows. The staging UI regression grows with every
+  story; `UI_SHARDS` spreads it over runners ([`references/capacity.md`](references/capacity.md)).
 - When something fails, look it up in [`references/gotchas.md`](references/gotchas.md) by its error text first.

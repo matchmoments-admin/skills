@@ -8,6 +8,7 @@ import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
 import * as roles from "../src/roles.mjs";
 import * as journey from "../src/journey.mjs";
+import * as capacity from "../src/capacity.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
 import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed, sameSourceVia } from "../src/org.mjs";
@@ -1117,7 +1118,8 @@ test("every job that uses a story or staging org holds its lane, and releases it
   for (const n of ["issue-start", "ai-implement", "ai-fix", "ui-test", "ci", "staging-deploy"]) {
     const y = wf(n);
     const steps = y.split(/\n\s+- (?=name:|uses:|run:|id:|if:)/);
-    const takes = steps.filter((x) => /lane acquire/.test(x)).length, gives = steps.filter((x) => /lane release/.test(x));
+    // a later job of the same run may let go for the job that took it (--holder-job: staging's shards hold it across jobs)
+    const takes = steps.filter((x) => /lane acquire/.test(x)).length, gives = steps.filter((x) => /lane release/.test(x) && !/--holder-job/.test(x));
     assert.ok(takes > 0, `${n} takes a lane`);
     assert.equal(gives.length, takes, `${n} releases every lane it takes`);
     for (const g of gives) assert.match(g, /if: always\(\)/, `${n} releases whatever happens`);
@@ -3378,4 +3380,37 @@ test("#237: a back-merge that changes nothing staging tests keeps the regression
   const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   assert.match(wf, /path: candidate, fetch-depth: 20/);
   assert.match(wf, /pipe\.mjs ci staging-carry/);
+});
+
+test("capacity: stories in flight from the Dev Hub's allowance, UI shards to a target, and the settings that carry more", () => {
+  const dev = capacity.plan({ devhub: { activeMax: 3, dailyMax: 6, activeUsed: 1 }, team: { devs: 2 }, ui: { tests: 38, personaTests: 14 } });
+  assert.equal(dev.orgs.inFlightMax, 1, "3 active orgs: staging, one held elsewhere, one story");
+  assert.match(dev.advice.join(" "), /1 story in flight, not 2.*Enterprise or Unlimited/);
+  assert.ok(dev.ui.shards > 1 && dev.ui.wallMinutes < dev.ui.serialMinutes, "shards bring the regression down");
+  assert.equal(dev.settings.UI_SHARDS, String(dev.ui.shards));
+  assert.equal(dev.settings.UI_WORKERS, null, "a 2-core runner: one browser");
+  // an enterprise Dev Hub, a UAT sandbox, 8-core runners: no org advice, browsers = cores / 2
+  const ent = capacity.plan({ devhub: { activeMax: 40, dailyMax: 80 }, team: { devs: 10, storiesPerSprint: 30 }, ui: { tests: 200, personaTests: 20 }, runner: { cores: 8, label: "linux-8-core" }, uatSandbox: true, personaSlots: 4 });
+  assert.equal(ent.orgs.inFlightMax, 39);
+  assert.equal(ent.orgs.atRelease, 1, "a UAT sandbox takes no scratch org");
+  assert.doesNotMatch(ent.advice.join(" "), /Dev Hub allows/);
+  assert.equal(ent.settings.UI_WORKERS, "4");
+  assert.equal(ent.settings.UI_RUNNER, "linux-8-core");
+  // persona specs are the floor while they share a scratch org's licences
+  const floor = capacity.plan({ ui: { tests: 40, personaTests: 30, testSeconds: 60 }, targetMinutes: 10 });
+  assert.match(floor.advice.join(" "), /persona specs are the floor/);
+  assert.match(capacity.report(dev), /## Pipeline capacity[\s\S]*UI_SHARDS=/);
+  assert.deepEqual(capacity.countSpecs("e2e-missing"), { tests: 0, personaTests: 0 });
+});
+
+test("the staging UI regression shards on separate runners and the required check waits for every shard", () => {
+  const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  assert.match(wf, new RegExp(`name: ${names.CHECKS.staging}\\n    needs: \\[staging, ui\\]\\n    if: always\\(\\)`), "the gate's check is the job that waits for the shards");
+  assert.match(wf, /lane release "sprint:\$\{\{ needs\.staging\.outputs\.sprint \}\}" --holder-job staging/, "this run's staging job held the lane: the regression job lets go");
+  assert.match(wf, /steps\.ui\.outputs\.sharded != 'true'\n\s+working-directory: \.pipeline\n\s+run: node pipeline\/bin\/pipe\.mjs lane release/, "sharded, the staging job keeps the lane");
+  const ui = wf.slice(wf.indexOf("  ui:\n"), wf.indexOf("  regression:\n"));
+  assert.ok(ui.indexOf("sf org logout -o devhub") < ui.indexOf("npx playwright test"), "production access is gone before the branch's specs run");
+  assert.match(ui, /--project persona/, "the persona specs stay on one runner (the org's user licences)");
+  assert.match(ui, /runs-on: \$\{\{ vars\.UI_RUNNER \|\| 'ubuntu-latest' \}\}/);
+  assert.match(readFileSync(new URL("../../playwright.config.ts", import.meta.url), "utf8"), /Number\(process\.env\.UI_WORKERS\) \|\| 1/);
 });

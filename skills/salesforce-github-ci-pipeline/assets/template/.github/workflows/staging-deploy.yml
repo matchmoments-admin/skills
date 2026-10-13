@@ -2,6 +2,10 @@ name: staging-deploy
 # After a story merges into the release branch (started by the gate): deploy the whole release branch to the
 # staging org and run the full regression. The job name is the "staging regression" check the release gate needs.
 # Pipeline code comes from main (.pipeline/); the release branch's own specs run only after production access is gone.
+# Scale (references/capacity.md, `pipe capacity`): UI_SHARDS=N runs the UI regression on N runners (shard 1 the persona
+# specs, which share the org's user licences; the rest split over the others), all against this staging org while this
+# run holds its lane. UI_RUNNER picks the runner (a larger one or self-hosted); UI_WORKERS browsers per runner (one per
+# 2 cores: Lightning is CPU-heavy in the browser). Unset: one runner, one browser, as before.
 on:
   workflow_dispatch:
 permissions:
@@ -10,8 +14,8 @@ env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   staging:
-    name: staging regression
-    runs-on: ubuntu-latest
+    name: staging deploy and Apex
+    runs-on: ${{ vars.UI_RUNNER || 'ubuntu-latest' }}
     permissions:
       actions: read         # the org lane checks whether the holder's run has ended (lane.mjs)
       contents: write       # the staging org's lane only (a ref under refs/locks/); the specs never see a token
@@ -22,6 +26,10 @@ jobs:
       GH_REPO: ${{ github.repository }}
     outputs:
       release: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
+      sprint: ${{ steps.ctx.outputs.SPRINT }}
+      sharded: ${{ steps.ui.outputs.sharded }}   # true: the UI regression runs in the ui jobs, and this run keeps the lane
+      shards: ${{ steps.ui.outputs.shards }}
+      matrix: ${{ steps.ui.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
@@ -67,35 +75,48 @@ jobs:
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
         run: node ../.pipeline/pipeline/bin/pipe.mjs tests run staging --all --base HEAD --sha "$(git rev-parse HEAD)" --out test-results
-      - name: Drop production access before running the branch's specs
+      - name: Where the UI regression runs (UI_SHARDS > 1 and specs to run = the ui jobs; else here)
+        id: ui
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        working-directory: candidate
+        env:
+          N: ${{ vars.UI_SHARDS }}
+        run: |
+          [[ "$N" =~ ^[1-8]$ ]] || N=1
+          if [ "$N" -gt 1 ] && ls e2e/*.spec.ts >/dev/null 2>&1; then
+            { echo "sharded=true"; echo "shards=$N"; echo "matrix=[$(seq 1 "$N" | paste -sd, -)]"; } >> "$GITHUB_OUTPUT"
+            echo "UI regression: $N runners"
+          fi
+      - name: Drop production access before running the branch's specs
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.ui.outputs.sharded != 'true'
         run: |
           # loginAs reads these: once the Dev Hub is logged out, `sf org display` fails
           sf org display -o staging --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}"
       - name: The test harness from main (login, personas, evidence), not the release branch's copy
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.ui.outputs.sharded != 'true'
         working-directory: candidate
         run: node ../.pipeline/pipeline/bin/pipe.mjs harness overlay staging --from ../.pipeline
       - uses: ./.pipeline/.github/actions/playwright
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.ui.outputs.sharded != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
         env:
           GH_TOKEN: ""          # installs the branch's packages: no token
         with: { working-directory: candidate }
       - name: UI regression (every spec in e2e/)
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && steps.ui.outputs.sharded != 'true'
         working-directory: candidate
         env:
           GH_TOKEN: ""
+          UI_WORKERS: ${{ vars.UI_WORKERS }}
         run: |
           if ls e2e/*.spec.ts >/dev/null 2>&1; then
             SCRATCH_ALIAS=staging npx playwright test
           else
             echo "No UI specs yet"
           fi
-      - name: Let the next job into the staging org's lane
-        if: always() && steps.current.outputs.superseded != 'true'
+      - name: Let the next job into the staging org's lane (sharded, the regression job does, after the shards)
+        if: always() && steps.current.outputs.superseded != 'true' && steps.ui.outputs.sharded != 'true'
         working-directory: .pipeline
         run: node pipeline/bin/pipe.mjs lane release "sprint:${{ steps.ctx.outputs.SPRINT }}" || true
       - uses: actions/upload-artifact@v4
@@ -107,11 +128,103 @@ jobs:
             candidate/playwright-report
             !candidate/**/trace.zip
             !candidate/**/*.webm
+  ui:
+    # One shard of the UI regression, on its own runner, against the staging org this run holds. Production access is
+    # dropped before the branch's specs run, as in the staging job. Shard 1 runs the persona specs (one at a time: they
+    # share the org's user licences); the others split the rest.
+    name: staging UI ${{ matrix.shard }}/${{ needs.staging.outputs.shards }}
+    needs: staging
+    if: needs.staging.outputs.sharded == 'true'
+    runs-on: ${{ vars.UI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.staging.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.sha }}", path: candidate, persist-credentials: false }
+      - uses: ./.pipeline/.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Log in to the staging org, then drop production access before running the branch's specs
+        working-directory: .pipeline
+        run: |
+          node pipeline/bin/pipe.mjs org attach "sprint:${{ needs.staging.outputs.sprint }}" >/dev/null
+          # loginAs reads these: once the Dev Hub is logged out, `sf org display` fails
+          sf org display -o staging --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
+          sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
+          rm -f "${SF_CI_KEY_FILE:-}"
+      - name: The test harness from main (login, personas, evidence), not the release branch's copy
+        working-directory: candidate
+        run: node ../.pipeline/pipeline/bin/pipe.mjs harness overlay staging --from ../.pipeline
+      - uses: ./.pipeline/.github/actions/playwright
+        env:
+          GH_TOKEN: ""          # installs the branch's packages: no token
+        with: { working-directory: candidate }
+      - name: UI regression, shard ${{ matrix.shard }}
+        working-directory: candidate
+        env:
+          GH_TOKEN: ""
+          UI_WORKERS: ${{ vars.UI_WORKERS }}
+          SHARD: ${{ matrix.shard }}
+          N: ${{ needs.staging.outputs.shards }}
+        run: |
+          export SCRATCH_ALIAS=staging
+          if grep -lq "loginAs(" e2e/*.spec.ts 2>/dev/null; then
+            if [ "$SHARD" = 1 ]; then npx playwright test --project persona
+            else npx playwright test --project parallel --shard "$((SHARD - 1))/$((N - 1))" --pass-with-no-tests; fi
+          else
+            npx playwright test --shard "$SHARD/$N" --pass-with-no-tests
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: staging-results-${{ matrix.shard }}
+          path: |
+            candidate/test-results
+            candidate/playwright-report
+            !candidate/**/trace.zip
+            !candidate/**/*.webm
+  regression:
+    # The required check: the deploy and Apex job and every UI shard. Sharded, this run held the staging org's lane
+    # through the shards, and lets go here.
+    name: staging regression
+    needs: [staging, ui]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read         # the lane reads its holder's run
+      contents: write       # the staging org's lane (a ref under refs/locks/)
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        if: needs.staging.outputs.sharded == 'true'
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - name: Let the next job into the staging org's lane
+        if: needs.staging.outputs.sharded == 'true'
+        run: node pipeline/bin/pipe.mjs lane release "sprint:${{ needs.staging.outputs.sprint }}" --holder-job staging || true
+      - name: The regression's result
+        env:
+          STAGING: ${{ needs.staging.result }}
+          UI: ${{ needs.ui.result }}
+        run: |
+          echo "deploy and Apex: $STAGING; UI shards: $UI"
+          [ "$STAGING" = success ] && { [ "$UI" = success ] || [ "$UI" = skipped ]; }
   nudge:
     # Separate job: the write permissions never sit next to the release branch's code. Runs after a failed regression
     # too, so the release card says it failed and offers a fix.
-    needs: staging
-    if: always() && needs.staging.result != 'skipped' && needs.staging.result != 'cancelled'
+    needs: [staging, regression]
+    if: always() && needs.regression.result != 'skipped' && needs.regression.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

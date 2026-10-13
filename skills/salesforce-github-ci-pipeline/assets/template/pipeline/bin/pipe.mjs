@@ -3,7 +3,7 @@
 // arguments, calls the module that owns the command, and writes step outputs; the work lives in pipeline/src/.
 //   context   [--key K] [--branch B] [--labels a,b]     names for a story / the open sprint, as KEY=value lines
 //   labels    sync                                       create or update every label the pipeline uses
-//   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits
+//   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits · capacity [--devs N] [--cores C] (load, scale settings)
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
 //   next      --after review|ci|staging|release-pr|org-freed [--pr N]   what the journey owes next, started (journey.mjs)
 //   lane      acquire|release <org target> [--minutes M] [--no-card] [--park KIND] · wake   one job at a time per org; parked jobs re-run
@@ -64,13 +64,14 @@ import * as specs from "../src/spec.mjs";
 import * as evidence from "../src/evidence.mjs";
 import * as baseline from "../src/baseline.mjs";
 import * as start from "../src/start.mjs";
+import * as capacity from "../src/capacity.mjs";
 import * as harness from "../src/harness.mjs";
 import * as journey from "../src/journey.mjs";
 import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "holder-job", "devs", "stories", "sprint-days", "in-flight", "cores", "target", "test-seconds", "in-use"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -109,7 +110,7 @@ const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 function orgLane(target, { card = true } = {}) {
   const org = names.orgFor(target);
   if (!org) throw new Error(`Not an org target: ${target}`);
-  const { GITHUB_RUN_ID: run, GITHUB_JOB: job, GITHUB_RUN_ATTEMPT: attempt, GITHUB_SHA: sha } = process.env;
+  const { GITHUB_RUN_ID: run, GITHUB_RUN_ATTEMPT: attempt, GITHUB_SHA: sha } = process.env, job = flag("holder-job") || process.env.GITHUB_JOB;   // --holder-job: a later job of the same run lets go (staging shards)
   const onWait = (h) => card && org.key && cards.refresh(org.key, { light: true, activity: { state: "running", what: `waiting for the story's scratch org: ${String(h.job).replace(/#\d+$/, "")} is using it`, url: `${host.repoUrl}/actions/runs/${h.run}` } }).catch(() => {});   // the card says why, not "deploying"
   return { org, l: lane({ api: host.api, repo: host.repo, holder: { run, job: `${job}#${attempt || 1}`, sha }, sleep, log, onWait }) };
 }
@@ -141,6 +142,7 @@ const commands = {
   "org deploy": () => { orgs().deploy(arg(0), { manifest: flag("manifest") }); },
   "org temp": () => { const o = orgs().temporary(arg(0)); record("org", { action: "created", org: o.description }); output({ alias: o.alias, temp: true }); return say(o.alias); },
   "org changes": () => { const o = orgs(), c = o.retrieveChanges(arg(0), o.setupChanges(arg(0), { exclude: JSON.parse(readFileSync("config/baseline.json", "utf8")).exclude })); output({ count: c.length }); return say(c.map((x) => `${x.type}:${x.name}`).join("\n") || "no Setup changes"); },
+  "org capacity": () => say(capacity.report(capacity.plan(capacity.gather({ limits: () => orgs().limits(), flag })))),   // how much load this carries, and the settings for more
   "org limits": () => { const l = orgs().limits(); return say(`active scratch orgs ${l.active.remaining}/${l.active.max} free, created today ${l.daily.max - l.daily.remaining}/${l.daily.max}`); },
   "org sweep": async () => {
     // every orphan: CI orgs whose run died, merged or closed stories' orgs, staging and UAT orgs of sprints no longer open

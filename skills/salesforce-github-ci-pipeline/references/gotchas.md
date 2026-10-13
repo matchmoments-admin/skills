@@ -108,6 +108,11 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Subscription-token AI usage is per person.** For a team, use an organisation API key.
 - **Actions minutes**: `pipe metrics` / the weekly `metrics` workflow. The template caches the sf CLI weekly and Chromium by lockfile.
 - **Release PR and back-merge CI burn scratch orgs** (1 of 6 a day each). → They attach the sprint's staging org under the `org-staging` lock.
+- **More browsers on one runner made the UI regression fail, not faster** → a Lightning page is CPU-heavy: 3 browsers on a
+  2-core runner timed out across many specs (#268). → One browser per 2 cores (`UI_WORKERS`). For speed, `UI_SHARDS`
+  (more runners against the staging org), with the persona specs on one shard (they share the org's user licences).
+- **UAT's scratch org took 14 minutes after staging** → it was built only when staging passed. → The journey builds it
+  when the release PR opens (`uat-deploy` `warm=true`), so UAT is ready about a minute after staging.
 - **Jev (TypeSafe) is for decisions only.** It cannot write code or reviews. `noul` criteria must be `{true, false}`; score criteria are levels lowest first; keys start `apik`; failures return `{ok:false}` and the caller falls back.
 
 ## Flows

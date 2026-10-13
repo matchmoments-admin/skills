@@ -18,9 +18,9 @@ export default defineConfig({
   // owner) took 78s on staging in the morning and over 90s under the afternoon's load (#249). Steps keep their own timeouts.
   timeout: 180_000,
   retries: 1,
-  // One at a time on a runner: a Lightning page is CPU-heavy in the browser, and 3 at once on a 2-core runner timed out
-  // across many specs (#268). Faster means more runners (sharding), not more browsers on one.
-  workers: process.env.CI ? 1 : undefined,
+  // One browser per 2 cores: a Lightning page is CPU-heavy, and 3 at once on a 2-core runner timed out across many specs
+  // (#268). UI_WORKERS raises it on a larger runner (UI_RUNNER); faster on standard runners means UI_SHARDS (more runners).
+  workers: process.env.CI ? Number(process.env.UI_WORKERS) || 1 : undefined,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     headless: true,
