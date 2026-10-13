@@ -35,10 +35,12 @@ const TRANSIENT = /fatal signup error|ECONNRESET|ETIMEDOUT|socket hang up|HTTP 5
 export function classify({ conclusion = "failure", step = "", logTail = "" }) {
   if (conclusion === "startup_failure") return "pipeline";   // a workflow file GitHub could not run
   if (conclusion !== "failure") return "ignore";   // cancelled (a newer run replaced it), skipped
-  if (PIPELINE_ALWAYS.test(logTail)) return "pipeline";
-  if (REFUSAL.test(logTail)) return "ignore";
+  // a warning is not why the step failed (a card that could not be updated, #220): judge the rest of the output
+  const said = String(logTail).split("\n").filter((l) => !/##\[warning\]|::warning/.test(l)).join("\n");
+  if (PIPELINE_ALWAYS.test(said)) return "pipeline";
+  if (REFUSAL.test(said)) return "ignore";
   const rule = STORY_STEPS.find((r) => r.step.test(step));
-  if (rule && (!rule.storyIf || rule.storyIf.test(logTail))) return "story";
+  if (rule && (!rule.storyIf || rule.storyIf.test(said))) return "story";
   return "pipeline";
 }
 

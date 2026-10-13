@@ -3189,3 +3189,26 @@ test("story #218: a Flow that reads its parent is covered by a declared Apex tes
   const src = readFileSync(new URL("../src/tests.mjs", import.meta.url), "utf8");
   assert.match(src, /Error, no message from Salesforce: the Flow faulted before reaching an assertion/);
 });
+
+test("#220: a warning in the log does not make a story's failure the pipeline's; every job that draws a card can read statuses", async () => {
+  const improve = await import("../src/improve.mjs");
+  const tail = "##[warning]story card for 218 not updated: gh api --paginate --slurp failed: gh: Resource not accessible by integration (HTTP 403)\n" +
+    "  FAIL Site_Visit_Negative_Follow_Up.Site_Visit_Negative_Follow_Up_Negative_Creates_Task: \n##[error]tests failed: 1 Flow test(s) failed";
+  assert.equal(improve.classify({ step: "Tests for this change (Apex and Flow), live on the PR as \"Salesforce tests\"", logTail: tail }), "story");
+  assert.equal(improve.classify({ step: "A step nobody listed", logTail: "##[error]gh: Resource not accessible by integration (HTTP 403)" }), "pipeline", "as the error itself it still is");
+  // a job with its own permissions replaces the workflow's: one that refreshes a card must keep statuses (the card reads verdicts)
+  for (const n of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((f) => f.endsWith(".yml"))) {
+    const y = readFileSync(new URL(`../../.github/workflows/${n}`, import.meta.url), "utf8");
+    for (const job of y.split(/\n  (?=[a-z][\w-]*:\n)/).slice(1)) {
+      if (!/pipe\.mjs (story|pr) card/.test(job) || !/\n    permissions:/.test(job)) continue;
+      assert.match(job.split(/\n    steps:/)[0], /statuses: (read|write)/, `${n} ${job.split(":")[0]}`);
+    }
+  }
+});
+
+test("#227: CI's rule checks run main's pipeline code, so a rule fixed on main reaches every open story at its next push", () => {
+  const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  for (const cmd of ["access check", "tests flow-gaps"]) assert.match(ci, new RegExp(`node \\.pipeline/pipeline/bin/pipe\\.mjs ${cmd}`), cmd);
+  const statik = ci.split(/\n  apex:\n/)[0];
+  assert.ok(statik.indexOf("Trusted pipeline code (main)") < statik.indexOf(".pipeline/pipeline/bin/pipe.mjs access check"), "main's code is checked out first");
+});

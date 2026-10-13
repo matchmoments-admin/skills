@@ -71,16 +71,16 @@ jobs:
           BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
           node pipeline/bin/pipe.mjs ci plan --ref "$REF" --base "$BASE"
       - name: Access check (least privilege; blockers fail, warnings annotate the PR)
-        # The checkout's own pipe.mjs: this job holds no secrets and a read-only token, and the guard above keeps a
-        # story's pipeline/ (and config/access-exceptions.json) identical to its base.
+        # Main's rules (.pipeline/), not the checkout's: a rule fixed on main applies to every open story at its next
+        # push, not after a back-merge (#227). The checkout is only data here.
         run: |
           BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
-          node pipeline/bin/pipe.mjs access check --base "origin/$BASE"
+          node .pipeline/pipeline/bin/pipe.mjs access check --base "origin/$BASE"
       - name: Every changed record-triggered Flow has a Flow test (as every Apex class has tests)
         if: steps.what.outputs.sf == 'true'
-        run: |   # the checkout's pipe.mjs and exceptions, as the access check (the guard keeps a story's identical to its base)
+        run: |   # main's rule and exceptions, as the access check (#227)
           BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
-          node pipeline/bin/pipe.mjs tests flow-gaps --base "origin/$BASE"
+          node .pipeline/pipeline/bin/pipe.mjs tests flow-gaps --base "origin/$BASE"
       - run: npm ci --no-audit --no-fund --ignore-scripts
       - run: npm run format:check
       - run: npm run lint
@@ -113,6 +113,7 @@ jobs:
       pull-requests: write
       checks: write         # the live "Salesforce tests" check
       issues: write         # the story card
+      statuses: read        # the card reads the PR's verdicts (without it: "story card not updated", HTTP 403, #220)
       actions: read
     timeout-minutes: 110   # up to 45 waiting for the org's lane, up to 60 for the tests
     needs: static
