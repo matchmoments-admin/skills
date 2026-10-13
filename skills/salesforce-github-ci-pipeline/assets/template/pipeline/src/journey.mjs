@@ -42,10 +42,16 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
 
 /**
  * Gather, decide, act: what starts after `after` on PR `pr` (without one, the open release PR: staging finished, or
- * an org slot freed up). Starts go through the start decision (startJob), dispatches straight to the workflow.
+ * an org slot freed up). Starts go through the start decision (startJob), dispatches straight to the workflow. A freed
+ * slot goes to UAT first (the release waits on it), else to the story that has waited longest for one (waiting:org).
  * deps: { host, gh, cards, ai, uat, startJob, log }. Returns { steps, said }.
  */
-export async function next(after, pr, { host, gh, cards, ai, uat, startJob, log = () => {} }) {
+export async function next(after, pr, deps) {
+  const r = await prNext(after, pr, deps);
+  return after === "org-freed" && !r.steps.length ? startWaiting(deps) || r : r;
+}
+
+async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, log = () => {} }) {
   if (!pr) {
     const rel = String(host.openRelease() || "").replace(/^origin\//, "");
     pr = rel ? (gh(["pr", "list", "--head", rel, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || [])[0]?.number : null;
@@ -61,6 +67,17 @@ export async function next(after, pr, { host, gh, cards, ai, uat, startJob, log 
     else host.dispatch(s.dispatch, s.inputs);
   }
   return { steps, said: steps.length ? `started: ${steps.map((x) => `${x.start || x.dispatch} (${x.why})`).join("; ")}` : `nothing owed after ${after} on PR #${pr}` };
+}
+
+/** The story that has waited longest for a scratch-org slot (label waiting:org), started again; null if none waits. */
+function startWaiting({ host, gh, log = () => {} }) {
+  const w = (gh(["issue", "list", "--state", "open", "--label", "waiting:org", "--json", "number,labels,createdAt", "--limit", "50"], { allowFail: true }) || [])
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))[0];
+  if (!w) return null;
+  gh(["issue", "edit", String(w.number), "--remove-label", "waiting:org"], { allowFail: true });
+  host.repoDispatch("jira-start", { key: String(w.number), labels: (w.labels || []).map((l) => l.name).filter((l) => l !== "waiting:org").join(",") });
+  log(`next after org-freed: started story #${w.number} (it was waiting for a scratch-org slot)`);
+  return { steps: [{ dispatch: "issue-start", why: `story #${w.number} waited for a slot` }], said: `started story #${w.number}, which was waiting for a scratch-org slot` };
 }
 
 /** The verdict contexts each stage owns (what the card and the gate read for it). */

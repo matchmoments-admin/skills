@@ -7,7 +7,9 @@
 //   a changed trigger or record-triggered Flow runs the test classes that name its object, plus the Flow's tests;
 //   a changed field, validation rule, record type or object runs the test classes that name its object; a changed
 //   permission set the test classes that name it (they assign it);
-//   other metadata (layouts, pages, settings...), a deletion, or anything no test names: all local tests.
+//   other metadata (layouts, pages, settings...), a deletion, or anything no test names: all local tests;
+//   a test marked @IsTest(critical=true) always runs, and @IsTest(testFor='ApexClass:X') names X: the same two rules
+//   production's RunRelevantTests follows, so CI never runs less than production's validation would.
 // The skill salesforce-scratch-org-tests runs this same file (its scripts/engine/tests.mjs is a verbatim copy, kept
 // identical by scripts/skills-sync.sh and checked in CI), so both skills select tests alike.
 
@@ -115,6 +117,7 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
     }
   }
   if (!apex.size && !flows.size) return all("nothing specific found");
+  for (const t of tests) if (/@IsTest\s*\([^)]*\bcritical\s*=\s*true/i.test(t.src)) apex.add(t.name);   // as RunRelevantTests: always
   return { mode: "relevant", apex: [...apex].sort(), flows: [...flows].sort(), why: `${changed.length} changed file(s)` };
 }
 

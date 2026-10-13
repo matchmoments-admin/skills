@@ -15,6 +15,7 @@ copy pipeline .github scripts/ci scripts/skills-sync.sh config e2e/support playw
      sfdx-project.json code-analyzer.yml .gitignore docs/agents GLOSSARY-MAP.md .github/ISSUE_TEMPLATE
 # the test data: the template ships it with standard fields only (custom fields are the business's own) and no story data
 if [ -d "$SRC/data/seed" ]; then
+  rm -f "$T/config/packages.json"   # production's managed packages are per org: each team lists its own
   mkdir -p "$T/data" && cp -R "$SRC/data/seed" "$T/data/seed" && rm -rf "$T/data/seed/stories"
   for f in "$T"/data/seed/*.json; do
     node -e 'const fs=require("fs"),f=process.argv[1],j=JSON.parse(fs.readFileSync(f,"utf8"));if(j.records){for(const r of j.records)for(const k of Object.keys(r))if(/__c$/.test(k))delete r[k];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")}' "$f"

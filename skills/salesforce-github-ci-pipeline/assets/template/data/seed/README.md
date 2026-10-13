@@ -10,4 +10,9 @@ Flow checks and demos. **Never production data.** Apex tests never see these rec
 - A story that needs its own records adds `stories/<story key>/plan.json` (same format): loaded into that story's org.
   When the story ships, fold what everyone needs into the files here.
 - Keep it small (hundreds of records) and use picklist codes (`BillingCountryCode`, not `BillingCountry`).
-- Changing anything here rebuilds the snapshot (`snapshot-refresh`).
+- Changing anything here rebuilds the snapshot (`snapshot-refresh`). A long-lived org (staging, UAT: 30 days) that holds
+  an earlier version gets this one **in its place**: the old seed's accounts (with their contacts, opportunities and
+  cases), its leads and its marker are deleted first, by the names and emails in these files (`org.seedReplaceApex`).
+- **Volume (staging only):** the staging org also gets `VOLUME_RECORDS` accounts, each with an opportunity (default 5000;
+  `0` turns it off), loaded once (`org.volumeApex`), so list views, reports, Flows and queries meet production-like
+  numbers before production does. Story orgs stay small and fast.

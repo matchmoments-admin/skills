@@ -60,6 +60,9 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   (`page.getByRole("tab", { name: "Details" })`) before asserting a field's value; match a field's value exactly
   (`toHaveText`), since a label and a help text can both contain it (story #193: 31 agent minutes on both). When a run
   fails, read its failure screenshot (`test-results/<test>/test-failed-1.png`) before changing the spec.
+- UI specs: use `e2e/support/record.ts` for record pages (create a record, open it on Details, edit a field, choose a
+  picklist value, save, read a field's value, a save error); a story with a `Persona:` is tested as that user
+  (`loginAs`), and the spec check fails one that never logs in as it.
 - UI specs, editing a field: the pencil (`getByRole("button", { name: "Edit <Field label>" })`) opens the **whole
   record** in edit mode. A picklist there is a combobox: open it first, then choose
   (`getByRole("combobox", { name: "<Field label>" }).click()`, then `getByRole("option", { name: "<Value>" }).click()`),

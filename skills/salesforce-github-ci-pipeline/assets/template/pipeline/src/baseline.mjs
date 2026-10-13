@@ -61,13 +61,21 @@ export function packageXml(manifest, version = "67.0") {
  * - dashboards run as the viewing user (production's running user does not exist in a scratch org)
  * - an outbound message's integration user becomes __SCRATCH_ADMIN__ (replaced at deploy with the org's admin)
  * - queues and groups lose their user members (users do not exist; roles and groups stay)
+ * - approval processes, assignment / auto-response / escalation rules: a production user they name becomes __SCRATCH_ADMIN__
  * - a file holding a secret stops the capture: secrets never enter git
  */
+const USER_REFS = /\.(approvalProcess|assignmentRules|autoResponseRules|escalationRules)-meta\.xml$/;
 export function sanitize(path, xml) {
   let s = String(xml);
   if (/<(password|consumerSecret|privateKey|clientSecret)>[^<]+</i.test(s)) throw new Error(`${path} holds a secret: exclude it in config/baseline.json`);
   if (/\.dashboard-meta\.xml$/.test(path)) s = s.replace(/\s*<runningUser>[^<]*<\/runningUser>/g, "").replace(/<dashboardType>[^<]*<\/dashboardType>/, "<dashboardType>LoggedInUser</dashboardType>");
   if (/\.workflow-meta\.xml$/.test(path)) s = s.replace(/<integrationUser>[^<]*<\/integrationUser>/g, "<integrationUser>__SCRATCH_ADMIN__</integrationUser>");
+  if (USER_REFS.test(path)) {
+    s = s.replace(/<approver>\s*<name>[^<]*<\/name>\s*<type>user<\/type>\s*<\/approver>/g, "<approver>\n                <name>__SCRATCH_ADMIN__</name>\n                <type>user</type>\n            </approver>")
+      .replace(/<assignedTo>[^<]*<\/assignedTo>(\s*<assignedToType>User<\/assignedToType>)/g, "<assignedTo>__SCRATCH_ADMIN__</assignedTo>$1")
+      .replace(/<notifyTo>[^<]*<\/notifyTo>/g, "<notifyTo>__SCRATCH_ADMIN__</notifyTo>")
+      .replace(/<allowedSubmitters>\s*<submitter>[^<]*<\/submitter>\s*<type>user<\/type>\s*<\/allowedSubmitters>/g, "<allowedSubmitters>\n        <submitter>__SCRATCH_ADMIN__</submitter>\n        <type>user</type>\n    </allowedSubmitters>");
+  }
   if (/\.(queue|group)-meta\.xml$/.test(path)) s = s.replace(/\s*<queueMembers>[\s\S]*?<\/queueMembers>/g, (m) => m.replace(/\s*<users>[\s\S]*?<\/users>/g, "")).replace(/\s*<users>[^<]*<\/users>/g, "");
   return s;
 }
@@ -119,7 +127,8 @@ export function composeProject({ baselineDir, sourceDir, forceignore = null, api
   if (forceignore && existsSync(forceignore)) cpSync(forceignore, join(dir, ".forceignore"));
   writeFileSync(join(dir, "sfdx-project.json"), JSON.stringify({
     packageDirectories: [{ path: DIR }, { path: "force-app", default: true }], sourceApiVersion: apiVersion,
-    replacements: [{ glob: `${DIR}/**/*.workflow-meta.xml`, stringToReplace: "__SCRATCH_ADMIN__", replaceWithEnv: "SCRATCH_ADMIN" }],
+    replacements: ["workflow", "approvalProcess", "assignmentRules", "autoResponseRules", "escalationRules"]
+      .map((t) => ({ glob: `${DIR}/**/*.${t}-meta.xml`, stringToReplace: "__SCRATCH_ADMIN__", replaceWithEnv: "SCRATCH_ADMIN" })),
   }, null, 2));
   return dir;
 }
@@ -142,7 +151,7 @@ export function driftSummary(changes, listings = {}) {
  * Capture production into baseline/. io: { sf } (the CLI seam, -o devhub is production). config: config/baseline.json.
  * Returns { manifest, listings, removed }. Never deploys anything anywhere.
  */
-export function capture({ sf, config, root = process.cwd(), log = () => {} }) {
+export function capture({ sf, config, root = process.cwd(), log = () => {}, packages = [] }) {
   const orgCreated = sf(["data", "query", "-o", "devhub", "-q", "SELECT CreatedDate FROM Organization"])?.records?.[0]?.CreatedDate;
   const listings = {};
   for (const type of config.types) {
@@ -159,6 +168,8 @@ export function capture({ sf, config, root = process.cwd(), log = () => {} }) {
   const watched = {};
   for (const type of config.watch || []) watched[type] = sf(["org", "list", "metadata", "-m", type, "-o", "devhub"], { allowFail: true }) || [];
   const notCopied = uncovered(watched, { config, orgCreated });
+  const missing = missingPackages(sf(["package", "installed", "list", "-o", "devhub"], { allowFail: true }) || [], packages, config.packagesIgnore);
+  if (missing.length) notCopied["Managed package (add to config/packages.json)"] = missing;
   const work = join(tmpdir(), `baseline-${process.pid}`);
   rmSync(work, { recursive: true, force: true });
   mkdirSync(work, { recursive: true });
@@ -169,6 +180,16 @@ export function capture({ sf, config, root = process.cwd(), log = () => {} }) {
   sf(["project", "convert", "mdapi", "--root-dir", join(work, "md", "unpackaged"), "--output-dir", out]);
   const removed = subtractOwned(out, join(root, "force-app"));
   dropEmpty(out);
+  // production's sharing defaults on standard objects, where a new scratch org's differ
+  const org = sf(["data", "query", "-o", "devhub", "-q", `SELECT ${Object.keys(OWD).join(", ")} FROM Organization`])?.records?.[0] || {};
+  for (const [p, xml] of Object.entries(sharingFiles(org))) {
+    const f = join(out, "main/default", p);
+    if (existsSync(join(root, "force-app/main/default", p))) continue;   // force-app owns that object file
+    mkdirSync(join(f, ".."), { recursive: true });
+    if (!existsSync(f)) writeFileSync(f, xml);
+    else writeFileSync(f, readFileSync(f, "utf8").replace(/<sharingModel>[^<]*<\/sharingModel>/, "").replace(/<\/CustomObject>/, `    ${xml.match(/<sharingModel>[^<]*<\/sharingModel>/)[0]}\n</CustomObject>`));
+    log(`baseline: production's sharing default for ${p.split("/")[1]} (${xml.match(/<sharingModel>([^<]*)/)[1]})`);
+  }
   for (const f of walk(out).filter((x) => /\.xml$/.test(x))) writeFileSync(f, sanitize(relative(root, f), readFileSync(f, "utf8")));   // binaries untouched
   log(`baseline: ${walk(out).length} files from production, ${removed.length} left to force-app (it owns them)`);
   return { manifest, listings, removed, notCopied };
@@ -182,6 +203,38 @@ export function capture({ sf, config, root = process.cwd(), log = () => {} }) {
 export function uncovered(watched, { config, orgCreated }) {
   const types = Object.keys(watched).filter((t) => !(config.types || []).includes(t));
   return manifestFor(Object.fromEntries(types.map((t) => [t, watched[t]])), { config: { ...config, customisedOnly: [...(config.customisedOnly || []), ...types] }, orgCreated });
+}
+
+/**
+ * Production's org-wide defaults for standard objects (the Organization record), where they differ from what a new
+ * scratch org has (Salesforce's defaults), as object files carrying only the sharing model: the baseline then gives
+ * scratch orgs production's sharing, so an access test cannot pass in a scratch org and fail in production. Custom
+ * objects carry their own sharing model in their object file already. Pure: Organization fields -> { path: xml }.
+ */
+const OWD = {   // Organization field -> [object, scratch default, value map]
+  DefaultAccountAccess: ["Account", "Edit", { None: "Private", Read: "Read", Edit: "ReadWrite" }],
+  DefaultOpportunityAccess: ["Opportunity", "Edit", { None: "Private", Read: "Read", Edit: "ReadWrite" }],
+  DefaultLeadAccess: ["Lead", "ReadEditTransfer", { None: "Private", Read: "Read", Edit: "ReadWrite", ReadEditTransfer: "ReadWriteTransfer" }],
+  DefaultCaseAccess: ["Case", "ReadEditTransfer", { None: "Private", Read: "Read", Edit: "ReadWrite", ReadEditTransfer: "ReadWriteTransfer" }],
+  DefaultContactAccess: ["Contact", "ControlledByParent", { None: "Private", Read: "Read", Edit: "ReadWrite", ControlledByParent: "ControlledByParent" }],
+  DefaultCampaignAccess: ["Campaign", "All", { None: "Private", Read: "Read", Edit: "ReadWrite", All: "FullAccess" }],
+};
+export function sharingFiles(org = {}) {
+  const out = {};
+  for (const [field, [obj, scratchDefault, map]] of Object.entries(OWD)) {
+    const v = org[field];
+    if (!v || v === scratchDefault || !map[v]) continue;
+    out[`objects/${obj}/${obj}.object-meta.xml`] = `<?xml version="1.0" encoding="UTF-8"?>\n<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">\n    <sharingModel>${map[v]}</sharingModel>\n</CustomObject>\n`;
+  }
+  return out;
+}
+
+/** Production's managed packages that config/packages.json does not install in scratch orgs (ignore: namespaces that
+ *  come with every org of production's edition). Pure: installed -> [name (namespace) version id]. */
+export function missingPackages(installed = [], listed = [], ignore = ["devedapp"]) {
+  const have = new Set(listed.map((p) => p.id));
+  return installed.filter((p) => !ignore.includes(p.SubscriberPackageNamespace) && !have.has(p.SubscriberPackageVersionId))
+    .map((p) => `${p.SubscriberPackageName} (${p.SubscriberPackageNamespace || "no namespace"}) ${p.SubscriberPackageVersionId}`);
 }
 
 /** The inventory section for the drift PR and the run summary. Pure. */

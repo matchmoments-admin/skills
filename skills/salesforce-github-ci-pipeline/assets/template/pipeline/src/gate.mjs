@@ -45,6 +45,24 @@ export function followUps(pr, files = [], { forceApp = files.some((f) => f.start
   return RULES[r].after.map((a) => (a in when ? when[a] : a)).filter(Boolean);
 }
 export const TRUSTED_STATUS_CREATORS = ["github-actions[bot]"];
+/**
+ * Did a run of main's (or a release branch's) workflows post this? Any workflow can post as github-actions[bot],
+ * including one a story branch adds and later removes; so the verdicts that unlock a merge with nobody looking (the AI
+ * review, a sign-off) count only from a run of a trusted file: not a pull_request or branch push run (those run the
+ * branch's own workflow files), and a dispatch only on main or a release branch. run: the Actions run, or null when the
+ * status links no run (unknown: not trusted). Pure.
+ */
+export const PROVEN = [STATUS.review, STATUS.signoff];
+export function trustedRun(run) {
+  if (!run || !run.event) return false;
+  const onTrusted = run.head_branch === "main" || /^release\//.test(String(run.head_branch || ""));
+  if (["pull_request", "pull_request_review", "pull_request_review_comment"].includes(run.event)) return false;
+  if (["push", "workflow_dispatch"].includes(run.event)) return onTrusted;
+  // pull_request_target runs the base branch's file: trusted only when the base is main or a release branch (a PR
+  // based on a story branch would run that branch's own workflow)
+  if (run.event === "pull_request_target") return (run.pull_requests || []).some((p) => /^(main|release\/.+)$/.test(String(p.base?.ref || "")));
+  return ["issue_comment", "issues", "schedule", "workflow_run", "repository_dispatch"].includes(run.event);
+}
 
 /**
  * Can a story branch still be built towards its base? (before /build; git is the io seam). Its base moving on since
@@ -124,7 +142,7 @@ export function carriedFrom(rule, { head, passed = [], changedSince }) {
 }
 /** The verdict a status context gives the head: { state: "success" | "failure" | "stale" | "missing" | ... }. */
 export function verdictFor(context, { statuses = [], head, diffsToHead = {} }) {
-  const mine = statuses.filter((s) => s.context === context && TRUSTED_STATUS_CREATORS.includes(s.creator?.login))
+  const mine = statuses.filter((s) => s.context === context && TRUSTED_STATUS_CREATORS.includes(s.creator?.login) && s.trusted !== false)
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   if (!mine.length) return { state: "missing" };
   const last = mine[mine.length - 1];
@@ -301,6 +319,10 @@ export function evaluate(facts) {
     else if (u.state === "pending") reasons.push("waiting for UAT sign-off: test in UAT, then tick UAT passed on the release card (or comment /uat-pass)");
     else if (u.state !== "success") fail(`UAT failed (${u.description || u.state}); fix it, or tick UAT passed after a retest`);
   }
+  // a story PR that changes pipeline code (it runs with production credentials) never merges through the gate: CI's
+  // guard says so too, but a branch's own workflows can fake CI's result; the gate reads the diff itself
+  const pipelineFiles = rules.verdicts && Array.isArray(compare.prFiles) ? touchesPipeline(compare.prFiles) : [];
+  if (pipelineFiles.length) fail(`a story PR cannot change pipeline code (${pipelineFiles.slice(0, 3).join(", ")}): open a maintenance PR`);
   if (rules.trusted) {
     if (!isPipelineAuthor(pr.author?.login)) reasons.push("a back-merge must be opened by the pipeline");
     if (compare.headInMain !== true) reasons.push("a back-merge must contain only commits already in main");
@@ -347,6 +369,13 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
     for (const s of ghPages(`repos/${repo}/commits/${c.oid}/statuses?per_page=100`)) {
       if (Object.values(STATUS).includes(s.context)) statuses.push({ sha: c.oid, context: s.context, state: s.state, description: s.description, url: s.target_url, created_at: s.created_at, creator: { login: s.creator?.login } });
     }
+  }
+  // provenance of the verdicts that unlock a merge with nobody looking: the run that posted them (trustedRun)
+  const runs = new Map();
+  for (const s of statuses.filter((x) => PROVEN.includes(x.context))) {
+    const id = String(s.url || "").match(/\/actions\/runs\/(\d+)/)?.[1];
+    if (id && !runs.has(id)) runs.set(id, gh(["api", `repos/${repo}/actions/runs/${id}`], { allowFail: true }));
+    s.trusted = trustedRun(id ? runs.get(id) : null);
   }
   const diffsToHead = {};
   const shas = new Set([...statuses.map((s) => s.sha), ...reviews.map((r) => r.commit_id)].filter((s) => s && s !== head));

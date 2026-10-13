@@ -9,15 +9,18 @@
     "Report", "ReportType", "Dashboard", "EmailTemplate",
     "Queue", "Group",
     "NamedCredential", "ExternalCredential", "ExternalDataSource", "ExternalServiceRegistration", "RemoteSiteSetting", "CspTrustedSite",
-    "PlatformEventChannelMember"
+    "PlatformEventChannelMember",
+    "ApprovalProcess", "AssignmentRules", "AutoResponseRules", "EscalationRules",
+    "PathAssistant", "LightningMessageChannel"
   ],
   "watch": [
-    "ApprovalProcess", "AssignmentRules", "AutoResponseRules", "EscalationRules", "EntitlementProcess",
-    "StandardValueSet", "PathAssistant", "LightningMessageChannel", "CustomObjectTranslation", "Translations",
+    "EntitlementProcess", "CustomObjectTranslation", "Translations",
     "Territory2Model", "ExperienceBundle", "Network", "CustomSite", "EmailServicesFunction"
   ],
-  "_watch_note": "Listed only, never copied: what production has of these appears in the drift PR and the prod-baseline run summary (\"Production has, scratch orgs don't\"). Move a type to types to copy it, or exclude what must not reach a scratch org.",
-  "customisedOnly": ["Layout", "FlexiPage", "CustomApplication", "QuickAction", "ListView", "CompactLayout"],
+  "_watch_note": "Listed only, never copied: what production has of these appears in the drift PR and the prod-baseline run summary (\"Production has, scratch orgs don't\"). Each needs something a scratch org does not get from production's shape: Entitlements and Territory Management enabled by a person, the Translation Workbench, an Experience Cloud domain and licences, an Email Services address. Enable the feature in the scratch definition, then move the type to types.",
+  "customisedOnly": ["Layout", "FlexiPage", "CustomApplication", "QuickAction", "ListView", "CompactLayout", "PathAssistant"],
+  "_standard_value_sets": "StandardValueSet is not here: production cannot list it (Salesforce only retrieves standard value sets by name), so a picklist value added to a standard field (Lead Source, Industry) is not copied. Name the ones you change in a story's force-app.",
+  "_types_note": "Approval processes, assignment, auto-response and escalation rules name production users: those become the scratch org's admin (baseline.sanitize), so the automation runs and routes somewhere real.",
   "folders": { "Report": "ReportFolder", "Dashboard": "DashboardFolder", "EmailTemplate": "EmailFolder" },
   "exclude": [
     "ConnectedApp", "ExternalClientApplication", "Certificate", "AuthProvider", "Profile",

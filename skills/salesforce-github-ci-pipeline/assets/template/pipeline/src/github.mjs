@@ -67,6 +67,12 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
       io.gh(["workflow", "run", workflow, "--ref", ref, ...Object.entries(inputs).flatMap(([k, v]) => ["-f", `${k}=${v}`])]);
     },
 
+    /** A repository_dispatch event (it starts workflows even when sent with the Actions token), e.g. a waiting story's
+     *  start: repoDispatch("jira-start", { key: "200", labels: "feature" }). */
+    repoDispatch(type, payload = {}) {
+      io.gh(["api", `repos/${repo}/dispatches`, "-f", `event_type=${type}`, ...Object.entries(payload).flatMap(([k, v]) => ["-f", `client_payload[${k}]=${v}`])]);
+    },
+
     /** A workflow's newest runs (one page, newest first: callers need the recent ones, never the whole history). */
     workflowRuns: (file, query = "", perPage = 100) => io.gh(["api", `repos/${repo}/actions/workflows/${file}/runs?per_page=${perPage}${query ? `&${query}` : ""}`])?.workflow_runs || [],
 

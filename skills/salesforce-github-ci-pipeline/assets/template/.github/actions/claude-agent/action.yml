@@ -62,6 +62,7 @@ runs:
         # the action fails a run that ended with a success result after more turns than --max-turns (story #143 took
         # 69 of 60 and opened its PR); that is a finished run. Anything else (an error result, no result) still fails.
         R=$( [ -s "$OUT" ] && jq -r '[.[] | select(.type == "result")] | last | "\(.subtype // "") \(.is_error | tostring)"' "$OUT" 2>/dev/null || echo "")
+        if [ "${R%% *}" = "error_max_turns" ] && [ "${{ steps.rules.outputs.turnLimitOk }}" = "true" ]; then echo "::warning::The agent used all ${{ steps.rules.outputs.turns }} turns; its work is judged by the next job (pipeline/src/roles.mjs turnLimitOk)."; exit 0; fi
         if [ "$R" = "success false" ]; then echo "::warning::The agent finished successfully but used more turns than ${{ steps.rules.outputs.turns }}: counted as success. Raise this role's turns in pipeline/src/roles.mjs if it keeps happening."; exit 0; fi
         echo "::error::The agent did not finish (result: ${R:-none})"; exit 1
     - name: Record the agent's cost and turns in the event log (needs contents write on the job's token)

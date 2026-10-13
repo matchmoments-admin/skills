@@ -1177,8 +1177,10 @@ test("the GitHub tracker finds a marked comment once, then edits it directly", a
   assert.equal(calls.filter((c) => c === "api -X PATCH").length, 2);
 });
 
-test("pipe.mjs is a thin command table: no GitHub, git or Salesforce logic of its own", () => {
+test("pipe.mjs is a thin command table: no GitHub, git or Salesforce logic of its own", async () => {
   const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  const { execFileSync } = await import("node:child_process");
+  execFileSync(process.execPath, ["--check", new URL("../bin/pipe.mjs", import.meta.url).pathname]);   // it parses (a comment once swallowed a body)
   assert.ok(src.split("\n").length < 500, "small: one line or a few per command");
   assert.doesNotMatch(src, /fetch\(|check-runs`, \{|sgd", "source", "delta"|createSign/);
 });
@@ -2372,7 +2374,9 @@ test("Flow parity: a changed active record-triggered Flow needs a Flow test; pro
   assert.deepEqual(nc, { ApprovalProcess: ["Opportunity.Discount"] }, "customised only: not unchanged since the org was created, not managed, not excluded");
   assert.match(baselineMod.inventoryMarkdown(nc), /\| ApprovalProcess \| 1 \| `Opportunity\.Discount` \|/);
   assert.match(baselineMod.inventoryMarkdown({}), /nothing of the watched types/);
-  assert.ok(JSON.parse(readFileSync(new URL("../../config/baseline.json", import.meta.url), "utf8")).watch.includes("ApprovalProcess"));
+  const cfg = JSON.parse(readFileSync(new URL("../../config/baseline.json", import.meta.url), "utf8"));
+  assert.ok(cfg.types.includes("ApprovalProcess") && !cfg.watch.includes("ApprovalProcess"), "copied now: Timesheet_Weekly_Approval was a real gap (13 Oct)");
+  assert.ok(cfg.watch.includes("Territory2Model"), "still listed only: needs a feature the shape does not give");
 });
 
 test("Standing: one place decides what still counts on the head, and the gate, the card and the board read it", () => {
@@ -2484,8 +2488,10 @@ test("a spec-only push keeps the AI review but not the UI test (story #166: a we
 
 // A fake gh/ghPages seam for gate.gather() plus close-out's own reads: keys are API paths, or "pr view", "issue view",
 // "pr list <head>". gatherDelivery reads the merged PR through the gate's own facts (Standing).
+// Statuses link the run that posted them (status set's default): run 1 is main's (trusted) unless a fixture says otherwise.
 function deliveryIo(data) {
   const gh = (a) => {
+    if (a[0] === "api" && /\/actions\/runs\/\d+$/.test(a[a.length - 1])) return data[a[a.length - 1]] ?? { event: "workflow_dispatch", head_branch: "main" };
     if (a[0] === "api") return data[a[a.length - 1]] ?? null;
     if (a[0] === "pr" && a[1] === "view") return data["pr view"];
     if (a[0] === "issue" && a[1] === "view") return data[`issue view ${a[2]}`] ?? null;
@@ -2493,7 +2499,7 @@ function deliveryIo(data) {
     if (a[0] === "pr" && a[1] === "list") return data[`pr list ${(a.find((x) => /^head:|^release\//.test(x)) || "").replace("head:", "")}`] || [];
     return null;
   };
-  const ghPages = (path, key) => { const v = data[path]; return key ? v?.[key] || [] : v || []; };
+  const ghPages = (path, key) => { const v = data[path]; return key ? v?.[key] || [] : (v || []).map((x) => (x.context && !x.target_url ? { ...x, target_url: "https://github.com/o/r/actions/runs/1" } : x)); };
   return { gh, ghPages };
 }
 const BOT = { login: "github-actions[bot]" };
@@ -2938,7 +2944,8 @@ test("the gate records the approval it accepted on the head as it merges; close-
 });
 
 test("agent roles: one table for model and turns; the UI writer reads its failure screenshot and stops to report; triage sees CI (E9, E10)", async () => {
-  assert.deepEqual(roles.budget("ui-test", ""), { model: "claude-haiku-4-5-20251001", turns: 30 });
+  assert.deepEqual(roles.budget("ui-test", ""), { model: "claude-sonnet-5-5", turns: 30, turnLimitOk: true }, "the spec run judges the writer's work");
+  assert.equal(roles.budget("implement", "").turnLimitOk, false);
   assert.equal(roles.budget("review", "claude-opus-5-5").model, "claude-opus-5-5");
   assert.throws(() => roles.modelFor("poet", "x"), /Unknown AI role/, "an unknown role fails even with an override");
   assert.equal(roles.ciResults([{ name: "Salesforce tests", conclusion: "failure", started_at: "1" }, { name: "Salesforce tests", conclusion: "success", started_at: "2", output: { title: "18 passed" } }]), "- Salesforce tests: success (18 passed)");
@@ -2971,4 +2978,101 @@ test("every pipe command is reachable: a one-word command is keyed with its trai
   assert.ok(keys.length > 40);
   for (const k of keys) assert.match(k, /^[a-z-]+ ([a-z-]+)?$/, `"${k}" can never be looked up as "<command> <sub>"`);
   assert.ok(keys.includes("next "));
+});
+
+test("the verdicts that unlock a merge count only from a run of main's (or a release branch's) workflows; a story PR never changes pipeline code", () => {
+  assert.equal(gate.trustedRun({ event: "workflow_dispatch", head_branch: "main" }), true);
+  assert.equal(gate.trustedRun({ event: "issue_comment", head_branch: "main" }), true, "/ship and the boxes");
+  assert.equal(gate.trustedRun({ event: "pull_request_target", head_branch: "issue-5", pull_requests: [{ base: { ref: "release/2026-w49" } }] }), true, "the base branch's file");
+  assert.equal(gate.trustedRun({ event: "pull_request_target", head_branch: "x", pull_requests: [{ base: { ref: "issue-5" } }] }), false, "a PR into a story branch runs that branch's file");
+  assert.equal(gate.trustedRun({ event: "pull_request", head_branch: "issue-5" }), false, "the branch's own workflow files");
+  assert.equal(gate.trustedRun({ event: "push", head_branch: "issue-5" }), false);
+  assert.equal(gate.trustedRun({ event: "workflow_dispatch", head_branch: "issue-5" }), false, "dispatched on the story branch: its own file");
+  assert.equal(gate.trustedRun(null), false, "no run linked: not proven");
+  const st = [{ sha: "h", context: gate.STATUS.review, state: "success", created_at: "1", creator: { login: "github-actions[bot]" }, trusted: false }];
+  assert.equal(gate.verdictFor(gate.STATUS.review, { statuses: st, head: "h" }).state, "missing");
+  // the gate reads the diff itself: CI's guard can be faked by a branch's own workflows
+  const pr = { number: 5, state: "OPEN", headRefName: "issue-5", baseRefName: "release/w1", headRefOid: "h", author: { login: "a" } };
+  const d = gate.evaluate({ pr, compare: { prFiles: ["force-app/a.cls", ".github/workflows/evil.yml"] }, checkRuns: [], statuses: [], reviews: [] });
+  assert.equal(d.blocking, "failure");
+  assert.match(d.reasons.join(" "), /cannot change pipeline code \(\.github\/workflows\/evil\.yml\)/);
+  assert.match(readFileSync(new URL("../../.github/workflows/gate.yml", import.meta.url), "utf8"), /^  pull_request_target:/m, "never a PR's own gate.yml");
+});
+
+test("production-likeness: sharing defaults that differ, missing packages, users in approval and assignment rules, a partial baseline (13 Oct)", async () => {
+  const b = await import("../src/baseline.mjs");
+  assert.deepEqual(b.sharingFiles({ DefaultAccountAccess: "Edit", DefaultContactAccess: "ControlledByParent", DefaultLeadAccess: "ReadEditTransfer" }), {}, "production on Salesforce's defaults (today): nothing to write");
+  const f = b.sharingFiles({ DefaultAccountAccess: "Read", DefaultCaseAccess: "None", DefaultCampaignAccess: "All" });
+  assert.deepEqual(Object.keys(f).sort(), ["objects/Account/Account.object-meta.xml", "objects/Case/Case.object-meta.xml"]);
+  assert.match(f["objects/Account/Account.object-meta.xml"], /<sharingModel>Read<\/sharingModel>/);
+  assert.match(f["objects/Case/Case.object-meta.xml"], /<sharingModel>Private<\/sharingModel>/);
+  const installed = [{ SubscriberPackageName: "HubSpot Integration", SubscriberPackageNamespace: "HubSpot_Inc", SubscriberPackageVersionId: "04t0B00000063ZSQAY" },
+    { SubscriberPackageName: "Developer Edition", SubscriberPackageNamespace: "devedapp", SubscriberPackageVersionId: "04tfn000001PPYvAAO" }];
+  assert.deepEqual(b.missingPackages(installed, []), ["HubSpot Integration (HubSpot_Inc) 04t0B00000063ZSQAY"], "the edition's own app is not a gap");
+  assert.deepEqual(b.missingPackages(installed, packageList()), [], "config/packages.json installs HubSpot");
+  const ap = '<ApprovalProcess><approvalStep><assignedApprover><approver>\n<name>jane@prod.example</name>\n<type>user</type>\n</approver></assignedApprover></approvalStep><approvalStep><assignedApprover><approver><name>Timesheet_Approvers</name><type>queue</type></approver></assignedApprover></approvalStep></ApprovalProcess>';
+  const sa = b.sanitize("baseline/x.approvalProcess-meta.xml", ap);
+  assert.match(sa, /<name>__SCRATCH_ADMIN__<\/name>\s*<type>user<\/type>/);
+  assert.match(sa, /<name>Timesheet_Approvers<\/name><type>queue<\/type>/, "a queue stays (the baseline copies queues)");
+  const ar = b.sanitize("baseline/Case.assignmentRules-meta.xml", "<ruleEntry><assignedTo>epic@orgfarm.example</assignedTo>\n<assignedToType>User</assignedToType></ruleEntry><ruleEntry><assignedTo>Support</assignedTo><assignedToType>Queue</assignedToType></ruleEntry>");
+  assert.match(ar, /<assignedTo>__SCRATCH_ADMIN__<\/assignedTo>\n<assignedToType>User/);
+  assert.match(ar, /<assignedTo>Support<\/assignedTo><assignedToType>Queue/);
+  const cfg = JSON.parse(readFileSync(new URL("../../config/baseline.json", import.meta.url), "utf8"));
+  for (const t of ["ApprovalProcess", "AssignmentRules", "AutoResponseRules", "EscalationRules"]) assert.ok(cfg.types.includes(t), t);
+  // a deploy that fails on baseline components only: those leave, the rest retries
+  const { failedBaselineFiles } = await import("../src/org.mjs");
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync: ex } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "composed-"));
+  mkdirSync(join(dir, "baseline/main/default/approvalProcesses"), { recursive: true });
+  writeFileSync(join(dir, "baseline/main/default/approvalProcesses/T.approvalProcess-meta.xml"), "x");
+  mkdirSync(join(dir, "baseline/main/default/classes"), { recursive: true });
+  writeFileSync(join(dir, "baseline/main/default/classes/P.cls"), "x");
+  writeFileSync(join(dir, "baseline/main/default/classes/P.cls-meta.xml"), "x");
+  // sf's reply on a failed deploy (io.sf with allowFail "json"): files with their state and absolute path
+  const reply = (...paths) => ({ success: false, files: [...paths.map((p) => ({ state: "Failed", filePath: join(dir, p) })), { state: "Changed", filePath: join(dir, "force-app/x") }] });
+  assert.deepEqual(failedBaselineFiles(reply("baseline/main/default/approvalProcesses/T.approvalProcess-meta.xml", "baseline/main/default/classes/P.cls"), dir).sort(),
+    ["baseline/main/default/approvalProcesses/T.approvalProcess-meta.xml", "baseline/main/default/classes/P.cls", "baseline/main/default/classes/P.cls-meta.xml"], "with its companion file");
+  assert.ok(!ex(join(dir, "baseline/main/default/approvalProcesses/T.approvalProcess-meta.xml")));
+  assert.deepEqual(failedBaselineFiles({ files: [{ state: "Failed", filePath: join(dir, "baseline/x") }, { state: "Failed", filePath: join(dir, "force-app/main/default/classes/A.cls") }] }, dir), [], "the story's own failure: no retry without production's pieces");
+  // the CLI wrapper hands a failed --json command's reply back when asked
+  const { run } = await import("../src/io.mjs");
+  assert.match(run("node", ["-e", "console.log(JSON.stringify({status:1,result:{files:[]}}));process.exit(1)"], { allowFail: "json" }), /"status":1/);
+});
+
+test("test data: a changed seed replaces the old one in a long-lived org; staging gets volume; critical tests always run; a Persona story's spec logs in as it", async () => {
+  const { seedReplaceApex, volumeApex, VOLUME_MARKER } = await import("../src/org.mjs");
+  const files = { "Account.json": JSON.stringify({ records: [{ Name: "Seed Account 01 Pty Ltd" }, { Name: "O'Brien & Co" }, { Name: "${SEED_MARKER}" }] }), "Lead.json": JSON.stringify({ records: [{ Email: "a@x.example" }] }) };
+  const apex = seedReplaceApex(files, ["[seed abc]"]);
+  assert.match(apex, /'Seed Account 01 Pty Ltd', 'O\\'Brien & Co', '\[seed abc\]'/, "names quoted for Apex; the old marker goes too; the token never");
+  assert.match(apex, /delete \[SELECT Id FROM Case WHERE AccountId IN :a\];[\s\S]*delete a;/, "children before their accounts");
+  assert.match(apex, /Email IN :emails AND IsConverted = false/);
+  const v = volumeApex(2500);
+  assert.equal(v.length, 3, "chunks one anonymous Apex call can hold");
+  assert.match(v[2], /for \(Integer i = 2000; i < 2500; i\+\+\)/);
+  assert.ok(v[2].includes(`Name = '${VOLUME_MARKER(2500)}'`) && !v[0].includes("[volume"), "the marker only after the last chunk");
+  // critical=true runs whatever changed, as production's RunRelevantTests does
+  const read = (p) => ({ "c/ATest.cls": "@IsTest class ATest { A a; }", "c/CritTest.cls": "@IsTest(critical=true) class CritTest {}", "c/A.cls": "class A {}" })[p] || "";
+  const plan = tests.selectTests({ changed: ["c/A.cls"], files: ["c/ATest.cls", "c/CritTest.cls", "c/A.cls"], read });
+  assert.deepEqual(plan.apex, ["ATest", "CritTest"]);
+  // a story with a Persona: the spec must log in as it
+  const { specProblems } = await import("../src/evidence.mjs");
+  const spec = 'await login(page); await expect(field(page, "X")).toContainText("Y");';
+  assert.match(specProblems(spec, { persona: true }).join(" "), /never logs in as it/);
+  assert.deepEqual(specProblems(spec.replace("login(page)", "loginAs(page, { permsets: ['P'] })"), { persona: true }), []);
+  assert.ok(existsSync(new URL("../../e2e/support/record.ts", import.meta.url)), "the record helpers the UI writer is pointed at");
+});
+
+test("no free scratch-org slot: the story waits in line (no runner waits) and the next org deleted starts it, after UAT", async () => {
+  const dispatched = [], edited = [];
+  const host = { openRelease: () => null, repoDispatch: (t, p) => dispatched.push([t, p]) };
+  const gh = (a) => (a[0] === "issue" && a[1] === "list" ? [{ number: 9, createdAt: "2", labels: [] }, { number: 7, createdAt: "1", labels: [{ name: "feature" }, { name: "waiting:org" }] }] : a[0] === "issue" && a[1] === "edit" ? edited.push(a) : null);
+  const r = await journey.next("org-freed", null, { host, gh, ai: {}, uat: true });
+  assert.deepEqual(dispatched, [["jira-start", { key: "7", labels: "feature" }]], "the one waiting longest");
+  assert.ok(edited.some((a) => a.includes("--remove-label") && a.includes("waiting:org")));
+  assert.match(r.said, /story #7/);
+  const wf = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
+  assert.match(wf, /steps\.org\.outputs\.waiting == 'true'[\s\S]*--add-label waiting:org/);
+  assert.ok(names.LABELS["waiting:org"]);
 });

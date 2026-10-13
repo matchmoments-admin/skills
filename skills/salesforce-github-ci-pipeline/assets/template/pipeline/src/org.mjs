@@ -1,7 +1,7 @@
 // The org registry: find, create, prepare and delete scratch orgs (see GLOSSARY.md: Issue org, Staging org,
 // Org registry). The Dev Hub's ScratchOrgInfo records are the registry, matched on Description, so a deleted
 // org can never look alive. Logins use the CI certificate (JWT) with the Dev Hub's connected app.
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { orgFor, storyOf } from "./conventions.mjs";
@@ -104,6 +104,19 @@ export function advanceCovered(git, { held, head, base }) {
   return moved.split("\n").filter(Boolean).every((l) => { const [st, ...paths] = l.split("\t"); return !st.startsWith("D") && paths.every((p) => inDelta.has(p)); });
 }
 
+/** The baseline files a failed deploy names (componentFailures' fileName under baseline/), removed from the composed
+ *  project `dir` so a retry deploys the rest. force-app failures are the story's own: nothing is removed for them.
+ *  Returns the removed paths (relative to dir). */
+export function failedBaselineFiles(result, dir) {
+  // sf's reply lists each file with its state and path (absolute, or relative to the project)
+  const rel = (p) => { const s = String(p || ""); return s.startsWith(`${dir}/`) ? s.slice(dir.length + 1) : s; };
+  const failed = [].concat(result?.files || []).filter((f) => f.state === "Failed").map((f) => rel(f.filePath));
+  if (!failed.length || failed.some((p) => !p.startsWith(`${BASELINE_DIR}/`))) return [];   // the story's own failure: no retry
+  const paths = [...new Set(failed.flatMap((p) => [p, p.replace(/-meta\.xml$/, ""), `${p}-meta.xml`]))].filter((p) => existsSync(join(dir, p)));
+  for (const p of paths) rmSync(join(dir, p));
+  return paths;
+}
+
 /** Managed packages production has, which Org Shape does not copy: config/packages.json,
  *  [{ "name": "DocuSign", "id": "04t...", "keyEnv": "DOCUSIGN_KEY" }] (keyEnv names an env var holding an install key). */
 export function packageList(file = join(PIPELINE_ROOT, "config/packages.json")) {
@@ -144,6 +157,51 @@ export function expandSeed(files, { today = new Date(), marker }) {
   const y = today.getUTCFullYear();
   const tokens = { TODAY: today.toISOString().slice(0, 10), THIS_YEAR: String(y), LAST_YEAR: String(y - 1), NEXT_YEAR: String(y + 1), SEED_MARKER: marker };
   return Object.fromEntries(Object.entries(files).map(([n, t]) => [n, String(t).replace(/\$\{(TODAY|THIS_YEAR|LAST_YEAR|NEXT_YEAR|SEED_MARKER)\}/g, (_, k) => tokens[k])]));
+}
+
+/**
+ * Anonymous Apex that removes an earlier version of the seed from a long-lived org (staging, UAT: 30 days) before the
+ * new one loads, by the seed's own keys: its accounts by name (their contacts, opportunities and cases with them),
+ * its leads by email, and the old markers. Without it a changed seed was inserted beside the old one, two of every
+ * account. Records people or specs made on other accounts stay. Pure: seed files, stale marker names -> Apex.
+ */
+export function seedReplaceApex(files, staleMarkers) {
+  const recs = (n) => { try { return JSON.parse(files[n] || "{}").records || []; } catch { return []; } };
+  const q = (xs) => xs.map((x) => `'${String(x).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`).join(", ");
+  const names = [...new Set([...recs("Account.json").map((r) => r.Name).filter((n) => n && !n.includes("${")), ...staleMarkers])];
+  const emails = [...new Set(recs("Lead.json").map((r) => r.Email).filter(Boolean))];
+  return [
+    `Set<String> names = new Set<String>{ ${q(names)} };`,
+    "List<Account> a = [SELECT Id FROM Account WHERE Name IN :names];",
+    "delete [SELECT Id FROM Case WHERE AccountId IN :a];",
+    "delete [SELECT Id FROM Opportunity WHERE AccountId IN :a];",
+    "delete [SELECT Id FROM Contact WHERE AccountId IN :a];",
+    "delete a;",
+    ...(emails.length ? [`Set<String> emails = new Set<String>{ ${q(emails)} };`, "delete [SELECT Id FROM Lead WHERE Email IN :emails AND IsConverted = false];"] : []),
+  ].join("\n");
+}
+
+/**
+ * Volume for the staging regression (setting VOLUME_RECORDS, default 5000; 0 turns it off): that many accounts, each
+ * with an opportunity, in chunks one anonymous Apex call can hold (DML rows and CPU), so list views, reports, Flows
+ * and SOQL meet production-like numbers before production does. Pure: n, chunk -> [Apex], plus the marker.
+ */
+export const VOLUME_MARKER = (n) => `[volume ${n}]`;
+export function volumeApex(n, chunk = 1000) {
+  const calls = [];
+  for (let from = 0; from < n; from += chunk) {
+    const to = Math.min(n, from + chunk);
+    calls.push([
+      "List<Account> a = new List<Account>();",
+      `for (Integer i = ${from}; i < ${to}; i++) a.add(new Account(Name = 'Volume Account ' + String.valueOf(i).leftPad(6, '0'), Industry = 'Technology', BillingCountryCode = 'AU', NumberOfEmployees = Math.mod(i, 500) + 1));`,
+      "insert a;",
+      "List<Opportunity> o = new List<Opportunity>();",
+      `for (Account x : a) o.add(new Opportunity(Name = x.Name + ' deal', AccountId = x.Id, StageName = 'Prospecting', CloseDate = Date.today().addDays(30), Amount = 10000));`,
+      "insert o;",
+      ...(to === n ? [`insert new Account(Name = '${VOLUME_MARKER(n)}');`] : []),
+    ].join("\n"));
+  }
+  return calls;
 }
 
 /** Who a story is for, from its "Persona:" line (Access section): "Persona: DirectorDirectSales role, Regional_Reporting_Access".
@@ -236,6 +294,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       self.deploy(org.alias, { manifest });
       self.prepare(org.alias);
       self.seed(org.alias, { story: org.key || null });
+      if (org.kind === "sprint") self.volume(org.alias, Number(env.VOLUME_RECORDS ?? 5000));   // staging only
       self.markReady(org.alias, want);
       return { ...org, created: !existing, completed: Boolean(existing) };
     },
@@ -349,6 +408,15 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         const have = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${marker}'`], { allowFail: true })?.records?.length;
         if (have) { log(`${alias} already has ${marker}`); continue; }
         const files = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => [f, readFileSync(join(dir, f), "utf8")]));
+        // an earlier version of the shared seed in this org: replaced, never loaded beside it
+        const prefix = dir === seedDir ? "[seed " : null;
+        const stale = prefix ? (sf(["data", "query", "-o", alias, "-q", "SELECT Name FROM Account WHERE Name LIKE '[seed %' AND (NOT Name LIKE '[seed story%')"], { allowFail: true })?.records || []).map((r) => r.Name) : [];
+        if (stale.length) {
+          const apex = join(tmpdir(), `seed-replace-${process.pid}.apex`);
+          writeFileSync(apex, seedReplaceApex(files, stale));
+          if (sf(["apex", "run", "--file", apex, "-o", alias], { allowFail: true })) log(`${alias}: removed the earlier seed (${stale.join(", ")}) before loading ${marker}`);
+          else log(`::warning::${alias}: could not remove the earlier seed (${stale.join(", ")}); loading ${marker} beside it`);
+        }
         if (!files["plan.json"].includes("SEED_MARKER") && !Object.values(files).some((t) => t.includes("${SEED_MARKER}"))) {
           // a story's plan without its own marker: add one, so it too loads once
           files["SeedMarker.json"] = JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "SeedMarker" }, Name: "${SEED_MARKER}" }] });
@@ -362,6 +430,21 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         loaded.push(marker);
       }
       return loaded;
+    },
+
+    /** Load the staging volume once (volumeApex; its marker account says it is there). Best effort: a failure warns. */
+    volume(alias, n) {
+      if (!n || n < 1) return false;
+      if (sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${VOLUME_MARKER(n)}'`], { allowFail: true })?.records?.length) return false;
+      const t0 = Date.now();
+      for (const [i, apex] of volumeApex(n).entries()) {
+        const f = join(tmpdir(), `volume-${process.pid}-${i}.apex`);
+        writeFileSync(f, apex);
+        if (!sf(["apex", "run", "--file", f, "-o", alias], { allowFail: true })) { log(`::warning::volume data stopped at chunk ${i + 1} in ${alias}`); return false; }
+      }
+      log(`${alias}: ${n} volume accounts and opportunities in ${Math.round((Date.now() - t0) / 1000)} s`);
+      record("seed", { action: "volume", org: alias, records: n * 2 });
+      return true;
     },
 
     /** "Administrators Can Log in as Any User" (off in scratch orgs): UI tests log in AS a persona through it, so no
@@ -464,10 +547,23 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         const admin = sf(["org", "display", "-o", alias])?.username;
         const dir = composeProject({ baselineDir, sourceDir: join(process.cwd(), "force-app"), forceignore: join(process.cwd(), ".forceignore") });
         const r = sf(["project", "deploy", "start", "-o", alias, "-d", BASELINE_DIR, "-d", "force-app", "--ignore-conflicts", "--wait", "45", ...(dryRun ? ["--dry-run"] : [])],
-          { cwd: dir, env: { SCRATCH_ADMIN: admin }, allowFail: baselineMode !== "strict" });
+          { cwd: dir, env: { SCRATCH_ADMIN: admin }, allowFail: baselineMode !== "strict" ? "json" : false });   // soft: the failure's details
         const ok = r && r.success !== false && !["Failed", "Canceled"].includes(r.status);
         if (!ok && r?.details?.componentFailures) for (const f of [].concat(r.details.componentFailures).slice(0, 15)) log(`  ${f.componentType} ${f.fullName}: ${f.problem}`);
         if (ok) { log(`deployed the production baseline (${id}) and force-app to ${alias}`); return { baseline: id }; }
+        // soft: leave out only the baseline components that failed and try once more, so one component a scratch org
+        // cannot hold (a feature its shape lacks) does not take the rest of production's customisations with it
+        const dropped = failedBaselineFiles(r, dir);
+        if (dropped.length && baselineMode !== "strict") {
+          log(`::warning::${dropped.length} production baseline component(s) cannot be deployed to ${alias}; trying again without them: ${dropped.map((f) => basename(f)).join(", ")}`);
+          const again = sf(["project", "deploy", "start", "-o", alias, "-d", BASELINE_DIR, "-d", "force-app", "--ignore-conflicts", "--wait", "45", ...(dryRun ? ["--dry-run"] : [])],
+            { cwd: dir, env: { SCRATCH_ADMIN: admin }, allowFail: true });
+          if (again && again.success !== false && !["Failed", "Canceled"].includes(again.status)) {
+            record("baseline", { action: "deploy-partial", org: alias, id, dropped: dropped.map((f) => basename(f)) });
+            log(`deployed the production baseline (${id}, without ${dropped.length}) and force-app to ${alias}`);
+            return { baseline: id, dropped };
+          }
+        }
         log(`::warning::the production baseline (${id}) did not deploy to ${alias}: deploying force-app alone (BASELINE=soft). See the deploy errors above.`);
         record("baseline", { action: "deploy-failed", org: alias, id });
       }

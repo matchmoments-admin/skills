@@ -91,9 +91,12 @@ export const removedComment = () => [EVIDENCE_MARK, `### ${EVIDENCE_TITLE}: remo
  * Does a story's Playwright spec check anything a criterion is about? Problems, or [] when it does. A spec that only
  * waits for something to be visible passed story #143 without checking a row or a total. Pure (the spec's source).
  */
-export function specProblems(src) {
+export function specProblems(src, { persona = false } = {}) {
   const s = String(src || "");
   const problems = [];
+  // a story with a Persona: its access criteria are about that user, so the spec logs in as it (story #193, #200: the
+  // admin passed every criterion, and "hidden without the permission set" was never tested, I12)
+  if (persona && !/\bloginAs\s*\(/.test(s)) problems.push("the story names a Persona but the spec never logs in as it: test the criteria as that user with loginAs(page, { role, permsets }), and that a user without it is refused");
   // isVisible() read into a boolean and asserted with toBe/toEqual is a visibility check, not a value (story #166);
   // an isVisible() used for control flow (dismiss a dialog if shown) is neither
   const visibleVars = [...s.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*await\s+[^;]*?\.isVisible\(\)/g)].map((m) => m[1]);

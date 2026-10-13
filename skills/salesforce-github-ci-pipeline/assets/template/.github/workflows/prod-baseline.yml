@@ -65,6 +65,6 @@ jobs:
             echo; echo "Changes belong in a story (build in its scratch org, then **Bring my Setup changes into the story**), so they are reviewed, tested and approved before production. If one of these was urgent, open a story to bring it into \`force-app\` properly.";
             echo; echo "Review it like any change: these were made in production, outside this repo."; echo
             cat "$RUNNER_TEMP/drift.md"
-            echo; echo "\`baseline/\` is never deployed to production; it only makes scratch orgs realistic. To change one of these components in a story, retrieve it into \`force-app\` (it then leaves the baseline)."; } > "$RUNNER_TEMP/body.md"
+            echo; echo; echo "\`baseline/\` is never deployed to production; it only makes scratch orgs realistic. To change one of these components in a story, retrieve it into \`force-app\` (it then leaves the baseline)."; } > "$RUNNER_TEMP/body.md"
           if [ -n "$OPEN" ]; then gh pr edit "$OPEN" --body-file "$RUNNER_TEMP/body.md"
           else gh pr create --base main --head "$BRANCH" --title "Production baseline: drift ($REASON)" --body-file "$RUNNER_TEMP/body.md"; fi

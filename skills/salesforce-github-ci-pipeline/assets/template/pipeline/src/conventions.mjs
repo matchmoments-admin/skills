@@ -15,6 +15,7 @@ export const LABELS = {
   ready: { color: "0E8A16", description: "Sign-off on a PR you wrote yourself (GitHub will not let you approve your own)" },
   blocked: { color: "B60205", description: "A gate needs a person; see the latest comment" },
   release: { color: "0052CC", description: "The release PR of a sprint" },
+  "waiting:org": { color: "FBCA04", description: "Waiting for a scratch-org slot: it starts by itself when one frees up" },
   "in-sprint": { color: "0E8A16", description: "Merged into the sprint: ships with its release (the story closes when it is in production)" },
   "needs-triage": { color: "D4C5F9", description: "A person needs to look at this issue before it becomes a story" },
   "needs-info": { color: "D4C5F9", description: "Waiting on the person who raised it" },

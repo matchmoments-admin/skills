@@ -13,7 +13,9 @@ export const ROLES = {
   plan: { model: "claude-sonnet-5-5", turns: 25 },
   spec: { model: "claude-sonnet-5-5", turns: 30 },
   review: { model: "claude-sonnet-5-5", turns: 15 },   // Haiku made confident false Salesforce blockers on PR #144, each costing a round
-  "ui-test": { model: "claude-haiku-4-5-20251001", turns: 30 },
+  // Sonnet, not Haiku: both of story #200's Haiku runs used every turn and a failed writer run costs ~15 Actions minutes
+  // (a runner holding the org's lane), far more than the model's price difference
+  "ui-test": { model: "claude-sonnet-5-5", turns: 30, turnLimitOk: true },
 };
 
 export function modelFor(role, override = setting("AI_MODEL")) {
@@ -23,7 +25,9 @@ export function modelFor(role, override = setting("AI_MODEL")) {
 }
 
 /** A role's budget: { model, turns }. */
-export const budget = (role, override) => ({ model: modelFor(role, override), turns: ROLES[role].turns });
+// turnLimitOk: a run that hit its turn cap is not a failed job when its work is judged after it (the UI test's spec
+// runs in its own job, which posts the verdict); the cap still stops it.
+export const budget = (role, override) => ({ model: modelFor(role, override), turns: ROLES[role].turns, turnLimitOk: Boolean(ROLES[role].turnLimitOk) });
 
 /**
  * CI's results on a commit, as a list an agent or Jev reads: code CI deployed and whose tests passed compiles and

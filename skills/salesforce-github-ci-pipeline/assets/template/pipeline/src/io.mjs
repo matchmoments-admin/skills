@@ -15,6 +15,7 @@ export function run(cmd, args, { input, quiet = false, allowFail = false, env, e
       env: { ...process.env, SF_AUTOUPDATE_DISABLE: "true", SF_SKIP_NEW_VERSION_CHECK: "true", FORCE_COLOR: "0", NO_COLOR: "1", NODE_NO_WARNINGS: "1", ...env },
     });
   } catch (e) {
+    if (allowFail === "json") return e.stdout ? String(e.stdout) : null;   // a failed --json command's reply (sf deploy's failures)
     if (allowFail) return null;
     const detail = failureDetail(e.stdout, e.stderr);
     throw new Error(`${cmd} ${args.slice(0, 3).join(" ")} failed${detail ? `: ${detail}` : ""}`);
@@ -60,9 +61,10 @@ export function ghPages(path, key) {
 export const sf = (args, opts) => {
   const out = run("sf", [...args, "--json"], { quiet: true, ...opts });
   if (out === null) return null;
-  const j = parseJson(out);
+  let j;
+  try { j = parseJson(out); } catch (e) { if (opts?.allowFail) return null; throw e; }
   if (j.status && j.status !== 0 && !opts?.allowFail) throw new Error(j.message || `sf ${args[0]} failed`);
-  return j.result;
+  return opts?.allowFail === "json" && j.status ? { ...(j.result || j.data || {}), success: false, failed: true } : j.result;
 };
 
 /** git output trimmed; null when the command fails and allowFail is set (so "not an ancestor" is not "") */

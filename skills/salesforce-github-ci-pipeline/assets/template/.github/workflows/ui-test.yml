@@ -131,6 +131,7 @@ jobs:
           prompt: |
             You are the UI tester for story ${{ steps.org.outputs.key }} (pull request #${{ env.PR }}). The story is in ${{ runner.temp }}/story.md: its acceptance criteria and "Where to see it" are your test plan.
             Write ONE Playwright spec at e2e/story-${{ steps.org.outputs.key }}.spec.ts. Call `login(page)` from e2e/support/login.ts, then navigate with `openPath(page, "/lightning/...")` from the same file (there is no baseURL). SCRATCH_ALIAS is already set, so login needs no arguments.
+            For record pages, use e2e/support/record.ts (read its header first): createRecord, openRecord (opens the Details tab), editField, choosePicklist, fillField, save, field(page, label) for a field's value and formError. They are the steps of specs that passed; do not write your own sf or edit-form plumbing.
             Use getByRole / getByLabel locators only. Cover the happy path and one negative case from the criteria.
             Assert what the platform stores, not what you typed: Salesforce changes some values when records change state (closing an Opportunity with a future Close Date sets it to today). Use dates in the past and read the record back for the expected value.
             Test the feature as a user sees it. Never configure the org through the UI (no Lightning App Builder, no Setup pages); if the feature is not visible where the story says, that is a failure of the feature, not something to build in the test.
@@ -307,7 +308,8 @@ jobs:
         if: env.OUTCOME == 'success' && env.HAS_SPEC == 'true'
         run: |
           gh api -H "Accept: application/vnd.github.raw" "repos/$GH_REPO/contents/e2e/story-$KEY.spec.ts?ref=$HEAD_SHA" > "$RUNNER_TEMP/spec.ts"
-          node pipeline/bin/pipe.mjs ui spec-check --file "$RUNNER_TEMP/spec.ts"
+          node pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story-check.md" >/dev/null 2>&1 || true
+          node pipeline/bin/pipe.mjs ui spec-check --file "$RUNNER_TEMP/spec.ts" --story "$RUNNER_TEMP/story-check.md"
       - name: Verdict to a commit status (and a label people can read)
         env:
           KIND: ${{ steps.triage.outputs.kind }}

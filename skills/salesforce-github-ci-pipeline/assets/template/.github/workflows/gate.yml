@@ -5,7 +5,7 @@ name: gate
 # If inputs are still missing, it says which, and runs again when the last one lands (gate nudge).
 # Runs only main's code: the PR is checked out to a side directory purely as data to validate.
 on:
-  pull_request:
+  pull_request_target:   # the base branch's own gate.yml, never the PR's (a PR's copy could post pipeline/gate itself)
     types: [labeled, ready_for_review, converted_to_draft]   # a draft must not keep an earlier success (E12)
   pull_request_review:
     types: [submitted]

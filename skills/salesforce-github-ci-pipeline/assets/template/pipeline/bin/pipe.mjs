@@ -51,7 +51,7 @@ import * as plans from "../src/plan.mjs";
 import { storyCards } from "../src/card.mjs";
 import * as tests from "../src/tests.mjs";
 import * as production from "../src/production.mjs";
-import { orgRegistry, personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered } from "../src/org.mjs";
+import { orgRegistry, personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered, packageList } from "../src/org.mjs";
 import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
@@ -103,7 +103,8 @@ const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, 
 const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;
 const refuseSnapshot = (n) => { const sha = host.api("GET", `repos/${host.repo}/git/ref/heads/main`)?.object?.sha; if (sha) host.api("POST", `repos/${host.repo}/git/refs`, { ref: `refs/tags/snapshot-refused-${n}`, sha }); };
 const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, log });
-const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT"), BASELINE: names.setting("BASELINE") } });
+const freed = async () => { try { log((await nextAfter("org-freed")).said); } catch (e) { log(`::warning::could not start what waited for a slot: ${e.message}`); } };   // UAT first, else the story waiting longest
+const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT"), BASELINE: names.setting("BASELINE"), VOLUME_RECORDS: names.setting("VOLUME_RECORDS") || undefined } });
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 
@@ -128,7 +129,9 @@ const commands = {
 
   // ---- orgs and lanes
   "org ready": () => {   // Org provisioning: the target's org, holding the code in the working directory (org.mjs ready)
-    const o = orgs().ready(arg(0), { hotfix: has("hotfix"), commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), manifest: flag("manifest"), refusal: storyRefusal(io.gh, flag("pr")) });
+    let o;
+    try { o = orgs().ready(arg(0), { hotfix: has("hotfix"), commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), manifest: flag("manifest"), refusal: storyRefusal(io.gh, flag("pr")) }); }
+    catch (e) { if (/scratch org slot|ORG_RESERVE/.test(e.message)) output({ waiting: true }); throw e; }   // no slot: the story waits in line
     if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
     output({ alias: o.alias, created: o.created }); return say(o.alias);
   },
@@ -147,6 +150,7 @@ const commands = {
     const done = await doneStoryOrgs(live, { tracker, gh: io.gh, log });
     const gone = orgs().sweep({ isStoryDone: (d) => done.has(d), openSprint: names.sprintOf(host.openRelease() || "") });
     for (const g of gone) record("org", { action: "deleted", org: g.description, why: g.why });
+    await freed();   // every run, not only after a delete: a slot also frees by expiry or by hand
     return say(`deleted ${gone.length} orphan org(s)${gone.length ? `: ${gone.map((o) => `${o.description} (${o.why})`).join(", ")}` : ""}`);
   },
   "uat tester": async () => {   // a person's login, emailed by Salesforce, as the story's persona (or UAT_TESTER_ROLE); never a secret
@@ -251,7 +255,7 @@ const commands = {
   "start followups": async () => {   // after a merge: what the gate (or an emergency merge) starts, one way
     const steps = await start.startFollowUps(flag("after"), { pr: flag("pr"), base: flag("base"), sha: flag("sha"), job: flag("job", ""), tree: flag("tree", ""), story: flag("story", "") },
       { host, gh: io.gh, cards, removeOrg: (t) => { const o = names.orgFor(t); if (orgs().remove(t)) record("org", { action: "deleted", org: o?.description, story: o?.key }); return true; }, log,
-        orgFreed: async () => log((await nextAfter("org-freed")).said),   // UAT may have been waiting for that slot
+        orgFreed: freed,   // UAT may have been waiting for that slot
         regate: () => shipping.regate(io, host, log) });
     return say(`follow-ups: ${steps.join(" ") || "none"}`);
   },
@@ -265,10 +269,7 @@ const commands = {
     return say(JSON.stringify(p));
   },
   "next ": async () => { const r = await nextAfter(flag("after"), flag("pr")); output({ next: r.steps.map((x) => x.start || x.dispatch).join(" ") }); return say(r.said); },
-  "ci results": () => {   // CI's results on a commit, for an agent or Jev (code CI deployed and tested compiles and runs)
-    const text = roles.ciResults(io.ghPages(`repos/${host.repo}/commits/${arg(0)}/check-runs?per_page=100`, "check_runs"));
-    if (flag("out")) writeFileSync(flag("out"), text); return say(text);
-  },
+  "ci results": () => { const t = roles.ciResults(io.ghPages(`repos/${host.repo}/commits/${arg(0)}/check-runs?per_page=100`, "check_runs")); if (flag("out")) writeFileSync(flag("out"), t); return say(t); },   // for an agent or Jev
   "agent budget": () => { const b = roles.budget(arg(0)); output(b); return say(`${arg(0)}: ${b.model}, ${b.turns} turns`); },
   "harness overlay": () => say(`main's ${harness.overlay(arg(0), { git: io.git, from: flag("from", ".pipeline") }).join(", ")} over the checkout, hidden from git`),
   "triage ui": async () => {
@@ -282,10 +283,10 @@ const commands = {
     const r = await evidence.publish({ dir: flag("dir"), key: flag("key"), sha: flag("sha"), pr: flag("pr"), orgUrl: flag("org-url"), host, tracker, record, sleep, log });
     output({ url: r.url || "", shots: r.shots }); return say(r.said);
   },
-  "ui spec-check": () => { const p = evidence.specProblems(readFileSync(flag("file"), "utf8")); output({ problems: p.join("; ") }); return say(p.length ? `weak spec: ${p.join("; ")}` : "spec checks values"); },
+  "ui spec-check": () => { const p = evidence.specProblems(readFileSync(flag("file"), "utf8"), { persona: Boolean(flag("story") && orgPersona(existsSync(flag("story")) ? readFileSync(flag("story"), "utf8") : "")) }); output({ problems: p.join("; ") }); return say(p.length ? `weak spec: ${p.join("; ")}` : "spec checks values"); },
   "evidence squash": async () => say(await evidence.sweep({ host, tracker, log })),   // whatever UI_EVIDENCE says: off still clears what was stored
   "baseline capture": () => {   // production's customisations into baseline/ (pipeline/src/baseline.mjs); the workflow opens the drift PR
-    const r = baseline.capture({ sf: io.sf, config: JSON.parse(readFileSync("config/baseline.json", "utf8")), log });
+    const r = baseline.capture({ sf: io.sf, config: JSON.parse(readFileSync("config/baseline.json", "utf8")), log, packages: packageList() });
     const changes = (io.git(["status", "--porcelain", "--untracked-files=all", "--", baseline.DIR], { allowFail: true }) || "").split("\n").filter(Boolean);
     const inventory = baseline.inventoryMarkdown(r.notCopied); summary(inventory);
     writeFileSync(flag("out", "drift.md"), [baseline.driftSummary(changes, r.listings), inventory].filter(Boolean).join("\n\n")); output({ changed: changes.length, id: baseline.baselineId(baseline.DIR) || "" });
@@ -484,6 +485,7 @@ async function closeoutCmd(run) {
   log(JSON.stringify(p));
   if (!run) return;
   await closeout.apply(p, { tag: flag("tag"), tracker, orgs: orgs(), git: io.git, gh: io.gh, ghPages: io.ghPages, cards, log });
+  await freed();   // the sprint's orgs are gone: a story waiting for a slot starts
   record("release", { tag: flag("tag"), sha: flag("sha"), previous: flag("previous"), sprint: p.sprint, shipped: p.ship, hotfixes: p.hotfix.map((h) => h.key), carried: p.carry });
   for (const key of [...p.ship, ...p.hotfix.map((h) => h.key)]) await cards.refresh(key, { tag: flag("tag") });
   if (flag("sha")) await cards.refreshCommit(flag("sha"), { tag: flag("tag") });   // the release card: Done, with the tag
