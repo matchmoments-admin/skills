@@ -191,6 +191,7 @@ jobs:
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       - run: |
           NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
-          [ "$NOW" != "$BEFORE" ] || { echo "the fix pushed nothing: no new review"; exit 0; }
+          # a fix that changes nothing judged the review already met or wrong: say so, or the PR waits on a fix that never comes (#261)
+          [ "$NOW" != "$BEFORE" ] || { echo "the fix pushed nothing: no new review"; gh pr comment "$PR" --body "Claude's fix changed nothing: it found the review's requests already met or not right for this story. If you agree, comment \`/review-ok <why>\`; otherwise push a fix yourself (the review runs again)."; exit 0; }
           [ "${{ vars.AI_REVIEW }}" != "true" ] || node pipeline/bin/pipe.mjs start review --pr "$PR"   # the review's start decision
           [ "${{ needs.fix.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"

@@ -23,7 +23,10 @@ finding. Comments on the story and its spec since they were written win over the
 - **blocker**: a Get, Create, Update or Delete element inside a Loop; a recursive trigger (a flow updating the record that
   triggers it, after save, with no entry condition that stops it); hard-coded record IDs.
 - **major**: a record-triggered Flow without entry criteria on its Start element (conditions only in a Decision);
-  a Flow test that does not cover the Flow's paths (a missing Flow test already fails CI: `pipe tests flow-gaps`);
+  a Flow test that does not cover the Flow's paths (a missing Flow test already fails CI: `pipe tests flow-gaps`).
+  A Flow that reads or writes a related record (the parent Account, its owner) cannot have a Flow test (it faults):
+  an Apex test that declares `// Flow test: <Flow API name>: <why>` and asserts what the Flow did covers it, CI accepts
+  it, and it meets a story's "A Flow test covers it". Never ask for a Flow test then (docs/agents/salesforce.md, Tests);
   a data element without a fault path; entry
   criteria broader than the story needs (the flow runs on every save); an after-save flow doing what a before-save
   flow could.
