@@ -56,8 +56,8 @@ jobs:
     outputs:
       is-app: ${{ steps.id.outputs.is-app }}
       branch: ${{ steps.pr.outputs.branch }}
-      before: ${{ steps.head.outputs.before }}
-    timeout-minutes: 75   # 45 of them may be waiting for the story org's lane
+      before: ${{ steps.lane.outputs.parked != 'true' && steps.head.outputs.before || '' }}   # parked: no follow-up
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -99,11 +99,13 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
-      - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+      - name: The org's lane (one job at a time in an org; busy, this job parks and is re-run when it frees)
+        id: lane
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH"
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --park fix --minutes 15   # a second fix while one waits is dropped
       - name: Attach the story's org and collect the feedback (review comments and failed CI)
+        if: steps.lane.outputs.parked != 'true'
         id: org
         env:
           READ_TOKEN: ${{ github.token }}   # reading run logs needs actions: read, which the Actions token has
@@ -131,9 +133,12 @@ jobs:
           grep -c "Failed CI checks" "$RUNNER_TEMP/review-feedback.md" | sed 's/^/failed-CI sections: /'
           if [ -n "$STORY_KEY" ]; then node .pipeline/pipeline/bin/pipe.mjs tracker story "$STORY_KEY" --pack --base "origin/$BASE" --out "$RUNNER_TEMP/story.md"; else echo "(no story)" > "$RUNNER_TEMP/story.md"; fi
       - name: Main's rules over the branch's copy (CLAUDE.md, REVIEW.md, docs/agents), hidden from git
+        if: steps.lane.outputs.parked != 'true'
         run: node .pipeline/pipeline/bin/pipe.mjs harness overlay fix   # after the branch is checked out and up to date
       - run: npm install --no-audit --no-fund --ignore-scripts   # the production key is still on disk here: no install scripts
+        if: steps.lane.outputs.parked != 'true'
       - uses: ./.pipeline/.github/actions/claude-agent
+        if: steps.lane.outputs.parked != 'true'
         with:
           role: fix
           pr: ${{ env.PR }}

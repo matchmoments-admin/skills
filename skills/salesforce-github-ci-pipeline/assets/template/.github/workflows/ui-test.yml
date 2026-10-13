@@ -62,13 +62,14 @@ jobs:
       id-token: write
       checks: read
       statuses: read
-    timeout-minutes: 75   # 45 of them may be waiting for the story org's lane
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       PR: ${{ inputs.pr }}
     outputs:
       is-app: ${{ steps.id.outputs.is-app }}
+      parked: ${{ steps.lane.outputs.parked }}   # the run job waits for the re-run
     steps:
       - name: The PR (validated)
         id: pr
@@ -97,11 +98,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "$BRANCH" --now "Claude is writing and running the UI test in the scratch org (5 to 15 minutes)"
-      - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+      - name: The org's lane (one job at a time in an org; busy, this job parks and is re-run when it frees)
+        id: lane
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH"
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --park write --minutes 15
       - name: Attach, deploy this head and prepare the story's org; fetch the story
+        if: steps.lane.outputs.parked != 'true'
         id: org
         run: |
           ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH" --pr "$PR")   # this head, deployed and prepared (once); never rebuilt for a merged PR
@@ -112,9 +115,12 @@ jobs:
           sf org display -o "$ALIAS" --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --out "$RUNNER_TEMP/story.md"
       - name: Main's rules over the branch's copy (CLAUDE.md, REVIEW.md, docs/agents, e2e/support), hidden from git
+        if: steps.lane.outputs.parked != 'true'
         run: node .pipeline/pipeline/bin/pipe.mjs harness overlay ui-test   # after the branch is checked out and up to date
       - uses: ./.pipeline/.github/actions/playwright
+        if: steps.lane.outputs.parked != 'true'
       - uses: ./.pipeline/.github/actions/claude-agent
+        if: steps.lane.outputs.parked != 'true'
         env:
           # with UI_EVIDENCE on, evidence() really runs in the agent's trial runs (into a throwaway folder), so a locator
           # that finds nothing shows up here as a warning, not first in the real run
@@ -160,18 +166,18 @@ jobs:
     # Runs the committed spec against the PR's head, on its own runner, with a read-only token. Production access is
     # dropped before any of the PR's code runs. The result is the step outcome, which the spec cannot write.
     needs: write
-    if: always() && github.event_name == 'workflow_dispatch' && ((inputs.mode == 'ai' && needs.write.result != 'skipped') || inputs.mode == 'run')
+    if: always() && github.event_name == 'workflow_dispatch' && needs.write.outputs.parked != 'true' && ((inputs.mode == 'ai' && needs.write.result != 'skipped') || inputs.mode == 'run')
     runs-on: ubuntu-latest
     permissions:
       actions: read         # the org lane checks whether the holder's run has ended (lane.mjs)
       contents: write       # the org's lane only (a ref under refs/locks/); the spec step never sees a token
       pull-requests: read
-    timeout-minutes: 70   # 45 of them may be waiting for the story org's lane
+    timeout-minutes: 30
     env:
       GH_REPO: ${{ github.repository }}
       PR: ${{ inputs.pr }}
     outputs:
-      head: ${{ steps.head.outputs.sha }}
+      head: ${{ steps.lane.outputs.parked != 'true' && steps.head.outputs.sha || '' }}   # parked: no report until the re-run
       key: ${{ steps.spec.outputs.key }}
       has-spec: ${{ steps.spec.outputs.exists }}
       outcome: ${{ steps.test.outcome }}
@@ -206,14 +212,15 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
-      - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+      - name: The org's lane (one job at a time in an org; busy, this job parks and is re-run when it frees)
+        id: lane
         if: steps.spec.outputs.exists == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --no-card   # this job cannot write the card (read-only)
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --no-card --park run --minutes 15   # this job cannot write the card (read-only)
       - name: Deploy this exact head to the story's org and prepare it
         id: deploy
-        if: steps.spec.outputs.exists == 'true'
+        if: (steps.spec.outputs.exists == 'true') && steps.lane.outputs.parked != 'true'
         env:
           GH_TOKEN: ${{ github.token }}   # read-only: is the PR still open (no org rebuilt for a merged one)
         run: |
@@ -224,18 +231,18 @@ jobs:
           # the org's address for the evidence links (not a secret: it needs a login); never a front-door URL
           echo "org-url=$(sf org display -o "$ALIAS" --json 2>/dev/null | jq -r '.result.instanceUrl // empty')" >> "$GITHUB_OUTPUT"
       - name: Drop production access before running the PR's spec code
-        if: steps.spec.outputs.exists == 'true'
+        if: (steps.spec.outputs.exists == 'true') && steps.lane.outputs.parked != 'true'
         run: |
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}" "$RUNNER_TEMP/ci.key"
       - name: Main's rules over the branch's copy (CLAUDE.md, REVIEW.md, docs/agents, e2e/support), hidden from git
-        if: steps.spec.outputs.exists == 'true'
+        if: (steps.spec.outputs.exists == 'true') && steps.lane.outputs.parked != 'true'
         run: node .pipeline/pipeline/bin/pipe.mjs harness overlay ui-test   # after the branch is checked out and up to date
       - uses: ./.pipeline/.github/actions/playwright
-        if: steps.spec.outputs.exists == 'true'
+        if: (steps.spec.outputs.exists == 'true') && steps.lane.outputs.parked != 'true'
       - name: Run the committed spec
         id: test
-        if: steps.spec.outputs.exists == 'true'
+        if: (steps.spec.outputs.exists == 'true') && steps.lane.outputs.parked != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ""
@@ -250,7 +257,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
       - uses: actions/upload-artifact@v4
-        if: always() && steps.spec.outputs.exists == 'true'
+        if: (always() && steps.spec.outputs.exists == 'true') && steps.lane.outputs.parked != 'true'
         with:
           name: playwright-report
           path: |

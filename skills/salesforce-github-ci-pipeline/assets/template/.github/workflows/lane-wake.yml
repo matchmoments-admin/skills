@@ -1,0 +1,32 @@
+name: lane-wake
+# A job that found its org's lane busy parked instead of waiting on a billed runner (pipe lane acquire --park,
+# pipeline/src/lane.mjs). When the holder lets go it sends lane-freed; this re-runs the oldest parked job, which takes
+# the lane (or parks again if another job got in first). repository_dispatch always runs main's copy of this file.
+on:
+  repository_dispatch:
+    types: [lane-freed]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: The org target whose parked job to re-run (a story branch, sprint:<name>)
+        required: true
+permissions:
+  actions: write        # re-run the parked job
+  contents: write       # take its waiter ref off the queue (refs/lane-waits/)
+concurrency:
+  group: lane-wake-${{ github.event.client_payload.target || inputs.target }}
+  cancel-in-progress: false
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8   # up to 5 waiting for the parked run to end (a job re-runs only in a finished run)
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TARGET: ${{ github.event.client_payload.target || inputs.target }}   # data, never run: pipe checks it is an org target
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - run: node pipeline/bin/pipe.mjs lane wake "$TARGET"

@@ -8,8 +8,14 @@
 // (the holder's commit is read once, its run checked every few minutes, the claim commit made once per acquire), every
 // 30 s with jitter: about 120 requests an hour per waiting job, inside the 1,000/hour token budget at scale.
 // `api(method, path, body)` is the seam: it returns the parsed JSON, or { status } for an HTTP error.
+//
+// Parking (#236): a job that can wait cheaply does not poll on a billed runner. `park` looks once; if the lane is busy
+// the job writes a waiter ref, refs/lane-waits/<lane>/<ms>-<kind>-<run>-<jobId>, and ends, giving its runner back.
+// The holder's release sends a lane-freed event; lane-wake.yml then re-runs the oldest waiter's job (`wake`). A second
+// waiter of the same kind in the same lane is dropped: the one already queued does the same work when it runs.
 
 const WAITING = Symbol("waiting");
+const WAIT_REF = /^(\d+)-(.+)-(\d+)-(\d+)$/;
 const STALE_CHECK_MS = 3 * 60e3;
 
 export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = () => {}, ttlMinutes = 150, onWait = () => {} }) {
@@ -61,12 +67,54 @@ export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = (
     return took?.status ? WAITING : true;
   }
 
+  // The claim commit needs a tree that stays reachable: main's. (A PR job's GITHUB_SHA is GitHub's test-merge
+  // commit, which is replaced when the base moves; a claim on its tree then fails, which once looked like waiting.)
+  const mainTree = () => api("GET", `repos/${repo}/commits/main`)?.commit?.tree?.sha;
+  const waitPath = (name) => `refs/lane-waits/${name}/`;
+  /** The lane's parked jobs, oldest first: { ref, at, kind, run, jobId }. */
+  const waiters = (name) => {
+    const refs = api("GET", `repos/${repo}/git/matching-refs/${waitPath(name).slice(5)}`);
+    return (Array.isArray(refs) ? refs : []).map((r) => [r.ref, WAIT_REF.exec(r.ref.slice(waitPath(name).length))])
+      .filter(([, m]) => m).map(([ref, m]) => ({ ref, at: Number(m[1]), kind: m[2], run: m[3], jobId: m[4] })).sort((a, b) => a.at - b.at);
+  };
+  const unpark = (w) => api("DELETE", `repos/${repo}/git/${w.ref}`);
+
   return {
+    waiters,
+
+    /** Hold the lane now, or park: { held } | { parked, waitingFor } | { dropped, waitingFor } (the same kind already
+     *  waits). kind: the job's role in the lane (fix, write, run); jobId: this job's id, which wake re-runs. */
+    park(name, { kind, jobId }) {
+      const tree = mainTree();
+      if (!tree) throw new Error(`lane ${name}: cannot read main`);
+      const look = () => { const r = tryOnce(name, tree); if (r?.error) throw new Error(`lane ${name}: ${r.error}`); return r; };
+      let r = look();
+      if (r === true) return { held: true };
+      const waitingFor = r?.waitingFor || {};
+      if (waiters(name).some((w) => w.kind === kind)) return { dropped: true, waitingFor };
+      const sha = api("GET", `repos/${repo}/commits/main`)?.sha;
+      const me = { ref: `${waitPath(name)}${now()}-${kind}-${holder.run}-${jobId}` };
+      const made = api("POST", `repos/${repo}/git/refs`, { ref: me.ref, sha });
+      if (made?.status) throw new Error(`lane ${name}: could not park (${made.status}: ${made.message || ""})`);
+      r = look();   // the holder may have released between the first look and the waiter ref: nobody would wake us
+      if (r === true) { unpark(me); return { held: true }; }
+      const h = r?.waitingFor || waitingFor;
+      if (h.run) onWait(h);
+      return { parked: true, waitingFor: h };
+    },
+
+    /** The oldest parked job, taken off the queue, if the lane is free or its holder has finished; else null. The
+     *  caller re-runs its job (which then parks again if another job got in first). */
+    wake(name) {
+      const cur = api("GET", path(name));
+      if (cur?.object?.sha && !stale(read(api("GET", `repos/${repo}/git/commits/${cur.object.sha}`)?.message))) return null;
+      const w = waiters(name)[0];
+      if (w) unpark(w);
+      return w || null;
+    },
+
     /** Wait for the lane and hold it. Throws after timeoutMinutes. */
     acquire(name, { timeoutMinutes = 45, pollSeconds = 30 } = {}) {
-      // The claim commit needs a tree that stays reachable: main's. (A PR job's GITHUB_SHA is GitHub's test-merge
-      // commit, which is replaced when the base moves; a claim on its tree then fails, which once looked like waiting.)
-      const mainTree = () => api("GET", `repos/${repo}/commits/main`)?.commit?.tree?.sha;
       let tree = mainTree();
       if (!tree) throw new Error(`lane ${name}: cannot read main`);
       const until = now() + timeoutMinutes * 60e3;
@@ -97,4 +145,22 @@ export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = (
       return true;
     },
   };
+}
+
+/** This job's id (wake re-runs it): the in-progress job of this run attempt on this runner. null if not found. */
+export function jobId({ api, repo, env = process.env }) {
+  const jobs = api("GET", `repos/${repo}/actions/runs/${env.GITHUB_RUN_ID}/attempts/${env.GITHUB_RUN_ATTEMPT || 1}/jobs?per_page=100`)?.jobs || [];
+  const mine = jobs.filter((j) => j.status === "in_progress" && j.runner_name === env.RUNNER_NAME);
+  return mine.length === 1 ? String(mine[0].id) : null;
+}
+
+/** Re-run the oldest parked job if the lane is free. A job can be re-run only once its whole run has ended, which a
+ *  parked job's run does within a minute or two (its later jobs skip): wait up to waitMinutes for that. */
+export function wakeNext({ api, repo, l, name, sleep, log = () => {}, now = () => Date.now(), waitMinutes = 5 }) {
+  const w = l.wake(name);
+  if (!w) return log(`lane ${name}: nobody to wake (busy, or no one parked)`) || null;
+  for (const until = now() + waitMinutes * 60e3; api("GET", `repos/${repo}/actions/runs/${w.run}`)?.status !== "completed" && now() < until;) sleep(15e3);
+  const r = api("POST", `repos/${repo}/actions/jobs/${w.jobId}/rerun`);
+  log(r?.status ? `::warning::lane ${name}: could not re-run job ${w.jobId} of run ${w.run} (${r.status}: ${r.message || ""})` : `lane ${name}: re-ran ${w.kind} (job ${w.jobId}, run ${w.run}), parked since ${new Date(w.at).toISOString()}`);
+  return w;
 }

@@ -6,7 +6,7 @@
 //   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
 //   next      --after review|ci|staging|release-pr|org-freed [--pr N]   what the journey owes next, started (journey.mjs)
-//   lane      acquire|release <org target> [--minutes M] [--no-card]  one job at a time per org, a queue that drops nobody
+//   lane      acquire|release|wake <org target> [--minutes M] [--no-card] [--park KIND]  one job at a time per org (parked jobs re-run)
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
 //   status    set <context> <state> <sha> <description> [--pr N]
@@ -56,7 +56,7 @@ import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
 import * as shipping from "../src/shipping.mjs";
-import { lane } from "../src/lane.mjs";
+import { lane, jobId, wakeNext } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
 import * as actions from "../src/actions.mjs";
@@ -70,7 +70,7 @@ import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -159,16 +159,16 @@ const commands = {
     io.gh(["issue", "comment", flag("pr"), "--body", `🔑 @${flag("login")}: Salesforce has emailed **${masked}** a link to set a password for **${flag("alias", "uat") === "uat" ? "UAT" : `the story's scratch org (${flag("alias")})`}**. Username: \`${r.username}\`. ${r.admin ? "System Administrator: build what the story needs in Setup, then tick **Bring my Setup changes into the story** (or comment /retrieve)." : r.persona.role ? `Role **${r.persona.role}**, permission sets ${r.persona.permsets.join(", ")}: you see what that user sees.` : `Every permission set in the code, no role (Standard User). If the feature is shared by role, set the story's \`Persona:\` line or UAT_TESTER_ROLE.`}`]);
     return say(r.username);
   },
-  "lane acquire": () => {
-    const { org, l } = orgLane(arg(0), { card: !has("no-card") });   // --no-card: a read-only job (the UI spec run)
-    const t0 = Date.now();
-    l.acquire(org.lock, { timeoutMinutes: Number(flag("minutes", "45")) });
+  "lane acquire": () => {   // --park <kind>: if busy, park (the runner is given back; lane-wake re-runs the job) and output parked=true
+    const { org, l } = orgLane(arg(0), { card: !has("no-card") }), t0 = Date.now(), id = flag("park") && jobId({ api: host.api, repo: host.repo });   // --no-card: a read-only job
+    const p = id ? l.park(org.lock, { kind: flag("park"), jobId: id }) : (l.acquire(org.lock, { timeoutMinutes: Number(flag("minutes", "45")) }), { held: true });
+    if (!p.held) { output({ parked: true }); return say(`${p.dropped ? `a ${flag("park")} job already waits for` : "parked until lane-wake re-runs it:"} ${org.lock} (run ${p.waitingFor.run} holds it)`); }
     const waited = Math.round((Date.now() - t0) / 1000);
     if (waited > 30) record("lane", { lane: org.lock, waitedSeconds: waited, story: org.key });
-    output({ lane: org.lock });
-    return say(org.lock);
+    output({ lane: org.lock }); return say(org.lock);
   },
-  "lane release": () => { const { org, l } = orgLane(arg(0)); l.release(org.lock); },
+  "lane release": () => { const { org, l } = orgLane(arg(0)); if (l.release(org.lock) && l.waiters(org.lock).length) host.repoDispatch("lane-freed", { target: arg(0) }); },
+  "lane wake": () => { const { org, l } = orgLane(arg(0), { card: false }); wakeNext({ api: host.api, repo: host.repo, l, name: org.lock, sleep, log }); },
 
   // ---- the gate
   "gate evaluate": async () => {
