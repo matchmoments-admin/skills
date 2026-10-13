@@ -2064,7 +2064,9 @@ test("baseline: all of production, minus the managed, the platform's own and exc
     Flow: [m("sfdc_default_ReportExport_Protection_Flow"), m("Weather_Check")],
   }, { config, orgCreated: "2026-09-20T00:00:00Z" });
   assert.deepEqual(manifest, {
-    CustomObject: ["Timesheet__c"], CustomField: ["Account.SLA__c", "Timesheet__c.Hours__c"], Layout: ["Account-Account Layout"],
+    // a custom field on a standard object is copied whatever its date (13 Oct: production's rules name Account.SLA__c);
+    // one a scratch org cannot hold is left out of the deploy by the partial retry, never the whole baseline
+    CustomObject: ["Timesheet__c"], CustomField: ["Account.SLA__c", "Incident.Old__c", "Timesheet__c.Hours__c"], Layout: ["Account-Account Layout"],
     ReportType: ["Opps_with_Accounts"], PermissionSet: ["Timesheet_User"], Flow: ["Weather_Check"],
   }, "standard objects come only through their children; standard-object children only when a person made them after the org's setup");
   assert.match(baselineMod.packageXml({ Flow: ["Weather_Check"] }), /<members>Weather_Check<\/members>\n    <name>Flow<\/name>/);
@@ -2961,15 +2963,17 @@ test("agent roles: one table for model and turns; the UI writer reads its failur
   assert.match(readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8"), /triage ui --log .* --ci ci\.md/);
 });
 
-test("the baseline drops empty shells and never-modified platform members (drift PR #192: I6, I20)", async () => {
+test("the baseline drops empty shells, and keeps members production lists with a 1970 date (drift PR #192: I6, I20)", async () => {
   const { isEmptyMetadata, manifestFor } = await import("../src/baseline.mjs");
   const x = '<?xml version="1.0" encoding="UTF-8"?>\n';
   assert.ok(isEmptyMetadata("objects/Lead/Lead.object-meta.xml", `${x}<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata"></CustomObject>`));
   assert.ok(isEmptyMetadata("matchingRules/ContactPointEmail.matchingRule-meta.xml", `${x}<MatchingRules xmlns="http://soap.sforce.com/2006/04/metadata"/>\n`));
   assert.ok(!isEmptyMetadata("objects/Lead/Lead.object-meta.xml", `${x}<CustomObject xmlns="x"><enableHistory>true</enableHistory></CustomObject>`));
   assert.ok(!isEmptyMetadata("objects/A__c/A__c.object-meta.xml", `${x}<CustomObject xmlns="x">\n  <label>A</label>\n</CustomObject>`));
-  const m = manifestFor({ MatchingRules: [{ fullName: "ContactPointEmail", lastModifiedByName: "Brendan Milton", lastModifiedDate: "1970-01-01T00:00:00.000Z" }, { fullName: "Lead", lastModifiedByName: "Brendan Milton", lastModifiedDate: "2026-09-01T00:00:00.000Z" }] }, { config: {}, orgCreated: "2026-01-01" });
-  assert.deepEqual(m, { MatchingRules: ["Lead"] });
+  // a 1970-01-01 date is how production lists custom metadata records, assignment rules and workflows (13 Oct): it is not
+  // "never modified", so it keeps them (the empty shells above are what drop ContactPointEmail's matching rules)
+  const m = manifestFor({ AssignmentRules: [{ fullName: "Case", lastModifiedByName: "Brendan Milton", lastModifiedDate: "1970-01-01T00:00:00.000Z" }], CustomMetadata: [{ fullName: "Claude_Setting.Default", lastModifiedByName: "Brendan Milton", lastModifiedDate: "1970-01-01T00:00:00.000Z" }] }, { config: {}, orgCreated: "2026-01-01" });
+  assert.deepEqual(m, { AssignmentRules: ["Case"], CustomMetadata: ["Claude_Setting.Default"] });
 });
 
 test("every pipe command is reachable: a one-word command is keyed with its trailing space (`pipe next` was unreachable on 13 Oct)", () => {
@@ -3017,6 +3021,9 @@ test("production-likeness: sharing defaults that differ, missing packages, users
   const ar = b.sanitize("baseline/Case.assignmentRules-meta.xml", "<ruleEntry><assignedTo>epic@orgfarm.example</assignedTo>\n<assignedToType>User</assignedToType></ruleEntry><ruleEntry><assignedTo>Support</assignedTo><assignedToType>Queue</assignedToType></ruleEntry>");
   assert.match(ar, /<assignedTo>__SCRATCH_ADMIN__<\/assignedTo>\n<assignedToType>User/);
   assert.match(ar, /<assignedTo>Support<\/assignedTo><assignedToType>Queue/);
+  // an escalation action carries its email template between the assignee and its type (production's Case rules)
+  const er = b.sanitize("baseline/Case.escalationRules-meta.xml", "<escalationAction>\n<assignedTo>epic@orgfarm.example</assignedTo>\n<assignedToTemplate>unfiled$public/X</assignedToTemplate>\n<assignedToType>User</assignedToType>\n</escalationAction>");
+  assert.match(er, /<assignedTo>__SCRATCH_ADMIN__<\/assignedTo>\n<assignedToTemplate>unfiled\$public\/X/);
   const cfg = JSON.parse(readFileSync(new URL("../../config/baseline.json", import.meta.url), "utf8"));
   for (const t of ["ApprovalProcess", "AssignmentRules", "AutoResponseRules", "EscalationRules"]) assert.ok(cfg.types.includes(t), t);
   // a deploy that fails on baseline components only: those leave, the rest retries
@@ -3075,4 +3082,11 @@ test("no free scratch-org slot: the story waits in line (no runner waits) and th
   const wf = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
   assert.match(wf, /steps\.org\.outputs\.waiting == 'true'[\s\S]*--add-label waiting:org/);
   assert.ok(names.LABELS["waiting:org"]);
+});
+
+test("a custom field on a standard object is copied whatever its date: production's rules name Account.SLA__c (13 Oct snapshot)", async () => {
+  const { manifestFor } = await import("../src/baseline.mjs");
+  const m = manifestFor({ CustomField: [{ fullName: "Account.SLA__c", lastModifiedByName: "Brendan Milton", lastModifiedDate: "2026-01-01T00:10:00.000Z" },
+    { fullName: "Account.Industry", lastModifiedByName: "Brendan Milton", lastModifiedDate: "2026-01-01T00:10:00.000Z" }] }, { config: {}, orgCreated: "2026-01-01T00:00:00Z" });
+  assert.deepEqual(m, { CustomField: ["Account.SLA__c"] }, "a standard field unchanged since the org was made still stays out");
 });

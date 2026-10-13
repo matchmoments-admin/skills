@@ -36,8 +36,9 @@ export function manifestFor(listings, { config, orgCreated }) {
       if (m.namespacePrefix || ["installed", "released", "beta", "deleted", "deprecated"].includes(m.manageableState)) return false;
       if (type === "CustomObject" && !CUSTOM_OBJECT.test(m.fullName)) return false;
       if (/^(salesforce|automated process|platform integration)/i.test(m.lastModifiedByName || "")) return false;   // the platform's own (features, Dev Hub objects)
-      if (String(m.lastModifiedDate || "").startsWith("1970-01-01")) return false;   // never modified: the platform's own (ContactPointEmail matching rules, I6)
-      const onStandard = CHILD_TYPES.includes(type) && !CUSTOM_OBJECT.test(String(m.fullName).split(".")[0]);
+      // a custom field (or custom child) on a standard object is never the platform's: someone, or the org's template, made
+      // it, and production's rules can name it (its Case assignment and escalation rules name Account.SLA__c, 13 Oct)
+      const onStandard = CHILD_TYPES.includes(type) && !CUSTOM_OBJECT.test(String(m.fullName).split(".")[0]) && !/__c$/.test(String(m.fullName));
       if ((config.customisedOnly || []).includes(type) || onStandard) {
         if (/salesforce/i.test(m.lastModifiedByName || "") || new Date(m.lastModifiedDate || 0).getTime() <= created) return false;
       }
@@ -72,7 +73,8 @@ export function sanitize(path, xml) {
   if (/\.workflow-meta\.xml$/.test(path)) s = s.replace(/<integrationUser>[^<]*<\/integrationUser>/g, "<integrationUser>__SCRATCH_ADMIN__</integrationUser>");
   if (USER_REFS.test(path)) {
     s = s.replace(/<approver>\s*<name>[^<]*<\/name>\s*<type>user<\/type>\s*<\/approver>/g, "<approver>\n                <name>__SCRATCH_ADMIN__</name>\n                <type>user</type>\n            </approver>")
-      .replace(/<assignedTo>[^<]*<\/assignedTo>(\s*<assignedToType>User<\/assignedToType>)/g, "<assignedTo>__SCRATCH_ADMIN__</assignedTo>$1")
+      // a user assignee, whatever sits between it and its type (an escalation action has an email template there)
+      .replace(/<(ruleEntry|escalationAction)>[\s\S]*?<\/\1>/g, (block) => (/<assignedToType>User<\/assignedToType>/.test(block) ? block.replace(/<assignedTo>[^<]*<\/assignedTo>/g, "<assignedTo>__SCRATCH_ADMIN__</assignedTo>") : block))
       .replace(/<notifyTo>[^<]*<\/notifyTo>/g, "<notifyTo>__SCRATCH_ADMIN__</notifyTo>")
       .replace(/<allowedSubmitters>\s*<submitter>[^<]*<\/submitter>\s*<type>user<\/type>\s*<\/allowedSubmitters>/g, "<allowedSubmitters>\n        <submitter>__SCRATCH_ADMIN__</submitter>\n        <type>user</type>\n    </allowedSubmitters>");
   }
