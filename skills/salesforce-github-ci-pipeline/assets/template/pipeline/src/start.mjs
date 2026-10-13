@@ -46,6 +46,16 @@ export function ciCarry({ ref, base, git, host }) {
   return carriedFrom(CARRY.apex, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed, changedSince });
 }
 
+/** The staging regression an earlier release-branch commit passed, if nothing it tests changed since (gate.CARRY
+ *  staging, #237): the commit that carries it, or null. Same shape as ciCarry, on the release branch's own history. */
+export function stagingCarry({ git, host }) {
+  const shas = (git(["rev-list", "--max-count=15", "HEAD~1"], { allowFail: true }) || "").split("\n").filter(Boolean);
+  const latest = (runs) => [...runs].sort((a, b) => String(a.started_at).localeCompare(String(b.started_at))).pop();
+  const passed = shas.filter((sha) => latest(host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(CHECKS.staging)}`)?.check_runs || [])?.conclusion === "success");
+  const changedSince = (sha) => { const d = git(["diff", "--name-only", sha, "HEAD"], { allowFail: true }); return d === null ? null : d.split("\n").filter(Boolean); };
+  return carriedFrom(CARRY.staging, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed, changedSince });
+}
+
 /**
  * May this job start? kind: review | fix | ui-test. facts: { ai, branch, labels: [name], rounds: { n, limit } | null,
  * changed: [file] | null (against the base; null if unknown), pushed: [file] | null (this push only, for a review on

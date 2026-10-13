@@ -1395,7 +1395,7 @@ test("test selection: a field, validation rule or permission set runs the tests 
   assert.deepEqual(tests.selectTests({ changed: [files[0]], files, read }).apex, ["AccountTest"]);
   assert.deepEqual(tests.selectTests({ changed: [files[3]], files, read }).apex, ["CaseTest"]);
   assert.equal(tests.selectTests({ changed: ["force-app/main/default/objects/Lead/fields/X__c.field-meta.xml"], files, read }).mode, "all", "nothing names Lead: all");
-  assert.equal(tests.selectTests({ changed: ["force-app/main/default/layouts/Account-Account Layout.layout-meta.xml"], files, read }).mode, "all");
+  assert.equal(tests.selectTests({ changed: ["force-app/main/default/layouts/Account-Account Layout.layout-meta.xml"], files, read }).mode, "none", "no test reads a layout (#234)");
 });
 
 test("check runs are updated when their title changes, at most once a minute; the result always", () => {
@@ -3225,4 +3225,31 @@ test("#230: Claude's UI test starts only once CI's org job passed on the head; C
   assert.deepEqual(journey.nextSteps("ci", st_({ route: "release", review: { state: "success" } }), { ai }), []);
   const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
   assert.match(ci.split(/\n  nudge:\n/)[1], /pipe\.mjs next --after ci --pr/);
+});
+
+test("#234: layouts, Lightning pages, compact layouts and list views select no tests; a field next to them still selects its object's", () => {
+  const T = "force-app/main/default/classes/SiteVisitTest.cls", src = "@IsTest private class SiteVisitTest { Site_Visit__c v; Account a; }";
+  const pick = (changed) => tests.selectTests({ changed, files: [T], read: () => src });
+  const seen = ["force-app/main/default/flexipages/Account_Record_Page.flexipage-meta.xml", "force-app/main/default/layouts/Site_Visit__c-Site Visit Layout.layout-meta.xml",
+    "force-app/main/default/objects/Site_Visit__c/compactLayouts/Main.compactLayout-meta.xml", "force-app/main/default/objects/Site_Visit__c/listViews/All.listView-meta.xml"];
+  assert.equal(pick(seen).mode, "none");
+  assert.deepEqual(pick([...seen, "force-app/main/default/objects/Site_Visit__c/fields/Score__c.field-meta.xml"]).apex, ["SiteVisitTest"]);
+  assert.equal(pick(["force-app/main/default/quickActions/Account.New.quickAction-meta.xml"]).mode, "all", "a quick action can carry field defaults: unchanged");
+});
+
+test("#237: a back-merge that changes nothing staging tests keeps the regression an earlier release commit passed", () => {
+  // the files of sprint 2026-w51's back-merges (#226 and after): pipeline work only
+  const backmerge = ["pipeline/src/improve.mjs", "pipeline/src/journey.mjs", "pipeline/bin/pipe.mjs", ".github/workflows/improve.yml", ".github/workflows/ci.yml", "GLOSSARY.md", "docs/handbook.md", "pipeline/test/pipeline.test.mjs", ".claude/skills/x/SKILL.md"];
+  assert.equal(gate.carries("no-staging-input", "a", "h", backmerge), true);
+  for (const f of ["force-app/main/default/classes/X.cls", "e2e/story-218.spec.ts", "data/seed/accounts.json", "config/scratch-dev.json", "pipeline/src/org.mjs", "pipeline/src/tests.mjs", ".github/actions/sf-auth/action.yml", ".github/workflows/staging-deploy.yml", "package-lock.json"])
+    assert.equal(gate.carries("no-staging-input", "a", "h", [...backmerge, f]), false, f);
+  const git = (a) => (a[0] === "rev-list" ? "p1\np2" : a[0] === "rev-parse" ? "h" : a[0] === "diff" ? (a[1] === "p1" ? backmerge.join("\n") : "") : null);
+  const host = { repo: "o/r", api: (m, p) => ({ check_runs: p.includes("/p1/") ? [{ conclusion: "success", started_at: "1" }] : [] }) };
+  assert.equal(start.stagingCarry({ git, host }), "p1");
+  assert.equal(start.stagingCarry({ git: (a) => (a[0] === "diff" ? "force-app/x.cls" : git(a)), host }), null, "Salesforce source changed: run it");
+  const failedSince = { repo: "o/r", api: (m, p) => ({ check_runs: p.includes("/p1/") ? [{ conclusion: "success", started_at: "1" }, { conclusion: "failure", started_at: "2" }] : [] }) };
+  assert.equal(start.stagingCarry({ git, host: failedSince }), null, "the newest run on that commit is the truth");
+  const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  assert.match(wf, /path: candidate, fetch-depth: 20/);
+  assert.match(wf, /pipe\.mjs ci staging-carry/);
 });

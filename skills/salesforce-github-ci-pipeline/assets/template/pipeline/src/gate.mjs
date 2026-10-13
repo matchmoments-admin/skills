@@ -122,10 +122,15 @@ export const checkPassed = (conclusion) => checkState(conclusion) === "passed";
  *            pipeline file either: a commit whose workflows were the branch's own could have faked that pass
  * files: what changed from that commit to the head (null if unknown, which never carries). Pure.
  */
-export const CARRY = { [STATUS.review]: "specs", [STATUS.signoff]: "specs", [STATUS.ui]: "exact", [STATUS.uat]: "exact", [STATUS.approval]: "exact", apex: "no-sf" };
+export const CARRY = { [STATUS.review]: "specs", [STATUS.signoff]: "specs", [STATUS.ui]: "exact", [STATUS.uat]: "exact", [STATUS.approval]: "exact", apex: "no-sf", staging: "no-staging-input" };
+/** What the staging regression tests: Salesforce source, specs, seed and org config, and the code that builds and runs
+ *  staging. A release-branch commit that changes none of these (a back-merge of other pipeline work) keeps the
+ *  regression an earlier commit passed (#237). */
+export const STAGING_INPUTS = /^(force-app\/|e2e\/|data\/|config\/|baseline\/|sfdx-project\.json$|package(-lock)?\.json$|playwright\.config\.ts$|\.github\/actions\/|\.github\/workflows\/staging-deploy\.yml$|pipeline\/src\/(org|tests|evidence|baseline|io)\.mjs$)/;
 export function carries(rule, sha, head, files) {
   if (sha === head) return true;
   if (rule === "exact" || !Array.isArray(files)) return false;
+  if (rule === "no-staging-input") return !files.some((f) => STAGING_INPUTS.test(f));
   return rule === "no-sf" ? !files.some((f) => f.startsWith("force-app/")) && !touchesPipeline(files).length : files.every((f) => f.startsWith("e2e/"));
 }
 /** True if every file changed between a commit and the head is under e2e/ (the UI tester's spec). */

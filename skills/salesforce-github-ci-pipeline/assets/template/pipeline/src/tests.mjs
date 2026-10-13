@@ -115,6 +115,10 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
       if (obj) naming(obj).forEach((t) => apex.add(t));
     } else if (isFlowTest(p)) {
       flows.add(`${flowOfTest(read(p))}.${base(p).replace(".flowtest-meta.xml", "")}`);
+    } else if (/\/(tabs|applications|layouts|flexipages)\/|\/objects\/[^/]+\/(compactLayouts|listViews)\//.test(p)) {
+      // what a user sees and navigates: no Apex or Flow test reads a tab, an app, a layout, a Lightning page, a compact
+      // layout or a list view (the UI test and people see them), so they select none (story #218, #223, #234)
+      nav++;
     } else if (objectOf(p)) {
       // a field, validation rule, record type... (or the object itself) affects the tests that use its object
       const hit = naming(objectOf(p));
@@ -123,9 +127,6 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
     } else if (/\/(dashboards|reports)\//.test(p)) {
       // a dashboard, report or their folder: only a test that names it reads it (SeeAllData); people and the UI test see it
       naming(base(p).replace(/\.[a-zA-Z]+-meta\.xml$/, "")).forEach((t) => apex.add(t));
-    } else if (/\/(tabs|applications)\//.test(p)) {
-      // navigation: no Apex or Flow test reads a tab or an app (the UI test and people see it), so it selects none (story #218)
-      nav++;
     } else if (isPermissionSet(p)) {
       const hit = naming(base(p).replace(".permissionset-meta.xml", ""));
       if (!hit.length) return all(`no test names permission set ${base(p)}`);
@@ -134,7 +135,7 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
       return all(`${base(p)} is metadata that can affect anything`);
     }
   }
-  if (!apex.size && !flows.size && nav === changed.length) return { mode: "none", apex: [], flows: [], why: "only tabs or apps changed: no test reads them" };
+  if (!apex.size && !flows.size && nav === changed.length) return { mode: "none", apex: [], flows: [], why: "only what users see changed (tabs, apps, layouts, pages): no test reads it" };
   if (!apex.size && !flows.size) return all("nothing specific found");
   for (const t of tests) if (/@IsTest\s*\([^)]*\bcritical\s*=\s*true/i.test(t.src)) apex.add(t.name);   // as RunRelevantTests: always
   return { mode: "relevant", apex: [...apex].sort(), flows: [...flows].sort(), why: `${changed.length} changed file(s)` };

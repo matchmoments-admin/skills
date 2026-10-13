@@ -41,7 +41,7 @@ jobs:
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "sprint:${{ steps.ctx.outputs.SPRINT }}"
       - uses: actions/checkout@v4
         if: steps.current.outputs.superseded != 'true'
-        with: { ref: "${{ github.sha }}", path: candidate, persist-credentials: false }   # exactly the commit this run is for
+        with: { ref: "${{ github.sha }}", path: candidate, fetch-depth: 20, persist-credentials: false }   # exactly the commit this run is for (and the ones before it: #237)
       - name: Already tested? (a re-run of a commit that already passed)
         id: fresh
         if: steps.current.outputs.superseded != 'true'
@@ -50,6 +50,8 @@ jobs:
           SHA=$(git rev-parse HEAD)
           N=$(gh api "repos/$GH_REPO/commits/$SHA/check-runs?check_name=staging%20regression" --jq '[.check_runs[] | select(.conclusion=="success")] | length')
           if [ "$N" != "0" ]; then echo "done=true" >> "$GITHUB_OUTPUT"; echo "${SHA:0:7} already passed the staging regression"; fi
+          # a back-merge that changes nothing the regression tests keeps the pass of the commit before it (#237)
+          if [ "$N" = "0" ]; then node ../.pipeline/pipeline/bin/pipe.mjs ci staging-carry | tee carry.txt; grep -q "passed on" carry.txt && echo "done=true" >> "$GITHUB_OUTPUT" || true; fi
       - uses: ./.pipeline/.github/actions/sf-auth
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         with:

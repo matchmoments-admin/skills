@@ -89,10 +89,7 @@ const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 /** Write step outputs when running in Actions (multi-line safe). */
 function output(values) {
   if (!process.env.GITHUB_OUTPUT) return;
-  for (const [k, v] of Object.entries(values)) {
-    const s = String(v ?? "");
-    appendFileSync(process.env.GITHUB_OUTPUT, s.includes("\n") ? `${k}<<__PIPE__\n${s}\n__PIPE__\n` : `${k}=${s}\n`);
-  }
+  for (const [k, v] of Object.entries(values)) { const s = String(v ?? ""); appendFileSync(process.env.GITHUB_OUTPUT, s.includes("\n") ? `${k}<<__PIPE__\n${s}\n__PIPE__\n` : `${k}=${s}\n`); }
 }
 const summary = (md) => { if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + "\n"); };
 
@@ -260,6 +257,7 @@ const commands = {
         regate: () => shipping.regate(io, host, log) });
     return say(`follow-ups: ${steps.join(" ") || "none"}`);
   },
+  "ci staging-carry": () => { const c = start.stagingCarry({ git: io.git, host }); output({ carried: c || "" }); return say(c ? `the staging regression passed on ${c.slice(0, 7)} and nothing it tests changed since` : "no earlier pass carries: run it"); },
   "ci plan": () => {   // which CI jobs need a runner, from what changed (a failed diff assumes everything)
     const base = flag("base", "main");
     const out = io.git(["diff", "--name-only", `origin/${base}...HEAD`], { allowFail: true });
