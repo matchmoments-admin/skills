@@ -3172,3 +3172,20 @@ test("improve reads a job log through either gh (newer gh refuses colour codes w
   assert.match(posted[0].body, /RemoteOrgSignupFailed: the org shape version is outdated/);
   assert.doesNotMatch(posted[0].body, /\u001b/, "no colour codes in a ticket");
 });
+
+test("story #218: a Flow that reads its parent is covered by a declared Apex test; a Flow test error says why; tabs and apps select no tests", () => {
+  const F = "force-app/main/default/flows/Site_Visit_Negative_Follow_Up.flow-meta.xml", T = "force-app/main/default/classes/SiteVisitTest.cls";
+  const flow = "<Flow><start><object>Site_Visit__c</object><triggerType>RecordAfterSave</triggerType></start><status>Active</status></Flow>";
+  const declared = "@IsTest\nprivate class SiteVisitTest {\n  // Flow test: Site_Visit_Negative_Follow_Up: a Flow test cannot create the Account it reads\n  @IsTest static void negative() { insert new Site_Visit__c(); }\n}";
+  const gaps = (cls) => tests.flowTestGaps({ changed: [F], files: [F, T], read: (p) => (p === F ? flow : cls) });
+  assert.deepEqual(gaps(declared), [], "declared, and names the Flow's object");
+  assert.deepEqual(gaps(declared.replace("Site_Visit__c()", "Account()")), ["Site_Visit_Negative_Follow_Up"], "must insert the Flow's object");
+  assert.deepEqual(gaps(declared.replace(": a Flow test cannot create the Account it reads", "")), ["Site_Visit_Negative_Follow_Up"], "must say why");
+  assert.deepEqual(gaps(declared.replaceAll("@IsTest", "")), ["Site_Visit_Negative_Follow_Up"], "a test class, not any class");
+  const nav = ["force-app/main/default/tabs/Site_Visit__c.tab-meta.xml", "force-app/main/default/applications/standard__Sales.app-meta.xml"];
+  assert.equal(tests.selectTests({ changed: nav, files: [T], read: () => declared }).mode, "none", "navigation alone runs nothing");
+  const r = tests.selectTests({ changed: [...nav, "force-app/main/default/objects/Site_Visit__c/fields/Score__c.field-meta.xml"], files: [T], read: () => declared });
+  assert.deepEqual([r.mode, r.apex], ["relevant", ["SiteVisitTest"]], "a tab no longer makes it all tests");
+  const src = readFileSync(new URL("../src/tests.mjs", import.meta.url), "utf8");
+  assert.match(src, /Error, no message from Salesforce: the Flow faulted before reaching an assertion/);
+});

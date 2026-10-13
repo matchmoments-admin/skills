@@ -28,14 +28,28 @@ const isActive = (xml) => /<status>Active<\/status>/.test(xml);
 /**
  * Flow parity with Apex's "every class is tested": a changed, active, record-triggered Flow needs a Flow test
  * (flowtests/, naming it in <flowApiName>), in the change or already in the repo. Screen, scheduled and inactive Flows
- * are not asked (Flow tests cannot run them). exceptions: Flow names (config/test-exceptions.json, a reviewed pipeline
- * change). Returns the Flow names without a test. Pure.
+ * are not asked (Flow tests cannot run them). A Flow that reads or needs related records (a Flow test can set only the
+ * triggering record's fields, never create its Account) may instead be covered by an Apex test that says so:
+ * `// Flow test: <Flow name>: <why a Flow test cannot>` in a test class that names the Flow's object (story #218).
+ * exceptions: Flow names (config/test-exceptions.json, a reviewed pipeline change). Returns the Flow names without a
+ * test. Pure.
  */
 export function flowTestGaps({ changed, files, read }, exceptions = []) {
   const tested = new Set(files.filter(isFlowTest).map((p) => flowOfTest(read(p))));
+  const apexTests = files.filter((p) => p.endsWith(".cls")).map((p) => read(p)).filter((src) => /@IsTest/i.test(src));
+  const apexCovers = (f) => {
+    const object = (f.xml.match(/<start>[\s\S]*?<object>([^<]+)<\/object>/) || [])[1];
+    const says = new RegExp(`//\\s*Flow test:\\s*${f.name}\\b\\s*:\\s*\\S`);
+    return apexTests.some((src) => says.test(src) && (!object || new RegExp(`\\b${object}\\b`).test(src)));
+  };
   return changed.filter(isFlow).map((p) => ({ name: base(p).replace(".flow-meta.xml", ""), xml: read(p) }))
-    .filter((f) => isRecordTriggered(f.xml) && isActive(f.xml) && !tested.has(f.name) && !exceptions.includes(f.name)).map((f) => f.name);
+    .filter((f) => isRecordTriggered(f.xml) && isActive(f.xml) && !tested.has(f.name) && !exceptions.includes(f.name) && !apexCovers(f)).map((f) => f.name);
 }
+
+/** Salesforce reports a Flow test that faulted before its assertions as Error with no message (story #218): say what it means. */
+const flowErrorWhy = (t) => (/^error/i.test(t.Outcome || t.outcome || "")
+  ? "Error, no message from Salesforce: the Flow faulted before reaching an assertion. Usually it reads or writes a record a Flow test cannot create (a Flow test sets only the triggering record's fields): cover that path with an Apex test that says `// Flow test: <Flow>: <why>` instead"
+  : "");
 
 /** The active record-triggered Flows among changed files (the ones Flow tests and Flow coverage are about). Pure. */
 export const recordTriggeredFlows = (changed, read) => changed.filter(isFlow).filter((p) => { const x = read(p); return isRecordTriggered(x) && isActive(x); })
@@ -78,6 +92,7 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
 
   const naming = (word) => tests.filter((t) => new RegExp(`\\b${word}\\b`).test(t.src)).map((t) => t.name);
   const apex = new Set(), flows = new Set();
+  let nav = 0;
 
   for (const p of changed) {
     if (isApex(p)) {
@@ -108,6 +123,9 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
     } else if (/\/(dashboards|reports)\//.test(p)) {
       // a dashboard, report or their folder: only a test that names it reads it (SeeAllData); people and the UI test see it
       naming(base(p).replace(/\.[a-zA-Z]+-meta\.xml$/, "")).forEach((t) => apex.add(t));
+    } else if (/\/(tabs|applications)\//.test(p)) {
+      // navigation: no Apex or Flow test reads a tab or an app (the UI test and people see it), so it selects none (story #218)
+      nav++;
     } else if (isPermissionSet(p)) {
       const hit = naming(base(p).replace(".permissionset-meta.xml", ""));
       if (!hit.length) return all(`no test names permission set ${base(p)}`);
@@ -116,6 +134,7 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
       return all(`${base(p)} is metadata that can affect anything`);
     }
   }
+  if (!apex.size && !flows.size && nav === changed.length) return { mode: "none", apex: [], flows: [], why: "only tabs or apps changed: no test reads them" };
   if (!apex.size && !flows.size) return all("nothing specific found");
   for (const t of tests) if (/@IsTest\s*\([^)]*\bcritical\s*=\s*true/i.test(t.src)) apex.add(t.name);   // as RunRelevantTests: always
   return { mode: "relevant", apex: [...apex].sort(), flows: [...flows].sort(), why: `${changed.length} changed file(s)` };
@@ -262,7 +281,7 @@ export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs
         const tests = r.tests || [];
         Object.assign(state.flows, { ran: tests.length, passed: tests.filter((t) => /^pass/i.test(t.Outcome || t.outcome)).length,
           failed: tests.filter((t) => !/^pass/i.test(t.Outcome || t.outcome)).length,
-          failures: tests.filter((t) => !/^pass/i.test(t.Outcome || t.outcome)).map((t) => ({ test: t.FullName || t.fullName, message: t.Message || t.message || "" })) });
+          failures: tests.filter((t) => !/^pass/i.test(t.Outcome || t.outcome)).map((t) => ({ test: t.FullName || t.fullName, message: t.Message || t.message || flowErrorWhy(t) })) });
         break;
       }
       sleep(pollMs);

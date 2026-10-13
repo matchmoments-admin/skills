@@ -52,6 +52,11 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
 - Every class: positive, negative, permission (refused without the permission set) and bulk (200 records) cases.
 - Mocks: `Test.setMock` for callouts, `Test.loadData` or small factories for data; never mock the database.
 - Flows: a Flow test per path whose triggering record meets the entry criteria; "the Flow does not run" is an Apex test.
+  **A Flow test sets only the triggering record's fields: it cannot create or point at related records.** A Flow that
+  reads or writes another record it needs (the parent Account, its owner) faults in a Flow test ("Error", no message).
+  Cover it with an Apex test instead: in the test class that inserts the Flow's object, add
+  `// Flow test: <Flow API name>: <why a Flow test cannot>`, and assert what the Flow did (the Task, its owner, its
+  date). Do not keep a Flow test that cannot pass, and never hard-code a record id in one (story #218).
   CI fails a change to an active record-triggered Flow with no Flow test naming it (`pipe tests flow-gaps`, as every
   Apex class needs tests; exceptions in `config/test-exceptions.json`). Flow coverage from the Apex tests is reported
   with the test results (`FLOW_COVERAGE_MIN` makes it a minimum). Flow tests never run in a deploy: production's

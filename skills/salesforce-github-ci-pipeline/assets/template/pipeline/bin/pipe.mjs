@@ -408,7 +408,7 @@ const commands = {
     const src = io.sourceFiles({ base: flag("base") });
     const exFile = join(PIPELINE_ROOT, "config/test-exceptions.json");
     const gaps = tests.flowTestGaps(src, existsSync(exFile) ? JSON.parse(readFileSync(exFile, "utf8")).flowsWithoutTests || [] : []);
-    for (const g of gaps) log(`::error title=Flow without a Flow test::${g} is a record-triggered Flow with no Flow test (force-app/main/default/flowtests/, <flowApiName>${g}</flowApiName>). Add one, or an exception in config/test-exceptions.json with a reason.`);
+    for (const g of gaps) log(`::error title=Flow without a Flow test::${g} is a record-triggered Flow with no Flow test (force-app/main/default/flowtests/, <flowApiName>${g}</flowApiName>). Add one; if a Flow test cannot set up its records (it reads the Account), an Apex test that names its object and says \`// Flow test: ${g}: <why>\`.`);
     if (gaps.length) throw new Error(`${gaps.length} record-triggered Flow(s) without a Flow test: ${gaps.join(", ")}`);
     return say("every changed record-triggered Flow has a Flow test");
   },
