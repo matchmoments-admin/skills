@@ -3157,3 +3157,18 @@ test("a failed pipeline run becomes an improvement ticket; the story's own failu
   assert.deepEqual(listed.sort(), all.sort(), "every pipeline workflow is watched (a new one too)");
   assert.ok(names.LABELS["pipeline-improvement"] && names.LABELS.transient);
 });
+
+test("improve reads a job log through either gh (newer gh refuses colour codes without --allow-escape-sequences)", async () => {
+  const improve = await import("../src/improve.mjs");
+  const calls = [];
+  const log = "\u001b[36;1m##[group]Run sf org create scratch\u001b[0m\n##[endgroup]\n##[error]RemoteOrgSignupFailed: the org shape version is outdated\n##[error]Process completed with exit code 1.";
+  const io = { run: (c, a) => { calls.push(a); if (a.includes("--allow-escape-sequences")) throw new Error("unknown flag"); return log; },
+    ghPages: () => [] };
+  const posted = [];
+  const host = { repo: "o/r", api: (m, p, b) => (p.endsWith("/jobs?per_page=100") ? { jobs: [{ id: 5, name: "build", conclusion: "failure", steps: [{ name: "Build", conclusion: "failure" }] }] }
+    : p.endsWith("/issues") ? (posted.push(b), { number: 7 }) : { name: "snapshot-refresh", conclusion: "failure", html_url: "u", head_branch: "main" }) };
+  assert.match(improve.report(io, host, 1), /opened #7/);
+  assert.equal(calls.length, 2, "the flag first, then without it");
+  assert.match(posted[0].body, /RemoteOrgSignupFailed: the org shape version is outdated/);
+  assert.doesNotMatch(posted[0].body, /\u001b/, "no colour codes in a ticket");
+});

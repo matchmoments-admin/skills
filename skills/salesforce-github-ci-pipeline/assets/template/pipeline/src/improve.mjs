@@ -95,7 +95,7 @@ export function ticket(fault, existing = null) {
  *  section with an error: a continue-on-error step's error comes before it, and the `if: failure()` steps after it
  *  (the card saying CI failed) do not error. */
 export function stepOutput(log) {
-  const lines = String(log).split("\n");
+  const lines = String(log).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").split("\n");
   const starts = lines.flatMap((l, i) => (/##\[group\]Run /.test(l) ? [i] : []));
   const sections = starts.map((st, n) => lines.slice(st, starts[n + 1] ?? lines.length));
   const section = [...sections].reverse().find((sec) => sec.some((l) => /##\[error\]/.test(l)));
@@ -122,7 +122,17 @@ export function faultOf(run, jobs, logOf) {
 export function report(io, host, runId) {
   const run = host.api("GET", `repos/${host.repo}/actions/runs/${runId}`);
   const jobs = host.api("GET", `repos/${host.repo}/actions/runs/${runId}/jobs?per_page=100`).jobs || [];
-  const fault = faultOf(run, jobs, (id) => io.run("gh", ["api", `repos/${host.repo}/actions/jobs/${id}/logs`], { quiet: true, allowFail: true }));
+  let unread = null;
+  const fault = faultOf(run, jobs, (id) => {
+    // job logs carry colour codes, and newer gh refuses to print those without --allow-escape-sequences (older gh has
+    // no such flag): try both. The codes are stripped before anything reads the text.
+    const path = `repos/${host.repo}/actions/jobs/${id}/logs`;
+    for (const extra of [["--allow-escape-sequences"], []]) {
+      try { const out = io.run("gh", ["api", ...extra, path], { quiet: true }); unread = null; return out; } catch (e) { unread = e.message; }
+    }
+    return "";
+  });
+  if (unread && fault) { fault.logTail = `(the job's log could not be read: ${unread})`; console.log(`::warning::${fault.logTail}`); }
   if (!fault) return `run ${runId}: no failed job`;
   if (fault.whose !== "pipeline") return `run ${runId}: ${fault.step} failed, the ${fault.whose === "story" ? "story's own fault (no ticket)" : "run was not a failure"}`;
   const sig = signature(fault);

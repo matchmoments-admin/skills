@@ -38,6 +38,7 @@ jobs:
       RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
     steps:
       - uses: actions/checkout@v4
-        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+        # a workflow_run event always runs main (github.sha is main's head); a hand-run replay runs the ref it was started on
+        with: { ref: "${{ github.sha }}", sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       - name: Open or update the improvement ticket
         run: node pipeline/bin/pipe.mjs improve --run "$RUN_ID"
