@@ -18,9 +18,9 @@ export default defineConfig({
   // owner) took 78s on staging in the morning and over 90s under the afternoon's load (#249). Steps keep their own timeouts.
   timeout: 180_000,
   retries: 1,
-  // A UI test mostly waits on Salesforce, not the runner's CPU: 3 at once on a 2-core runner. One worker ran the staging
-  // regression's 35 tests in 18 minutes.
-  workers: process.env.CI ? 3 : undefined,
+  // One at a time on a runner: a Lightning page is CPU-heavy in the browser, and 3 at once on a 2-core runner timed out
+  // across many specs (#268). Faster means more runners (sharding), not more browsers on one.
+  workers: process.env.CI ? 1 : undefined,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     headless: true,
