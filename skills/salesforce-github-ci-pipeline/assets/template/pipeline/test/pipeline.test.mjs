@@ -3253,6 +3253,10 @@ test("a failed pipeline run becomes an improvement ticket; the story's own failu
   assert.equal(f.error, "NamedOrgNotFound: No authorization information found for issue-208", "\"Process completed\" says nothing");
   assert.equal(f.whose, "pipeline", "the script names force-app; the output does not: the pipeline's");
   assert.equal(improve.faultOf({ name: "gate", conclusion: "startup_failure", html_url: "u" }, [], () => "").whose, "pipeline", "a broken workflow file");
+  // the API listed no failed step (partial steps, null conclusions): the errored section, not the post-job warnings
+  const partial = improve.faultOf({ name: "staging-deploy", conclusion: "failure", html_url: "u" },
+    [{ id: 3, name: "staging regression", conclusion: "failure", steps: [{ name: "Set up job", conclusion: null }] }], () => log + "\n##[warning]Node.js 20 is deprecated.");
+  assert.equal(partial.error, "NamedOrgNotFound: No authorization information found for issue-208", "#265 was titled with a Node.js warning");
   assert.equal(c("The story's scratch org", "##[error]No free scratch org slot (3 active is the Dev Hub's limit)."), "ignore", "waiting in line, by design");
   assert.equal(c("Decide (and the card)", "file:///x/pipeline/src/gate.mjs:12\n    at gather (file:///x/pipeline/src/gate.mjs:40:9)"), "pipeline", "a crash in a story-fault step");
   const loud = improve.ticket({ ...fault, error: "@someone [click](https://evil) `x`", logTail: "@someone\n" + "y".repeat(5000) });

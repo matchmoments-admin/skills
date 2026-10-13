@@ -28,10 +28,12 @@ export default defineConfig({
     video: "retain-on-failure",
     screenshot: "only-on-failure"
   },
+  // the persona chain first: it is the longest (11 tests, about 13 minutes), so it starts at once beside the parallel
+  // tests instead of after them (listed second, it ran last: the regression took 19 minutes on 3 workers)
   projects: [
-    { name: "parallel", testIgnore: personaFiles },
     ...(persona.length
       ? [{ name: "persona", testMatch: personaFiles, workers: 1 }]
-      : [])
+      : []),
+    { name: "parallel", testIgnore: personaFiles }
   ]
 });

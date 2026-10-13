@@ -70,6 +70,10 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   (`page.getByRole("tab", { name: "Details" })`) before asserting a field's value; match a field's value exactly
   (`toHaveText`), since a label and a help text can both contain it (story #193: 31 agent minutes on both). When a run
   fails, read its failure screenshot (`test-results/<test>/test-failed-1.png`) before changing the spec.
+- UI specs, a toast: Salesforce repeats a toast's text in a screen-reader announcement (`role="status"`, starting
+  "Success notification."), so a loose `getByText(/was created/)` can match both and fail in strict mode under load.
+  Anchor it to the toast's whole text: `getByText(/^Account ".*" was created\.$/)`. The staging regression runs specs
+  in parallel, so a page is slower there than in the story's run.
 - UI specs: use `e2e/support/record.ts` for record pages (create a record, open it on Details, edit a field, choose a
   picklist value, save, read a field's value, a save error); a story with a `Persona:` is tested as that user
   (`loginAs`), and the spec check fails one that never logs in as it.

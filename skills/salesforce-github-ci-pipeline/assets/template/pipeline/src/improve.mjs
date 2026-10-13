@@ -115,7 +115,9 @@ export function faultOf(run, jobs, logOf) {
     ? { ...base, job: "(none)", step: "(the workflow file)", logTail: "", error: "the workflow did not start: GitHub could not run its file", whose: "pipeline" } : null;
   const failed = (job.steps || []).find((s) => s.conclusion === "failure");
   const step = failed?.name || "(the job)";
-  const logTail = failed ? stepOutput(logOf(job.id) || "") : String(logOf(job.id) || "").split("\n").slice(-40).join("\n");
+  // no failed step listed (the API can return a job's steps partly, with null conclusions: staging, 13 Oct): the log's
+  // own errored section still says what failed, where the job's last lines are post-job warnings (#265's title)
+  const logTail = stepOutput(logOf(job.id) || "");
   return { ...base, job: job.name, step, logTail, error: firstError(logTail), whose: classify({ conclusion: run.conclusion, step, logTail }) };
 }
 
