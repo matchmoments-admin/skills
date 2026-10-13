@@ -2,6 +2,7 @@
 //   summarize(facts) is pure (tested); gather(io, {days}) reads PRs, releases and workflow runs.
 import { route } from "./gate.mjs";
 import { fixRounds } from "./verdict.mjs";
+import { loop, LABEL as IMPROVEMENT } from "./improve.mjs";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -146,5 +147,13 @@ export function report(io, { days = 28, events }) {
   const covered = log.some((e) => e.kind === "release");   // the log has seen a release: its DORA is the one to trust
   const gh = summarize(gather(io, { days, transcripts: !log.some((e) => e.kind === "agent"), prDetails: !covered }));
   const older = toMarkdown(gh, { dora: !covered }).replace(/^## Delivery metrics, last \d+ days/, covered ? "## Workflow health (GitHub's run history)" : "## From GitHub's history (PRs, releases, workflow runs)");
-  return [events.toMarkdown(events.summarize(log, { days })), "", older].join("\n");
+  return [events.toMarkdown(events.summarize(log, { days })), "", improvements(io, days), "", older].join("\n");
+}
+
+/** The pipeline improving itself: tickets its failures opened (improve.mjs), and how fast they were fixed. */
+export function improvements(io, days = 28) {
+  let issues = [];
+  try { issues = io.ghPages?.(`repos/${process.env.GH_REPO || process.env.GITHUB_REPOSITORY}/issues?state=all&labels=${IMPROVEMENT}&per_page=100`) || []; } catch { /* no tickets readable */ }
+  const l = loop(issues, { days });
+  return `**Pipeline improvements:** ${l.opened} opened by failed runs in ${days} days, ${l.fixed} fixed, ${l.open} open` + (l.medianDays === null ? "" : `; median ${l.medianDays} days to fix`);
 }

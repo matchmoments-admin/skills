@@ -1,0 +1,37 @@
+name: Pipeline improvement
+description: Something in the pipeline went wrong or got in the way (not a Salesforce change). Failed runs open these by themselves; use this for what a person noticed.
+title: "Pipeline: "
+labels: [pipeline-improvement, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A **Pipeline improvement** is fixed by a maintenance PR (pipeline code, workflows, config, docs/agents) that says
+        `Closes #<this issue>`, never by a story. Failed pipeline runs open these by themselves (improve.yml).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, with the error if there was one.
+    validations: { required: true }
+  - type: textarea
+    id: where
+    attributes:
+      label: Where
+      description: The stage, a run link, the story or PR.
+    validations: { required: true }
+  - type: textarea
+    id: seen
+    attributes:
+      label: Seen
+      value: "**Seen:** 1 time (found by a person)"
+  - type: textarea
+    id: cause
+    attributes:
+      label: Cause
+      description: Why the pipeline did it (triage fills this in).
+  - type: textarea
+    id: fix
+    attributes:
+      label: Fix
+      description: The change that stops it happening again.

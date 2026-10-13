@@ -4,12 +4,13 @@ Read by the engineering skills (`to-spec`, `to-tickets`, `triage`, `wayfinder`) 
 Issues** on `__OWNER__/sf-lifecycle-labs` (Jira can stand in: see `docs/handbook.md`). Use the `gh` CLI. Pull requests
 are not a request surface: work starts from an issue.
 
-## Two kinds of issue
+## Three kinds of issue
 
 | Kind | Made by | Title | Label | What happens next |
 | --- | --- | --- | --- | --- |
 | **Spec** (an epic: the why and the whole shape) | the **New spec** form, then Claude (`/spec`, the to-spec skill adapted) | `Spec: <name>` | `spec` | **Make it a story** (`/story`) makes its one story (agents on it read the whole spec); the spec itself is never built or closed by the pipeline |
 | **Story** (one deliverable slice) | **Make it a story** on a spec, the **New story** form, or a person | `Story: <name>` | `feature` | its card offers Plan / Start; the pipeline builds, tests, signs off and ships it, and closes it when it is in production |
+| **Pipeline improvement** (the pipeline itself, not Salesforce) | a failed pipeline run, by itself (`improve.yml`), or a person with the **Pipeline improvement** form | `Pipeline: <what failed>` | `pipeline-improvement` (+ `needs-triage`, `transient`) | no card or buttons: a person fills in Cause and Fix; a maintenance PR that says `Closes #N` fixes it. A repeat of the same failure updates the open ticket (**Seen**) |
 
 ## The story body (the pipeline reads these headings; keep them exactly)
 

@@ -30,7 +30,7 @@
 //   triage    ui --log file [--story file] [--ci file] · review --base B --head H   (Jev, behind AI_TRIAGE; falls back safely)
 //   event     agent --role R --file transcript [--key K] [--pr N] · rollback --tag T --sha S   (the event log; the
 //             commands above record their own: stage, tests, validation, gate, org, verdict, lane, release)
-//   metrics   [--days N] [--out file]                   DORA and pipeline telemetry as markdown
+//   metrics   [--days N] [--out file]                   DORA and pipeline telemetry · improve --run ID: a failed run's improvement ticket
 //   act       --number N [--is-pr] --by LOGIN [--by-type T] (--command "/x ..." | --before F --after F)   a person's
 //             action from a comment command or a ticked card box (pipeline/src/actions.mjs)
 //   pr        card <n> | --sha S [--now "what" [--failed]] [--tag T]   the release card, or the story card of a story PR
@@ -67,9 +67,10 @@ import * as start from "../src/start.mjs";
 import * as harness from "../src/harness.mjs";
 import * as journey from "../src/journey.mjs";
 import * as roles from "../src/roles.mjs";
+import * as improve from "../src/improve.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -471,6 +472,7 @@ const commands = {
     return say(`recorded ${flag("role")}: $${(Number(r.total_cost_usd) || 0).toFixed(2)}, ${r.num_turns} turns`);
   },
   "event rollback": () => { record("rollback", { tag: flag("tag"), sha: flag("sha") }); return say(`recorded rollback to ${flag("tag")}`); },
+  "improve ": () => say(improve.report(io, host, flag("run"))),
   "metrics ": () => { const md = metrics.report(io, { days: Number(flag("days", "28")), events }); if (flag("out")) writeFileSync(flag("out"), md + "\n"); return say(md); },
 };
 

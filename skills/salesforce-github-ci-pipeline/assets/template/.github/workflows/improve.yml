@@ -1,0 +1,43 @@
+name: improve
+# The pipeline improving itself: every failed run of a pipeline workflow becomes a "Pipeline improvement" ticket, or
+# updates the open one for the same failure (pipeline/src/improve.mjs). A failure that is the story's own (its tests,
+# its access check, its deploy errors) opens nothing: the story's card already says what to fix. A ticket is fixed by
+# a maintenance PR that says "Closes #N"; the metrics count what was opened and fixed.
+# workflow_run always runs main's copy of this file, so a story branch cannot change what is reported.
+# Run by hand with a run id to report an older failure.
+on:
+  workflow_run:
+    types: [completed]
+    workflows: [ai-fix, ai-implement, ai-plan, ai-review, ai-spec, back-merge, card-actions, ci, commands, gate, issue-start,
+      labels, merged, metrics, org-shape-refresh, prod-baseline, release-cut, release, rollback, scratch-janitor,
+      snapshot-refresh, sprint-start, staging-deploy, story-pr, story-retrieve, uat-deploy, uat-login, ui-test]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: The failed run's id (from its URL)
+        required: true
+permissions:
+  actions: read          # the run, its jobs and the failed job's log
+  contents: read
+  issues: write          # open or update the ticket
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  ticket:
+    # only failures need a runner: a passed, skipped or cancelled run is billed nothing here. A fork's run is not
+    # reported: its log is anyone's text, and this job can write issues.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(fromJSON('["failure","startup_failure"]'), github.event.workflow_run.conclusion) &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - name: Open or update the improvement ticket
+        run: node pipeline/bin/pipe.mjs improve --run "$RUN_ID"

@@ -3090,3 +3090,70 @@ test("a custom field on a standard object is copied whatever its date: productio
     { fullName: "Account.Industry", lastModifiedByName: "Brendan Milton", lastModifiedDate: "2026-01-01T00:10:00.000Z" }] }, { config: {}, orgCreated: "2026-01-01T00:00:00Z" });
   assert.deepEqual(m, { CustomField: ["Account.SLA__c"] }, "a standard field unchanged since the org was made still stays out");
 });
+
+test("a failed pipeline run becomes an improvement ticket; the story's own failures open nothing (improve.mjs)", async () => {
+  const improve = await import("../src/improve.mjs");
+  const c = (step, logTail, conclusion) => improve.classify({ step, logTail, conclusion });
+  // real failures from the run logs
+  assert.equal(c("What comes next", "##[error]Unknown command: next . See the header of pipeline/bin/pipe.mjs."), "pipeline", "E20");
+  assert.equal(c("Refresh the snapshot", "##[error]A fatal signup error occurred. Please try again."), "pipeline", "E28");
+  assert.equal(c("Deploy what changed against the base", "##[error]Deploy failed: force-app/main/default/objects/Case/Case.object-meta.xml: No such column 'SLA__c'"), "story", "a story's component error");
+  assert.equal(c("Deploy what changed against the base", "##[error]INVALID_SESSION_ID: Session expired or invalid"), "pipeline", "a deploy can fail for the pipeline's reasons");
+  assert.equal(c("Tests for this change (Apex and Flow), live on the PR as \"Salesforce tests\"", "##[error]tests failed: 2 Apex tests failed"), "story");
+  assert.equal(c("Access check (least privilege; blockers fail, warnings annotate the PR)", "##[error]blocker"), "story");
+  assert.equal(c("Every changed record-triggered Flow has a Flow test (as every Apex class has tests)", "##[error]no Flow test"), "story");
+  assert.equal(c("Tests for this change", "##[error]Cannot find module '../src/x.mjs'"), "pipeline", "a crash is never the story's");
+  assert.equal(c("A step nobody listed", "##[error]boom"), "pipeline", "unknown steps are the pipeline's");
+  assert.equal(c("Deploy what changed against the base", "boom", "cancelled"), "ignore", "a newer run replaced it");
+
+  const fault = { workflow: "snapshot-refresh", job: "refresh", step: "Refresh the snapshot", error: "sf org create scratch failed: RemoteOrgSignupFailed (00D5g000004ABCDEFG) at 2026-10-11T19:19:52Z",
+    logTail: "##[error]A fatal signup error occurred. Please try again.\nlogin: https://x.my.salesforce.com/secur/frontdoor.jsp?sid=00D5g000004ABCD!AQ8AQxyz", runUrl: "https://github.com/o/r/actions/runs/1", branch: "main" };
+  const again = { ...fault, error: "sf org create scratch failed: RemoteOrgSignupFailed (00D5g000009ZZZZZZZ) at 2026-10-13T01:12:07Z", runUrl: "https://github.com/o/r/actions/runs/2" };
+  assert.equal(improve.signature(fault), improve.signature(again), "ids and times do not make a new ticket");
+  assert.notEqual(improve.signature(fault), improve.signature({ ...fault, step: "Deploy" }));
+  const t = improve.ticket(fault);
+  assert.equal(t.action, "create");
+  assert.deepEqual(t.labels, ["pipeline-improvement", "needs-triage", "transient"]);
+  assert.doesNotMatch(t.body, /frontdoor|sid=|AQ8AQxyz/, "no login or session in a ticket");
+  for (const h of ["### What happened", "### Where", "### Seen", "### Cause", "### Fix"]) assert.ok(t.body.includes(h), h);
+  const seen = improve.ticket(again, { number: 42, body: t.body });
+  assert.equal(seen.action, "comment");
+  assert.equal(seen.seen, 2);
+  assert.match(seen.body, /\*\*Seen:\*\* 2 times, last https:\/\/github\.com\/o\/r\/actions\/runs\/2/);
+
+  // the run → its first failed step's own output (not its script, not an earlier step's error), the story from the branch
+  const log = ["2026-10-13T01:00:00.0Z ##[group]Run actions/checkout@v4", "##[endgroup]", "ok",
+    "##[group]Run node pipeline/bin/pipe.mjs story readiness 208", "##[endgroup]", "##[error]Jev: HTTP 401",   // continue-on-error, earlier
+    "##[group]Run sf project deploy start --source-dir force-app", "  sf project deploy start --source-dir force-app", "##[endgroup]",
+    "NamedOrgNotFound: No authorization information found for issue-208", "##[error]Process completed with exit code 1."].join("\n");
+  const steps = [{ name: "Set up job", conclusion: "success" }, { name: "Run actions/checkout@v4", conclusion: "success" }, { name: "Readiness", conclusion: "success" },
+    { name: "Not run", conclusion: "skipped" }, { name: "Deploy what changed against the base", conclusion: "failure" }, { name: "Complete job", conclusion: "success" }];
+  const f = improve.faultOf({ name: "ci", conclusion: "failure", head_branch: "issue-208", html_url: "u", pull_requests: [{ number: 211 }] },
+    [{ id: 1, name: "static checks (no org)", conclusion: "success", steps: [] }, { id: 2, name: "apex", conclusion: "failure", steps }], () => log);
+  assert.deepEqual([f.step, f.story, f.pr], ["Deploy what changed against the base", "208", 211]);
+  assert.doesNotMatch(f.logTail, /Jev|--source-dir/, "only the failed step's output");
+  assert.equal(f.error, "NamedOrgNotFound: No authorization information found for issue-208", "\"Process completed\" says nothing");
+  assert.equal(f.whose, "pipeline", "the script names force-app; the output does not: the pipeline's");
+  assert.equal(improve.faultOf({ name: "gate", conclusion: "startup_failure", html_url: "u" }, [], () => "").whose, "pipeline", "a broken workflow file");
+  assert.equal(c("The story's scratch org", "##[error]No free scratch org slot (3 active is the Dev Hub's limit)."), "ignore", "waiting in line, by design");
+  assert.equal(c("Decide (and the card)", "file:///x/pipeline/src/gate.mjs:12\n    at gather (file:///x/pipeline/src/gate.mjs:40:9)"), "pipeline", "a crash in a story-fault step");
+  const loud = improve.ticket({ ...fault, error: "@someone [click](https://evil) `x`", logTail: "@someone\n" + "y".repeat(5000) });
+  assert.doesNotMatch(loud.body + loud.title, /@someone/, "no pings");
+  assert.ok(loud.body.length < 60001 && !loud.body.includes("y".repeat(401)));
+  assert.notEqual(improve.signature({ ...fault, error: "uuid 9d4e-11aa user test-abc1@example.com /tmp/x1" }), undefined);
+  assert.equal(improve.signature({ ...fault, error: "org test-ab12cd@example.com in /tmp/sf-9d4e" }), improve.signature({ ...fault, error: "org test-zz99yy@example.com in /tmp/sf-1a2b" }));
+  const run = { created_at: "2026-10-01T00:00:00Z" };
+  assert.deepEqual(improve.loop([{ ...run, body: `${improve.MARK}a -->`, closed_at: "2026-10-02T00:00:00Z" }, { ...run, body: `${improve.MARK}b -->` }, { ...run, body: "a person's" }], { days: 28, now: Date.parse("2026-10-13T00:00:00Z") }),
+    { opened: 2, fixed: 1, open: 1, medianDays: 1 }, "only tickets a run opened, in the window");
+
+  const wf = readFileSync(new URL("../../.github/workflows/improve.yml", import.meta.url), "utf8");
+  assert.match(wf, /\["failure","startup_failure"\]'\), github\.event\.workflow_run\.conclusion\)/, "a passed run needs no runner");
+  assert.match(wf, /head_repository\.full_name == github\.repository/, "a fork's run is not reported");
+  assert.match(wf, /issues: write/);
+  assert.doesNotMatch(wf, /contents: write|pull-requests: write|statuses: write/, "least privilege");
+  const listed = wf.match(/workflows: \[([\s\S]*?)\]/)[1].split(",").map((s) => s.trim());
+  const all = readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml") && n !== "improve.yml")
+    .map((n) => readFileSync(new URL(`../../.github/workflows/${n}`, import.meta.url), "utf8").match(/^name: (.+)$/m)[1].trim());
+  assert.deepEqual(listed.sort(), all.sort(), "every pipeline workflow is watched (a new one too)");
+  assert.ok(names.LABELS["pipeline-improvement"] && names.LABELS.transient);
+});

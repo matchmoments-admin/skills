@@ -19,6 +19,8 @@ export const LABELS = {
   "in-sprint": { color: "0E8A16", description: "Merged into the sprint: ships with its release (the story closes when it is in production)" },
   "needs-triage": { color: "D4C5F9", description: "A person needs to look at this issue before it becomes a story" },
   "needs-info": { color: "D4C5F9", description: "Waiting on the person who raised it" },
+  "pipeline-improvement": { color: "5319E7", description: "A pipeline problem a failed run found (improve.yml): fixed by a maintenance PR that closes it" },
+  transient: { color: "EDEDED", description: "Salesforce or GitHub had a moment: re-running worked; fix only if it repeats" },
   wontfix: { color: "FFFFFF", description: "Will not be done" },
   spec: { color: "5319E7", description: "A spec (to-spec): made into a story with one tick (Make it a story), never built directly" },
   "needs-human": { color: "FBCA04", description: "A story a person builds (not Claude)" },
