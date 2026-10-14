@@ -1055,6 +1055,17 @@ test("lane park (#236): busy, the job parks and gives its runner back; the same 
   assert.equal(b.waiters("org-x").length, 0);
 });
 
+test("lane: a claim's time is when it was claimed, not when the waiting began (a 44-minute wait once left a 106-minute TTL)", () => {
+  const f = fakeRefs();
+  let t = 0;
+  const first = lane({ api: f.api, repo: "o/r", holder: { run: "1", job: "ci#1", sha: "base" }, now: () => t, sleep: () => {}, log: () => {} });
+  first.acquire("org-staging");
+  const second = lane({ api: f.api, repo: "o/r", holder: { run: "2", job: "staging#1", sha: "base" }, now: () => t, sleep: (ms) => { t += ms; if (t > 44 * 60e3) first.release("org-staging"); }, log: () => {} });
+  second.acquire("org-staging", { timeoutMinutes: 60 });
+  const at = Date.parse(JSON.parse(f.commits[f.refs["refs/locks/org-staging"]].message).at);
+  assert.ok(at > 44 * 60e3, `claimed at ${at / 60e3} min`);
+});
+
 test("lane wake (#236): real parked jobs of free lanes are re-run once their run has ended; a forged waiter never is", () => {
   const f = fakeRefs({ runs: { 1: "completed" } });
   const runs = { 2: { path: ".github/workflows/ai-fix.yml", event: "workflow_dispatch", run_attempt: 1, st: ["in_progress", "completed"] },
@@ -1118,8 +1129,7 @@ test("every job that uses a story or staging org holds its lane, and releases it
   for (const n of ["issue-start", "ai-implement", "ai-fix", "ui-test", "ci", "staging-deploy"]) {
     const y = wf(n);
     const steps = y.split(/\n\s+- (?=name:|uses:|run:|id:|if:)/);
-    // a later job of the same run may let go for the job that took it (--holder-job: staging's shards hold it across jobs)
-    const takes = steps.filter((x) => /lane acquire/.test(x)).length, gives = steps.filter((x) => /lane release/.test(x) && !/--holder-job/.test(x));
+    const takes = steps.filter((x) => /lane acquire/.test(x)).length, gives = steps.filter((x) => /lane release/.test(x));
     assert.ok(takes > 0, `${n} takes a lane`);
     assert.equal(gives.length, takes, `${n} releases every lane it takes`);
     for (const g of gives) assert.match(g, /if: always\(\)/, `${n} releases whatever happens`);
@@ -1762,7 +1772,7 @@ test("pipe act parses the workflows' own arguments: who acted and that it is a P
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
   for (const n of ["commands", "card-actions"]) assert.match(wf(n), /'--is-pr'/, n);
   // the argument parser is the one in pipe.mjs: run a dry parse through a tiny shim of the same VALUE_FLAGS rule
-  const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  const src = pipeSources();
   const valueFlags = new Set(JSON.parse(`[${src.match(/const VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\)/)[1].replace(/\s+/g, " ")}]`));
   const switches = [...new Set([...src.matchAll(/has\("([a-z-]+)"\)/g)].map((m) => m[1]))];
   assert.deepEqual(switches.filter((s) => valueFlags.has(s)), [], "a switch that is also a value flag swallows the next argument");
@@ -2870,6 +2880,8 @@ test("every workflow file parses as YAML (an unquoted ': ' in a step name broke 
 
 // ---------------------------------------------------------------- 13 Oct: the journey, Standing everywhere, org lifecycle,
 // the gate's record, agent roles (architecture review after story #193; E12-E19)
+// pipe.mjs and its command modules (pipeline/bin/commands/*.mjs), as one text
+const pipeSources = () => [new URL("../bin/pipe.mjs", import.meta.url), ...readdirSync(new URL("../bin/commands/", import.meta.url)).map((f) => new URL(`../bin/commands/${f}`, import.meta.url))].map((u) => readFileSync(u, "utf8")).join("\n");
 const st_ = (over = {}) => ({ route: "feature", review: { state: "missing" }, ui: { state: "missing" }, uat: { state: "missing" }, checks: { [names.CHECKS.apex]: { state: "passed" } }, ...over });
 
 test("Standing's carry rules are one table: specs-only, exact head, and no-force-app for CI's Salesforce tests", () => {
@@ -3097,8 +3109,9 @@ test("the baseline drops empty shells, and keeps members production lists with a
 });
 
 test("every pipe command is reachable: a one-word command is keyed with its trailing space (`pipe next` was unreachable on 13 Oct)", () => {
-  const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
-  const keys = [...src.slice(src.indexOf("const commands = {")).matchAll(/^  "([^"]+)":/gm)].map((m) => m[1]);
+  const main = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  const src = main.slice(main.indexOf("const commands = {")) + pipeSources().slice(main.length);   // and the command modules (commands/*.mjs)
+  const keys = [...src.matchAll(/^ {2,4}"([^"]+)":/gm)].map((m) => m[1]);
   assert.ok(keys.length > 40);
   for (const k of keys) assert.match(k, /^[a-z-]+ ([a-z-]+)?$/, `"${k}" can never be looked up as "<command> <sub>"`);
   assert.ok(keys.includes("next "));
@@ -3382,35 +3395,17 @@ test("#237: a back-merge that changes nothing staging tests keeps the regression
   assert.match(wf, /pipe\.mjs ci staging-carry/);
 });
 
-test("capacity: stories in flight from the Dev Hub's allowance, UI shards to a target, and the settings that carry more", () => {
-  const dev = capacity.plan({ devhub: { activeMax: 3, dailyMax: 6, activeUsed: 1 }, team: { devs: 2 }, ui: { tests: 38, personaTests: 14 } });
+test("capacity: stories in flight from the Dev Hub's allowance, the staging regression's time, and a month's cost", () => {
+  const dev = capacity.plan({ devhub: { activeMax: 3, dailyMax: 6, activeUsed: 1 }, team: { devs: 2 }, ui: { tests: 38 } });
   assert.equal(dev.orgs.inFlightMax, 1, "3 active orgs: staging, one held elsewhere, one story");
   assert.match(dev.advice.join(" "), /1 story in flight, not 2.*Enterprise or Unlimited/);
-  assert.ok(dev.ui.shards > 1 && dev.ui.wallMinutes < dev.ui.serialMinutes, "shards bring the regression down");
-  assert.equal(dev.settings.UI_SHARDS, String(dev.ui.shards));
-  assert.equal(dev.settings.UI_WORKERS, null, "a 2-core runner: one browser");
-  // an enterprise Dev Hub, a UAT sandbox, 8-core runners: no org advice, browsers = cores / 2
-  const ent = capacity.plan({ devhub: { activeMax: 40, dailyMax: 80 }, team: { devs: 10, storiesPerSprint: 30 }, ui: { tests: 200, personaTests: 20 }, runner: { cores: 8, label: "linux-8-core" }, uatSandbox: true, personaSlots: 4 });
+  assert.equal(dev.ui.minutes, 22.2, "38 tests at 35 s, one browser");
+  assert.match(dev.advice.join(" "), /grows about 1\.5 min with every story/);
+  const ent = capacity.plan({ devhub: { activeMax: 40, dailyMax: 80 }, team: { devs: 10, storiesPerSprint: 30 }, ui: { tests: 20 }, uatSandbox: true });
   assert.equal(ent.orgs.inFlightMax, 39);
   assert.equal(ent.orgs.atRelease, 1, "a UAT sandbox takes no scratch org");
-  assert.doesNotMatch(ent.advice.join(" "), /Dev Hub allows/);
-  assert.equal(ent.settings.UI_WORKERS, "4");
-  assert.equal(ent.settings.UI_RUNNER, "linux-8-core");
-  // persona specs are the floor while they share a scratch org's licences
-  const floor = capacity.plan({ ui: { tests: 40, personaTests: 30, testSeconds: 60 }, targetMinutes: 10 });
-  assert.match(floor.advice.join(" "), /persona specs are the floor/);
-  assert.match(capacity.report(dev), /## Pipeline capacity[\s\S]*UI_SHARDS=/);
-  assert.deepEqual(capacity.countSpecs("e2e-missing"), { tests: 0, personaTests: 0 });
-});
-
-test("the staging UI regression shards on separate runners and the required check waits for every shard", () => {
-  const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
-  assert.match(wf, new RegExp(`name: ${names.CHECKS.staging}\\n    needs: \\[staging, ui\\]\\n    if: always\\(\\)`), "the gate's check is the job that waits for the shards");
-  assert.match(wf, /lane release "sprint:\$\{\{ needs\.staging\.outputs\.sprint \}\}" --holder-job staging/, "this run's staging job held the lane: the regression job lets go");
-  assert.match(wf, /steps\.ui\.outputs\.sharded != 'true'\n\s+working-directory: \.pipeline\n\s+run: node pipeline\/bin\/pipe\.mjs lane release/, "sharded, the staging job keeps the lane");
-  const ui = wf.slice(wf.indexOf("  ui:\n"), wf.indexOf("  regression:\n"));
-  assert.ok(ui.indexOf("sf org logout -o devhub") < ui.indexOf("npx playwright test"), "production access is gone before the branch's specs run");
-  assert.match(ui, /--project persona/, "the persona specs stay on one runner (the org's user licences)");
-  assert.match(ui, /runs-on: \$\{\{ vars\.UI_RUNNER \|\| 'ubuntu-latest' \}\}/);
-  assert.match(readFileSync(new URL("../../playwright.config.ts", import.meta.url), "utf8"), /Number\(process\.env\.UI_WORKERS\) \|\| 1/);
+  assert.deepEqual(ent.advice, ["The defaults carry this load."]);
+  assert.ok(ent.cost.monthlyMinutes > dev.cost.monthlyMinutes);
+  assert.match(capacity.report(dev), /## Pipeline capacity[\s\S]*Staging regression/);
+  assert.deepEqual(capacity.countSpecs("e2e-missing"), { tests: 0 });
 });

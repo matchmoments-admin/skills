@@ -46,12 +46,13 @@ const STALE_CHECK_MS = 3 * 60e3;
 export function lane({ api, repo, holder, now = () => Date.now(), sleep, log = () => {}, ttlMinutes = 150, onWait = () => {} }) {
   const ref = (name) => `refs/locks/${name}`;
   const path = (name) => `repos/${repo}/git/${ref(name)}`;
-  const me = JSON.stringify({ ...holder, at: new Date(now()).toISOString() });
+  // the claim says when it was made: a job that waited 44 minutes for the lane must not start its TTL 44 minutes old
+  const me = () => JSON.stringify({ ...holder, at: new Date(now()).toISOString() });
   const read = (msg) => { try { return JSON.parse(msg); } catch { return {}; } };
   const same = (h) => h.run === holder.run && h.job === holder.job;
 
   /** The commit that says "held by me" (on top of `parent` when taking over a stale lock). */
-  const claim = (tree, parent) => api("POST", `repos/${repo}/git/commits`, { message: me, tree, parents: parent ? [parent] : [] });
+  const claim = (tree, parent) => api("POST", `repos/${repo}/git/commits`, { message: me(), tree, parents: parent ? [parent] : [] });
 
   /** Is a holder gone? Its run finished, or it is older than the TTL (a job that never released). The run is looked up
    *  at most every few minutes per holder. */
