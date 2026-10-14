@@ -17,6 +17,12 @@ export function snapshotMethods({ sf, sleep, log, keyFile, packages, env, baseli
       return (Array.isArray(list) ? list : []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || "") && s.Status === "Active" && !snapshotRefused(s.SnapshotName))
         .sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)))[0]?.SnapshotName || null;
     },
+    /** The production baseline a snapshot holds: the b<id> its description carries (pipe snapshot refresh), or null. */
+    snapshotBaseline(name) {
+      const list = sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || [];
+      const s = (Array.isArray(list) ? list : []).find((x) => x.SnapshotName === name);
+      return /\bb([0-9a-f]{6,})\b/.exec(String(s?.Description || ""))?.[1] || null;
+    },
     /** The newest Active pipeline snapshot's age in hours, or null (for "rebuild at most once a day"). */
     snapshotAgeHours(now = Date.now()) {
       const list = sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || [];

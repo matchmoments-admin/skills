@@ -249,7 +249,7 @@ const commands = {
     if (flag("if-older-than") && age !== null && age < Number(flag("if-older-than"))) return say(`snapshot is ${age.toFixed(1)} h old: not rebuilt`);
     const o = orgs().ready("snapshot", { commit: io.git(["rev-parse", "HEAD"])?.trim() });
     const name = `LCB${new Date().toISOString().replace(/\D/g, "").slice(2, 12)}`;
-    const r = orgs().snapshot(o.alias, { name, description: `main@${(io.git(["rev-parse", "--short", "HEAD"]) || "").trim()}`, waitMinutes: Number(flag("minutes", "60")) });
+    const r = orgs().snapshot(o.alias, { name, description: `main@${(io.git(["rev-parse", "--short", "HEAD"]) || "").trim()}${orgs().baselineId() ? ` b${orgs().baselineId()}` : ""}`, waitMinutes: Number(flag("minutes", "60")) });
     if (r.active) orgs().remove("snapshot"); record("snapshot", { action: r.active ? "active" : "pending", name, status: r.status }); output({ name, active: r.active });
     return say(r.active ? `snapshot ${name} is active: new orgs start from it` : `snapshot ${name} is ${r.status || "not active yet"}: new orgs keep using the previous one until it is`);
   },

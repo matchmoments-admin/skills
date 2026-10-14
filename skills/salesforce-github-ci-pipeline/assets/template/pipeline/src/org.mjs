@@ -14,7 +14,7 @@ import { snapshotMethods } from "./org/snapshot.mjs";
 import { setupChangesMethods } from "./org/setup-changes.mjs";
 // the helpers that moved to org/, still importable from here
 export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB } from "./org/fleet.mjs";
-export { expandSeed, seedReplaceApex, VOLUME_MARKER, volumeApex } from "./org/data.mjs";
+export { expandSeed, seedReplaceApex, VOLUME_MARKER, volumeApex, foldSeeds } from "./org/data.mjs";
 export { roleRebuild, personaOf, permissionSets } from "./org/users.mjs";
 
 // Scratch definitions come from the trusted pipeline checkout, so a PR cannot change its own org's shape.
@@ -145,26 +145,35 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       const existing = self.find(target, opts);
       const org = existing ? self.attach(existing) : resolve(target, opts);
       const want = readyMarker(commit, baseline(), seedId());
-      if (existing && self.isReady(org.alias, want)) { log(`${org.alias} already holds ${commit ? String(commit).slice(0, 7) : "its source"}`); return { ...org, created: false, fresh: true }; }
+      // the test data an org of this kind gets: its story's own seed, or every story's in the release (staging, UAT).
+      // Loaded on every call, even when the org already holds the code: a seed a story adds later (Claude writes it
+      // with the build) still arrives, and the markers make a repeat a few queries (review, 14 Oct)
+      const seedFor = org.kind === "story" ? { story: org.key } : ["sprint", "uat"].includes(org.kind) ? { stories: "all" } : {};
+      if (existing && self.isReady(org.alias, want)) { log(`${org.alias} already holds ${commit ? String(commit).slice(0, 7) : "its source"}`); self.seed(org.alias, seedFor); return { ...org, created: false, fresh: true }; }
       // the head moved on with nothing deployable (the UI test's own spec commit, a doc): the org already holds this
       // source, so it is re-marked, not redeployed (a full deploy was about 4 minutes of every AI UI test, #241)
-      if (existing && commit && self.advance(org.alias, commit, (held) => sameSource(held, commit))) return { ...org, created: false, fresh: true };
+      if (existing && commit && self.advance(org.alias, commit, (held) => sameSource(held, commit))) { self.seed(org.alias, seedFor); return { ...org, created: false, fresh: true }; }
+      let how = null;
       if (existing) log(`${org.alias} exists: bringing it to ${commit ? String(commit).slice(0, 7) : "its source"}`);
       else {
         const no = refusal(org);
         if (no) throw new Error(no);
         self.assertCapacity(org.kind === "story" ? Number(env.ORG_RESERVE || 0) : 0);
-        const how = self.create(org);
+        how = self.create(org);
         if (!how.fromSnapshot) { self.enableLoginAs(org.alias); self.rebuildRoles(org.alias); }   // roles before the deploy: shares attach to them
       }
       self.installPackages(org.alias);
-      self.deploy(org.alias, { manifest });
+      // an org made from a snapshot that holds this production baseline already has it: only force-app is deployed (the
+      // baseline redeploy cost a minute or two per org, and retried components a fresh org could not take)
+      self.deploy(org.alias, { manifest, skipBaseline: Boolean(how?.baseline && how.baseline === baseline()) });
       self.prepare(org.alias);
-      self.seed(org.alias, { story: org.key || null });
+      self.seed(org.alias, seedFor);
       if (org.kind === "sprint") self.volume(org.alias, Number(env.VOLUME_RECORDS ?? 5000));   // staging only
       self.markReady(org.alias, want);
       return { ...org, created: !existing, completed: Boolean(existing) };
     },
+    /** The production baseline's id as it would be deployed now (null: BASELINE=off or none). */
+    baselineId() { return baseline(); },
     /** Kept for callers that do not know a commit: ready() for the source in the working directory. */
     ensure(target, opts = {}) { return self.ready(target, opts); },
 
@@ -182,7 +191,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         writeFileSync(def, JSON.stringify({ orgName: `Lifecycle ${org.description}`, snapshot }));
         log(`creating ${org.alias} (${org.description}) from snapshot ${snapshot}, ${org.days} days`);
         let why = "";
-        try { sf([...base, "--definition-file", def, "--wait", "45"]); return { fromSnapshot: true, snapshot }; } catch (e) { why = String(e.message).split("\n").slice(-2).join(" ").slice(0, 300); }
+        try { sf([...base, "--definition-file", def, "--wait", "45"]); return { fromSnapshot: true, snapshot, baseline: self.snapshotBaseline(snapshot) }; } catch (e) { why = String(e.message).split("\n").slice(-2).join(" ").slice(0, 300); }
         log(`::warning::snapshot ${snapshot} could not be used (${why || "no reason given"}): creating ${org.alias} from production's shape instead`);
         record("snapshot", { action: "fallback", name: snapshot, org: org.description, why });
         refuseSnapshot(snapshot, why);   // the next org goes straight to shape until a new snapshot is built
@@ -280,8 +289,9 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
      * (they reference each other both ways). In soft mode a failed combined deploy warns, records why, and deploys
      * force-app alone, so a story is never blocked by production's own metadata; strict fails.
      */
-    deploy(alias, { manifest, dryRun = false } = {}) {
-      const id = manifest ? null : baseline();
+    deploy(alias, { manifest, dryRun = false, skipBaseline = false } = {}) {
+      if (skipBaseline) log(`${alias} came from a snapshot that holds the production baseline (${baseline()}): deploying force-app only`);
+      const id = manifest || skipBaseline ? null : baseline();
       if (id) {
         const admin = sf(["org", "display", "-o", alias])?.username;
         const dir = composeProject({ baselineDir, sourceDir: join(process.cwd(), "force-app"), forceignore: join(process.cwd(), ".forceignore") });

@@ -7,7 +7,7 @@
       },
       "Subject": "Seed case 03: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Phone",
       "Priority": "Low",
       "AccountId": "@Acc03"
     },
@@ -18,7 +18,7 @@
       },
       "Subject": "Seed case 06: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Web",
       "Priority": "Low",
       "AccountId": "@Acc06"
     },
@@ -29,7 +29,7 @@
       },
       "Subject": "Seed case 09: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Phone",
       "Priority": "Low",
       "AccountId": "@Acc09"
     },
@@ -40,7 +40,7 @@
       },
       "Subject": "Seed case 12: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Web",
       "Priority": "Low",
       "AccountId": "@Acc12"
     },
@@ -51,7 +51,7 @@
       },
       "Subject": "Seed case 15: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Phone",
       "Priority": "Low",
       "AccountId": "@Acc15"
     },
@@ -62,7 +62,7 @@
       },
       "Subject": "Seed case 18: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Web",
       "Priority": "Low",
       "AccountId": "@Acc18"
     },
@@ -73,7 +73,7 @@
       },
       "Subject": "Seed case 21: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Phone",
       "Priority": "Low",
       "AccountId": "@Acc21"
     },
@@ -84,7 +84,7 @@
       },
       "Subject": "Seed case 24: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Web",
       "Priority": "Low",
       "AccountId": "@Acc24"
     },
@@ -95,7 +95,7 @@
       },
       "Subject": "Seed case 27: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Phone",
       "Priority": "Low",
       "AccountId": "@Acc27"
     },
@@ -106,7 +106,7 @@
       },
       "Subject": "Seed case 30: cannot log in",
       "Status": "New",
-      "Origin": "Email",
+      "Origin": "Web",
       "Priority": "Low",
       "AccountId": "@Acc30"
     }

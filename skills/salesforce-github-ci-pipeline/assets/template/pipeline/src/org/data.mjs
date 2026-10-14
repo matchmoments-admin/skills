@@ -58,32 +58,55 @@ export function volumeApex(n, chunk = 1000) {
   return calls;
 }
 
+/**
+ * Fold shipped stories' seeds into the core seed (seed-fold.yml opens it as a PR). core: { plan, files: { name: text } };
+ * stories: [{ key, plan, files }]. Each story file is renamed story-<key>-<file>, its plan entries appended to the core
+ * plan, and the reference ids it defines prefixed S<key> (references to the core's own records stay as they are), so
+ * two stories can never collide. A story's own marker file is dropped: the core marker covers it. Pure.
+ */
+export function foldSeeds(core, stories) {
+  const plan = [...core.plan], files = { ...core.files };
+  for (const { key, plan: sp, files: sf } of stories) {
+    const own = new Set(Object.values(sf).flatMap((t) => [...String(t).matchAll(/"referenceId"\s*:\s*"([^"]+)"/g)].map((m) => m[1])));
+    const rename = (t) => String(t).replace(/("referenceId"\s*:\s*"|"@)([^"]+)"/g, (m, pre, id) => (own.has(id) ? `${pre}S${key}${id}"` : m));
+    for (const entry of sp) {
+      const kept = (entry.files || []).filter((f) => f !== "SeedMarker.json" && sf[f] !== undefined);
+      if (!kept.length) continue;
+      for (const f of kept) files[`story-${key}-${f}`] = rename(sf[f]);
+      plan.push({ ...entry, files: kept.map((f) => `story-${key}-${f}`) });
+    }
+  }
+  return { plan, files };
+}
+
 /** The registry's data methods. ctx: orgRegistry's shared context (sf, log, env, ...). */
 export function dataMethods({ sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord }) {
   return {
     /**
      * Load the test data once per org: the core seed (data/seed, from main) unless its marker Account is already there
-     * (a snapshot holds it), then the story's own (data/seed/stories/<key>/plan.json in the working directory) once.
-     * sf data import tree only inserts, so the markers are what make it safe to repeat. Scratch orgs only.
+     * (a snapshot holds it), then stories' own seeds (data/seed/stories/<key>/plan.json in the working directory), each
+     * once: a story org gets its story's (story), staging and UAT every story's in the release (stories: "all"). A
+     * changed seed replaces its earlier version (by its marker). sf data import tree only inserts, so the markers are what
+     * make it safe to repeat; a call that finds every marker costs a few queries. Scratch orgs only.
      */
-    seed(alias, { story = null } = {}) {
+    seed(alias, { story = null, stories = null } = {}) {
       const loads = [];
       const id = seedId();
-      if (id) loads.push({ dir: seedDir, marker: `[seed ${id}]` });
-      const own = story ? join(process.cwd(), "data/seed/stories", String(story)) : null;
-      if (id && own && existsSync(join(own, "plan.json"))) loads.push({ dir: own, marker: `[seed story ${story} ${idOf(own)}]` });
+      if (id) loads.push({ dir: seedDir, marker: `[seed ${id}]`, stale: "Name LIKE '[seed %' AND (NOT Name LIKE '[seed story%')" });
+      const root = join(process.cwd(), "data/seed/stories");
+      const keys = stories === "all" ? (existsSync(root) ? readdirSync(root).filter((k) => existsSync(join(root, k, "plan.json"))).sort() : []) : story ? [String(story)] : [];
+      for (const k of keys) if (id && existsSync(join(root, k, "plan.json"))) loads.push({ dir: join(root, k), marker: `[seed story ${k} ${idOf(join(root, k))}]`, stale: `Name LIKE '[seed story ${k} %'` });
       if (!loads.length) return [];
       // never production: the Dev Hub is production here (and a production org is never a target of org ready anyway)
       const [target, prod] = [sf(["org", "display", "-o", alias], { allowFail: true })?.id, sf(["org", "display", "-o", DEVHUB], { allowFail: true })?.id];
       if (!target || (prod && String(target).slice(0, 15) === String(prod).slice(0, 15))) throw new Error(`refusing to load test data into ${alias}: it is production (or unknown)`);
       const loaded = [];
-      for (const { dir, marker } of loads) {
+      for (const { dir, marker, stale: staleWhere } of loads) {
         const have = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${marker}'`], { allowFail: true })?.records?.length;
         if (have) { log(`${alias} already has ${marker}`); continue; }
         const files = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => [f, readFileSync(join(dir, f), "utf8")]));
-        // an earlier version of the shared seed in this org: replaced, never loaded beside it
-        const prefix = dir === seedDir ? "[seed " : null;
-        const stale = prefix ? (sf(["data", "query", "-o", alias, "-q", "SELECT Name FROM Account WHERE Name LIKE '[seed %' AND (NOT Name LIKE '[seed story%')"], { allowFail: true })?.records || []).map((r) => r.Name) : [];
+        // an earlier version of this seed (the core, or the same story's) in this org: replaced, never loaded beside it
+        const stale = (sf(["data", "query", "-o", alias, "-q", `SELECT Name FROM Account WHERE ${staleWhere}`], { allowFail: true })?.records || []).map((r) => r.Name);
         if (stale.length) {
           const apex = join(tmpdir(), `seed-replace-${process.pid}.apex`);
           writeFileSync(apex, seedReplaceApex(files, stale));

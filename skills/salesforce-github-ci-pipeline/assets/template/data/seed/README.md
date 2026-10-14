@@ -7,8 +7,12 @@ Flow checks and demos. **Never production data.** Apex tests never see these rec
 - `plan.json` and the `*.json` files: `sf data import tree` format (reference ids like `@Acc01` link children to parents).
 - Date tokens are filled in at load time, so "this year" never goes stale: `${TODAY}`, `${THIS_YEAR}`, `${LAST_YEAR}`,
   `${NEXT_YEAR}`. `${SEED_MARKER}` names the marker Account the pipeline uses to load the seed only once per org.
-- A story that needs its own records adds `stories/<story key>/plan.json` (same format): loaded into that story's org.
-  When the story ships, fold what everyone needs into the files here.
+- A story that adds an object (or a field people test) ships its own records: `stories/<story key>/plan.json` (same
+  format; Claude writes it with the build). They load into that story's org, then staging and UAT (each once, by its
+  marker; a changed version replaces the earlier one). After the release, `seed-fold` opens a PR that folds them into the
+  files here.
+- No email-origin Cases: production's `Case_Classify_On_Email_Create` Flow queues an Apex job for each one, and a pending
+  job blocks redeploying its classes (every org build retried 6 baseline files until 14 Oct).
 - Keep it small (hundreds of records) and use picklist codes (`BillingCountryCode`, not `BillingCountry`).
 - Changing anything here rebuilds the snapshot (`snapshot-refresh`). A long-lived org (staging, UAT: 30 days) that holds
   an earlier version gets this one **in its place**: the old seed's accounts (with their contacts, opportunities and

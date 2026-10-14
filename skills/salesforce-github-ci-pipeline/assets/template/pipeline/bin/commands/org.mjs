@@ -1,10 +1,10 @@
 // The orgs and lanes commands of `pipe` (see the header of pipeline/bin/pipe.mjs): Org provisioning, the scratch-org
 // janitor, testers, and the Lane (one job at a time in an org). pipe.mjs passes its shared context (io, host, flags,
 // output); the decisions live in pipeline/src/org.mjs and lane.mjs.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import * as names from "../../src/conventions.mjs";
 import * as capacity from "../../src/capacity.mjs";
-import { personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered } from "../../src/org.mjs";
+import { personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered, foldSeeds } from "../../src/org.mjs";
 import { lane, jobId, wakeAll } from "../../src/lane.mjs";
 
 export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record, freed }) {
@@ -33,6 +33,18 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
   "org temp": () => { const o = orgs().temporary(arg(0)); record("org", { action: "created", org: o.description }); output({ alias: o.alias, temp: true }); return say(o.alias); },
   "org changes": () => { const o = orgs(), c = o.retrieveChanges(arg(0), o.setupChanges(arg(0), { exclude: JSON.parse(readFileSync("config/baseline.json", "utf8")).exclude })); output({ count: c.length }); return say(c.map((x) => `${x.type}:${x.name}`).join("\n") || "no Setup changes"); },
   "org capacity": () => say(capacity.report(capacity.plan({ ...capacity.gather({ limits: () => orgs().limits(), flag, has }), uiPolicy: names.setting("UI_REGRESSION") || "release" }))),   // how much load this carries, and the settings for more
+  // shipped stories' seeds (data/seed/stories/<key>) into the core seed, in the working directory (seed-fold.yml)
+  "seed fold": () => {
+    const dir = "data/seed", root = `${dir}/stories`;
+    const keys = existsSync(root) ? readdirSync(root).filter((k) => existsSync(`${root}/${k}/plan.json`)).sort() : [];
+    if (!keys.length) { output({ folded: 0 }); return say("no story seeds to fold"); }
+    const read = (d) => Object.fromEntries(readdirSync(d).filter((f) => f.endsWith(".json") && f !== "plan.json").map((f) => [f, readFileSync(`${d}/${f}`, "utf8")]));
+    const r = foldSeeds({ plan: JSON.parse(readFileSync(`${dir}/plan.json`, "utf8")), files: read(dir) }, keys.map((k) => ({ key: k, plan: JSON.parse(readFileSync(`${root}/${k}/plan.json`, "utf8")), files: read(`${root}/${k}`) })));
+    for (const [f, t] of Object.entries(r.files)) writeFileSync(`${dir}/${f}`, t);
+    writeFileSync(`${dir}/plan.json`, JSON.stringify(r.plan, null, 2) + "\n");
+    for (const k of keys) rmSync(`${root}/${k}`, { recursive: true });
+    output({ folded: keys.length, stories: keys.join(",") }); return say(`folded the seeds of ${keys.map((k) => `#${k}`).join(", ")} into data/seed`);
+  },
   "org limits": () => { const l = orgs().limits(); return say(`active scratch orgs ${l.active.remaining}/${l.active.max} free, created today ${l.daily.max - l.daily.remaining}/${l.daily.max}`); },
   "org sweep": async () => {
     // every orphan: CI orgs whose run died, merged or closed stories' orgs, staging and UAT orgs of sprints no longer open

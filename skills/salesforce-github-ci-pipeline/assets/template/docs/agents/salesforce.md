@@ -112,6 +112,12 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   resource does not exist".
 - **Test data:** Apex tests make their own (they cannot see org data). The org's seed (`data/seed`, synthetic) is for
   UI tests, Flow checks and people: read seed records by name, create only what a test changes.
+- **A story that adds an object, or a field people test, ships its own seed:** `data/seed/stories/<story key>/plan.json`
+  plus one JSON file per object (`sf data import tree` format, as `data/seed`). Up to about 20 synthetic records that
+  show the feature working: link them to the seed's Accounts by name (`@Acc01`-style references in the same plan, or
+  a lookup by an existing Account's Name), use picklist codes, never real people or emails. The story's org, then
+  staging and UAT load it (once, by its marker), so testers and the UI tests find records to look at. A shipped story's
+  seed is folded into the core seed by a bot PR after the release.
 - **Every Apex test class declares what it tests:** `@IsTest(testFor='ApexClass:CaseHandler,ApexTrigger:CaseTrigger')`
   at class level (not on methods), and sharing or access tests add `critical=true` (they always run). CI and the
   production validation use `RunRelevantTests` (Salesforce beta, API 66+): the platform picks the tests a change

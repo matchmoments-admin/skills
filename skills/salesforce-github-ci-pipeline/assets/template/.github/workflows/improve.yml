@@ -10,7 +10,7 @@ on:
     types: [completed]
     workflows: [ai-fix, ai-implement, ai-plan, ai-review, ai-spec, back-merge, card-actions, ci, commands, gate, issue-start,
       labels, lane-wake, merged, metrics, org-shape-refresh, prod-baseline, release-cut, release, rollback, scratch-janitor,
-      snapshot-refresh, sprint-start, staging-deploy, story-pr, story-retrieve, uat-deploy, uat-login, ui-test]
+      seed-fold, snapshot-refresh, sprint-start, staging-deploy, story-pr, story-retrieve, uat-deploy, uat-login, ui-test]
   workflow_dispatch:
     inputs:
       run_id:

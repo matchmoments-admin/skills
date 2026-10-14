@@ -559,3 +559,78 @@ test("production-likeness: sharing defaults that differ, missing packages, users
   const { run } = await import("../src/io.mjs");
   assert.match(run("node", ["-e", "console.log(JSON.stringify({status:1,result:{files:[]}}));process.exit(1)"], { allowFail: "json" }), /"status":1/);
 });
+
+test("orgs know what they hold: the seed loads on every ready() (even when the code is already there), staging and UAT get every story's seed, a snapshot's baseline is not redeployed", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync: write } = await import("node:fs");
+  const { tmpdir: tmp } = await import("node:os");
+  const { join: j } = await import("node:path");
+  const root = mkdtempSync(j(tmp(), "seed-"));
+  const seedDir = j(root, "core"), work = j(root, "work"), baselineDir = j(root, "baseline");
+  mkdirSync(seedDir, { recursive: true });
+  write(j(seedDir, "plan.json"), JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
+  write(j(seedDir, "Account.json"), JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "M" }, Name: "${SEED_MARKER}" }] }));
+  for (const k of ["77", "78"]) {
+    mkdirSync(j(work, "data/seed/stories", k), { recursive: true });
+    write(j(work, "data/seed/stories", k, "plan.json"), JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
+    write(j(work, "data/seed/stories", k, "Account.json"), JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "A" }, Name: `Story ${k} account` }] }));
+  }
+  mkdirSync(j(work, "force-app/main/default"), { recursive: true });
+  mkdirSync(j(baselineDir, "main/default/objects"), { recursive: true });
+  write(j(baselineDir, "main/default/objects/X.txt"), "x");
+  // a fake sf: no seed marker in the org yet, a scratch org that is not production, and a snapshot listing
+  const fake = ({ live = [], title = null, snapshots = [] } = {}) => {
+    const p = provisionSf({ live, title });
+    const sf = (args, opts) => {
+      const c = args.join(" ");
+      if (/FROM Account WHERE Name = '\[seed/.test(c) || /FROM Account WHERE Name LIKE '\[seed/.test(c)) { p.calls.push(c); return { records: [] }; }
+      if (args[0] === "org" && args[1] === "list" && args[2] === "snapshot") return snapshots;
+      if (args[0] === "org" && args[1] === "display") return { clientId: "CID", username: "u@x", id: args.includes("devhub") ? "00Dprod000000001" : "00Dscratch000001" };
+      return p.sf(args, opts);
+    };
+    return { sf, calls: p.calls };
+  };
+  const reg = (sf, env = {}, dir = seedDir) => orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], seedDir: dir, baselineDir, env: { BASELINE: "off", SEED: "on", ...env } });
+  const cwd = process.cwd();
+  process.chdir(work);
+  try {
+    // a story org gets the core seed and its own story's
+    let f = fake();
+    assert.deepEqual(reg(f.sf).seed("issue-77", { story: "77" }).map((m) => m.replace(/ [0-9a-f]+\]$/, "]")), ["[seed]", "[seed story 77]"]);
+    // staging and UAT get every story's seed in the release
+    f = fake();
+    assert.deepEqual(reg(f.sf).seed("staging", { stories: "all" }).map((m) => m.replace(/ [0-9a-f]+\]$/, "]")), ["[seed]", "[seed story 77]", "[seed story 78]"]);
+    // ready() seeds even when it returns early because the org already holds the commit (a seed added later loads)
+    const { baselineId } = await import("../src/baseline.mjs");
+    f = fake({ live: [{ Description: "issue-77", SignupUsername: "u@x", LoginUrl: "https://s" }], title: orgMod.readyMarker("abc123456789ffff", null, baselineId(seedDir)) });
+    assert.equal(reg(f.sf).ready("issue-77", { commit: "abc123456789ffff" }).fresh, true);
+    assert.ok(!f.calls.some((c) => c.startsWith("project deploy")), "nothing redeployed");
+    assert.ok(f.calls.some((c) => c.startsWith("data import tree")), "the story's seed loaded");
+    // a new org from a snapshot that holds this baseline: force-app only; a snapshot of another baseline: the full deploy
+    const id = reg(() => ({}), { BASELINE: "soft" }).baselineId();
+    for (const [desc, full] of [[`main@abc b${id}`, false], ["main@abc b0000000000", true]]) {
+      f = fake({ snapshots: [{ SnapshotName: "LCB2610140000", Status: "Active", CreatedDate: "2026-10-14", Description: desc }] });
+      reg(f.sf, { BASELINE: "soft", SEED: "off" }).ready("story:90", { commit: "c0ffee" });
+      assert.equal(f.calls.some((c) => (c + " ").includes(" -d baseline ")), full, desc);
+    }
+  } finally { process.chdir(cwd); }
+  // the core seed has no email-origin Cases: they queue ClassifyCaseJob, whose pending async job blocked every baseline
+  // redeploy of its classes (6 files retried on every org build, 14 Oct)
+  assert.doesNotMatch(readFileSync(new URL("../../data/seed/Case.json", import.meta.url), "utf8"), /"Origin": "Email"/);
+});
+
+test("shipped stories' seeds fold into the core seed: files renamed per story, their own reference ids prefixed, references to the core kept", () => {
+  const core = { plan: [{ sobject: "Account", saveRefs: true, files: ["Account.json"] }], files: { "Account.json": '{"records":[{"attributes":{"type":"Account","referenceId":"Acc01"},"Name":"Northwind"}]}' } };
+  const story = { key: "283", plan: [{ sobject: "Renewal_Check__c", resolveRefs: true, files: ["Renewal_Check__c.json"] }, { sobject: "Account", files: ["SeedMarker.json"] }],
+    files: { "Renewal_Check__c.json": '{"records":[{"attributes":{"type":"Renewal_Check__c","referenceId":"RC1"},"Account__c":"@Acc01","Parent__c":"@RC1"}]}', "SeedMarker.json": "{}" } };
+  const r = orgMod.foldSeeds(core, [story]);
+  assert.deepEqual(r.plan.map((e) => e.files), [["Account.json"], ["story-283-Renewal_Check__c.json"]], "the story's marker file is dropped");
+  assert.match(r.files["story-283-Renewal_Check__c.json"], /"referenceId":"S283RC1"/);
+  assert.match(r.files["story-283-Renewal_Check__c.json"], /"Account__c":"@Acc01"/, "a reference to the core's Account stays");
+  assert.match(r.files["story-283-Renewal_Check__c.json"], /"Parent__c":"@S283RC1"/, "a reference to the story's own record follows the rename");
+  const wf = readFileSync(new URL("../../.github/workflows/seed-fold.yml", import.meta.url), "utf8");
+  assert.match(wf, /pipeline-identity/, "opened as the App, so its PR runs CI");
+  assert.match(wf, /paths: \["data\/seed\/stories\/\*\*"\]/);
+  assert.match(readFileSync(new URL("../../.github/workflows/improve.yml", import.meta.url), "utf8"), /seed-fold/);
+  assert.match(readFileSync(new URL("../../docs/agents/salesforce.md", import.meta.url), "utf8"), /data\/seed\/stories\/<story key>\/plan\.json/);
+  assert.match(readFileSync(new URL("../../.github/workflows/ai-implement.yml", import.meta.url), "utf8"), /data\/seed\/stories\/\$\{\{ env\.KEY \}\}\/plan\.json/);
+});

@@ -1,0 +1,53 @@
+name: seed-fold
+# Test data: a shipped story's own seed (data/seed/stories/<key>, written with the story) is folded into the core seed
+# (data/seed) so every org gets it from then on, as one bot PR for a person to review (pipe seed fold). Runs when a
+# release brings story seeds to main, and by hand. Merging it changes the seed, which rebuilds the snapshot.
+on:
+  push:
+    branches: [main]
+    paths: ["data/seed/stories/**"]
+  workflow_dispatch:
+permissions:
+  contents: write         # the PR branch is pushed as the pipeline App
+  pull-requests: write
+concurrency:
+  group: seed-fold
+  cancel-in-progress: false
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  fold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: seed-fold
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }   # main's own code: this job only rewrites data/seed
+      - id: id
+        uses: ./.github/actions/pipeline-identity   # re-checks out main as the App, so the PR it opens starts CI
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: main
+      - name: Fold the story seeds into data/seed
+        id: fold
+        run: node pipeline/bin/pipe.mjs seed fold
+      - name: Open or update the PR
+        if: steps.fold.outputs.folded != '0'
+        env:
+          GH_TOKEN: ${{ steps.id.outputs.token }}
+          STORIES: ${{ steps.fold.outputs.stories }}
+        run: |
+          OPEN=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          git config user.name "__owner__-pipeline[bot]"; git config user.email "pipeline@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add -A data/seed
+          git commit -qm "chore(seed): fold the test data of shipped stories ($STORIES) into data/seed"
+          git push -f origin "$BRANCH"
+          { echo "Shipped stories' own test data (\`data/seed/stories/\`: $STORIES), folded into the core seed, so every new org (story, CI, staging, UAT, the snapshot) has it from now on."
+            echo; echo "Review it like the rest of the seed: synthetic records only, no real people or emails. Merging it changes the seed, which rebuilds the snapshot; long-lived orgs get the new seed in place of the old one."; } > "$RUNNER_TEMP/body.md"
+          if [ -n "$OPEN" ]; then gh pr edit "$OPEN" --body-file "$RUNNER_TEMP/body.md"
+          else gh pr create --base main --head "$BRANCH" --title "Test data: fold shipped stories' seeds ($STORIES)" --body-file "$RUNNER_TEMP/body.md"; fi
