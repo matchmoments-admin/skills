@@ -108,7 +108,7 @@ jobs:
         run: |
           git fetch -q origin "$BASE"
           if [ -n "$TYPESAFE_API_KEY" ]; then
-            R=$(node .pipeline/pipeline/bin/pipe.mjs triage review --base "origin/$BASE" --head "$HEAD_SHA"); echo "$R"
+            R=$(node .pipeline/pipeline/bin/pipe.mjs triage review --base "origin/$BASE" --head "$HEAD_SHA" --pr "$PR"); echo "$R"
             case "$R" in skip*) echo "not-needed=${R#skip }" >> "$GITHUB_OUTPUT" ;; esac
           fi
       - id: id
@@ -208,6 +208,10 @@ jobs:
       # Auto-chain (AI_AUTO_CHAIN=true): what the journey owes after a review (pipeline/src/journey.mjs), only into
       # steps whose own flag is on: changes -> a fix (its start decision caps the rounds); a pass on a UI-facing change
       # -> Claude's UI test, unless one already passed or is running on this exact commit.
+      # AI_TRIAGE: before a chained fix, Jev reads the review; findings it is sure are minor or disputed get a comment
+      # offering /review-ok instead of a Sonnet fix round (start.fixGate). A person's tick or label always runs it.
       - name: What comes next
         if: vars.AI_AUTO_CHAIN == 'true'
+        env:
+          TYPESAFE_API_KEY: ${{ vars.AI_TRIAGE == 'true' && secrets.TYPESAFE_API_KEY || '' }}
         run: node pipeline/bin/pipe.mjs next --after review --pr "$PR"

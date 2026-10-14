@@ -7,7 +7,7 @@
 // path each time, so writers never conflict on a file. Readers fetch the branch once.
 
 export const BRANCH = "metrics";
-const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot"];
+const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev"];
 
 /** The event as stored: what happened plus where (run, workflow, job). Pure. */
 export function event(kind, data = {}, env = process.env, now = new Date()) {
@@ -137,6 +137,7 @@ export function summarize(events, { days = 28 } = {}) {
       totalUsd: Math.round(agents.reduce((a, x) => a + (Number(x.usd) || 0), 0) * 100) / 100,
       medianFixRounds: median(Object.values(fixRounds)),
       passedFirstReview: pct(reviewed.filter((s) => s === "success").length, reviewed.length),
+      jev: { decisions: of("jev").length, skippedReviews: of("jev").filter((j) => j.decision === "review" && !j.run).length, skippedFixes: of("jev").filter((j) => j.decision === "fix" && !j.run).length },
     },
   };
 }
@@ -165,5 +166,6 @@ export function toMarkdown(s) {
     ...Object.entries(s.ai.byRole).map(([n, r]) => `| ${n} | ${r.runs} | $${r.usd.toFixed(2)} | $${r.perRunUsd.toFixed(2)} | ${v(r.medianTurns)} | ${v(r.medianMinutes)} |`),
     `| **total** | | **$${s.ai.totalUsd.toFixed(2)}** | | | |`, "",
     `AI review passed first time on ${v(s.ai.passedFirstReview, "%")} of PRs; median AI fix rounds ${v(s.ai.medianFixRounds)}.`,
+    `Jev (AI_TRIAGE) made ${s.ai.jev.decisions} decisions: ${s.ai.jev.skippedReviews} reviews and ${s.ai.jev.skippedFixes} fix rounds not needed.`,
   ].join("\n");
 }

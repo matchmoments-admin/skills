@@ -101,11 +101,12 @@ const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, 
 // a snapshot Salesforce refused is marked with a tag (snapshot-refused-<name>) so no later run spends a daily org on it
 const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;
 const refuseSnapshot = (n) => { const sha = host.api("GET", `repos/${host.repo}/git/ref/heads/main`)?.object?.sha; if (sha) host.api("POST", `repos/${host.repo}/git/refs`, { ref: `refs/tags/snapshot-refused-${n}`, sha }); };
-const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, log });
+const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, jev: triageJev(), log });
 const freed = async () => { try { log((await nextAfter("org-freed")).said); } catch (e) { log(`::warning::could not start what waited for a slot: ${e.message}`); } };   // UAT first, else the story waiting longest
 const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, sameSource: sameSourceVia((a, b) => host.api("GET", `repos/${host.repo}/compare/${a}...${b}`)), env: { ...process.env, ...orgSettings() } });   // every setting org provisioning reads, resolved (SEED=off once never arrived)
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
+const triageJev = () => (names.setting("AI_TRIAGE") === "true" && process.env.TYPESAFE_API_KEY ? jev() : null);   // the fix gate (start.fixGate)
 
 
 const commands = {
@@ -256,7 +257,7 @@ const commands = {
   "triage review": async () => {
     const range = `${flag("base", "origin/main")}...${flag("head", "HEAD")}`;
     const t = await triageReview(jev(), { files: (io.git(["diff", "--name-only", range]) || "").split("\n").filter(Boolean), diff: io.git(["diff", range]) || "" });
-    output({ review: t.review, why: t.why });
+    output({ review: t.review, why: t.why }); record("jev", { decision: "review", pr: flag("pr"), run: t.review, why: t.why });
     return say(`${t.review ? "review" : "skip"} (${t.why})`);
   },
 

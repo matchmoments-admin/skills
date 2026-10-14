@@ -116,3 +116,31 @@ export async function storyReadiness(jev, { criteria, title = "", body = "" }) {
   const s = r.answers.size;
   return { weak, size: s && s.confidence >= MIN_CONFIDENCE ? s.choice : "unknown" };
 }
+
+// ---- Fix triage ---------------------------------------------------------------------------------------------
+export const FINDINGS = {
+  actionable: "at least one finding is a real defect or a missing or partly met acceptance criterion that a code change can fix",
+  "minor-only": "every finding is minor (naming, comments, style, a nice-to-have) and none is a defect or a missed criterion",
+  disputed: "the review asks for something the story, the repository's rules or Salesforce itself rule out, so no code change can satisfy it",
+};
+const MIN_FIX_SKIP_CONFIDENCE = 0.75;   // a skipped fix leaves the PR waiting on a person: be surer than for a skipped review
+
+/**
+ * Should Claude's chained fix run on this review? Returns { fix: boolean, kind, confidence, why }. Any doubt means fix:
+ * Jev down, unsure, a failed CI (the fix mends that too) or an actionable finding. Story #261's review asked for a
+ * test the platform cannot run, and two fix rounds were spent on it.
+ */
+export async function triageFix(jev, { review, ciFailed = false, story = "" }) {
+  if (ciFailed) return { fix: true, kind: "ci", confidence: 1, why: "CI failed on the head: the fix mends that too" };
+  if (!String(review || "").trim()) return { fix: true, kind: "unknown", confidence: 0, why: "no review text to judge" };
+  const r = await jev({ ai_review: clip(review).slice(-20_000), story: clip(story).slice(0, 4000) }, {
+    findings: { type: "choice", instructions: "An AI code review of a Salesforce change asked for changes. Which best describes its findings?", criteria: FINDINGS },
+  });
+  if (!r.ok) return { fix: true, kind: "unknown", confidence: 0, why: `Jev unavailable (${r.reason})` };
+  const a = r.answers.findings;
+  if (!a || !FINDINGS[a.choice] || a.confidence < MIN_FIX_SKIP_CONFIDENCE) return { fix: true, kind: "unknown", confidence: a?.confidence ?? 0, why: "Jev was not sure" };
+  return { fix: a.choice === "actionable", kind: a.choice, confidence: a.confidence, why: FINDINGS[a.choice] };
+}
+
+/** The PR comment when a chained fix is skipped. Pure. */
+export const fixSkippedMessage = (t) => `Claude's fix was not started: Jev judged the review's findings **${t.kind}** (${Math.round(t.confidence * 100)}% sure: ${t.why}). **What you can do:** if you agree, comment \`/review-ok <why>\` to accept the change; if not, tick "Fix the review findings" (or add the \`ai:fix\` label) and the fix runs.`;

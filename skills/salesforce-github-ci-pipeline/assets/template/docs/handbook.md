@@ -142,8 +142,15 @@ who does each step for any combination.
 | `AI_UI_TEST` | label `ai:test`: Claude writes the Playwright spec; required for UI-facing PRs | commit `e2e/story-<N>.spec.ts` and label `test` (required only if you commit one) |
 | `UI_EVIDENCE` | a passing UI test posts its screenshots (one per criterion, WebP, under 100 KB each, at most 6) as one **UI evidence** comment on the story; the card links it | no screenshots taken, stored or posted |
 | `AI_AUTO_CHAIN` | review changes -> `ai:fix`; pass + UI-facing -> `ai:test`, into switches that are on | people add the labels |
-| `AI_TRIAGE` | Jev triages review risk and UI failures ([below](#jev-triage)) | no triage |
-| `AI_MODEL` | one model for every role | Haiku 4.5 for the UI test, Sonnet 5.5 for plan, spec, build, fix and review |
+| `AI_TRIAGE` | Jev triages review risk, UI failures and chained fixes ([below](#jev-triage)) | no triage |
+| `AI_MODEL` | one model for every role | Sonnet 5.5 for every role (Haiku cost more in extra rounds and failed runs) |
+| `AI_MODEL_IMPLEMENT` | the implement role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
+| `AI_MODEL_FIX` | the fix role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
+| `AI_MODEL_PLAN` | the plan role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
+| `AI_MODEL_SPEC` | the spec role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
+| `AI_MODEL_REVIEW` | the review role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
+| `AI_MODEL_UI_TEST` | the ui-test role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
+
 | `APPROVERS` | the team's approvers (`@lead,@senior1`), default first: stories name an **Approver**; only that person (or another approver when none is named, or when the approver pushed the latest change) can approve, sign off or `/review-ok`, and never whoever pushed the latest change. The card says who must approve | anyone with write access approves |
 | `UAT_ENABLED` | releases go to UAT and need **UAT passed** | staging is the last stop before production |
 | `UAT_TESTERS` | `{"github-login": "email"}`: where **Send me a login** emails the set-password link | the person's public GitHub email |
@@ -176,7 +183,7 @@ off posts a comment naming the variable. Presets: **no AI** (nothing set), **che
 ## Jev triage
 
 [Jev](https://docs.typesafe.ai) (TypeSafe) answers typed questions (yes/no, a choice, a score) with probabilities
-for about $0.04 per million input tokens. It never writes code or comments. With `AI_TRIAGE=true` it does two jobs,
+for about $0.04 per million input tokens. It never writes code or comments. With `AI_TRIAGE=true` it does three jobs,
 and if it is unavailable or unsure the pipeline does exactly what it would without it.
 
 **1. Review triage** (in `ai-review`, before Claude starts):
@@ -193,6 +200,16 @@ and if it is unavailable or unsure the pipeline does exactly what it would witho
    nothing.
 2. The PR gets a comment with the answer, and the failure status says it ("the spec failed (Jev: feature)").
 3. A **flake** re-runs the spec once, by itself. A second failure stays failed.
+
+**3. Fix triage** (with `AI_AUTO_CHAIN`, before Claude's chained fix starts):
+1. A failed CI check on the head: the fix always runs (it mends that too). So does a fix a person asks for (the
+   button or the `ai:fix` label).
+2. Otherwise Jev reads the latest AI review and picks **actionable**, **minor-only** (naming, style, nice-to-haves)
+   or **disputed** (it asks for something the story, the rules or Salesforce rule out, like #261).
+3. Minor-only or disputed at 75% or more: no fix round. The PR gets a comment offering `/review-ok <why>`, or the
+   button to run the fix anyway. Anything else, or no answer, means the fix runs.
+
+Every decision is an event (`jev`); the weekly metrics count the reviews and fix rounds Jev saved.
 
 Code: [`pipeline/src/jev.mjs`](../pipeline/src/jev.mjs). Secret: `TYPESAFE_API_KEY`.
 

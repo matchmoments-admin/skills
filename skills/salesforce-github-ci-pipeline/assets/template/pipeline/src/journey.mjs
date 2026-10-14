@@ -63,14 +63,14 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
  * Gather, decide, act: what starts after `after` on PR `pr` (without one, the open release PR: staging finished, or
  * an org slot freed up). Starts go through the start decision (startJob), dispatches straight to the workflow. A freed
  * slot goes to UAT first (the release waits on it), else to the story that has waited longest for one (waiting:org).
- * deps: { host, gh, cards, ai, uat, startJob, log }. Returns { steps, said }.
+ * deps: { host, gh, cards, ai, uat, startJob, jev, log } (jev: AI_TRIAGE's fix gate, start.fixGate). Returns { steps, said }.
  */
 export async function next(after, pr, deps) {
   const r = await prNext(after, pr, deps);
   return after === "org-freed" && !r.steps.length ? startWaiting(deps) || r : r;
 }
 
-async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, log = () => {} }) {
+async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, jev = null, log = () => {} }) {
   if (!pr) {
     const rel = String(host.openRelease() || "").replace(/^origin\//, "");
     pr = rel ? (gh(["pr", "list", "--head", rel, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || [])[0]?.number : null;
@@ -82,7 +82,7 @@ async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, log = () 
   const steps = nextSteps(after, standing(facts), { ai, uat, uiNeeded: uiNeeded(files), pr });
   for (const s of steps) {
     log(`next after ${after}: ${s.start || s.dispatch} (${s.why})`);
-    if (s.start) await startJob(s.start, pr, { host, gh, cards, ai, mode: s.mode || "run", log });
+    if (s.start) await startJob(s.start, pr, { host, gh, cards, ai, jev, mode: s.mode || "run", log });
     else host.dispatch(s.dispatch, s.inputs, s.ref);
   }
   return { steps, said: steps.length ? `started: ${steps.map((x) => `${x.start || x.dispatch} (${x.why})`).join("; ")}` : `nothing owed after ${after} on PR #${pr}` };

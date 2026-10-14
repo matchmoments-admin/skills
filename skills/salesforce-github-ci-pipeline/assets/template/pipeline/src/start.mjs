@@ -5,7 +5,8 @@
 import { storyOf, sprintOf, uiNeeded } from "./conventions.mjs";
 import { STATUS, standing, carriedFrom, CARRY } from "./gate.mjs";
 import { CHECKS, LIVE_TESTS_CHECK } from "./conventions.mjs";
-import { fixRoundsUsed, MAX_FIX_ROUNDS } from "./verdict.mjs";
+import { fixRoundsUsed, MAX_FIX_ROUNDS, REVIEW_LINE, reviewComments } from "./verdict.mjs";
+import { triageFix, fixSkippedMessage } from "./jev.mjs";
 
 /** What kind of branch this is: story | release | backmerge | maintenance. One rule for every workflow. Pure. */
 export function branchKind(ref) {
@@ -145,9 +146,10 @@ const WORKFLOW = { review: "ai-review.yml", fix: "ai-fix.yml", "ui-test": "ui-te
  * Gather the facts for decide(), then act: dispatch the job on main, or post its verdict, say the flag is off, or stop
  * the fix rounds (block the PR, say what a person can do, once). The one door into review, fix and the UI test: the
  * route jobs (labels, ticked boxes, comments, auto-chain) and CI's autofix all come through here.
- * deps: { host, gh, cards, ai }. Returns the decision.
+ * deps: { host, gh, cards, ai, jev }. jev (AI_TRIAGE, the journey's chained starts only): a fix Jev confidently
+ * judges unneeded is not started (fixGate). Returns the decision.
  */
-export async function startJob(kind, pr, { host, gh, cards, ai, mode = "run", before = null, after = null, explicit = false, log = () => {} }) {
+export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, mode = "run", before = null, after = null, explicit = false, log = () => {} }) {
   const p = gh(["pr", "view", String(pr), "--json", "headRefName,baseRefName,headRefOid,labels,state"]);
   if (p.state !== "OPEN") return { run: false, why: `the PR is ${String(p.state).toLowerCase()}` };
   const labels = (p.labels || []).map((l) => l.name);
@@ -163,6 +165,15 @@ export async function startJob(kind, pr, { host, gh, cards, ai, mode = "run", be
     hasSpec: kind === "ui-test" && mode !== "ai" ? Boolean(key && host.api("GET", `repos/${host.repo}/contents/e2e/story-${key}.spec.ts?ref=${p.headRefOid}`)?.sha) : false,
   });
   const label = { review: "ai:review", fix: "ai:fix", "ui-test": mode === "ai" ? "ai:test" : "test" }[kind];
+  if (d.run && kind === "fix" && jev && !explicit) {
+    const g = await fixGate(pr, { host, gh, jev });
+    if (!g.fix) {
+      log(`not started: ${g.why}`);
+      gh(["pr", "comment", String(pr), "--body", fixSkippedMessage(g)], { allowFail: true });
+      gh(["pr", "edit", String(pr), "--remove-label", label], { allowFail: true });
+      return { run: false, why: `Jev: the review's findings are ${g.kind}`, jev: g };
+    }
+  }
   if (d.run) {
     // Claude's UI test is running on this head: the gate and the journey see it (no second writer), until its verdict
     if (kind === "ui-test" && mode === "ai") host.status(p.headRefOid, STATUS.ui, "pending", "Claude is writing and running the UI test");
@@ -180,6 +191,23 @@ export async function startJob(kind, pr, { host, gh, cards, ai, mode = "run", be
   if (d.stop && key) await cards.refresh(key, { activity: { state: "failed", what: "Claude's fix rounds are used up: a person needs to look", url: host.runUrl, retry: "push a fix yourself, or comment /review-ok <why> if the review is wrong" } });
   else if (d.status && cards) await cards.refreshPr(pr);
   return d;
+}
+
+/**
+ * Jev's look at the latest AI review before a chained fix (jev.triageFix), recorded as a `jev` event. CI's verdict on
+ * the head comes from Standing: a failed check always gets the fix. Any error means fix. io: host, gh.
+ */
+export async function fixGate(pr, { host, gh, jev }) {
+  let t;
+  try {
+    const st = host.prFacts ? standing(host.prFacts(pr)) : null;
+    const ciFailed = Object.values(st?.checks || {}).some((c) => c.state === "failed");
+    const comments = gh(["pr", "view", String(pr), "--json", "comments"])?.comments || [];
+    const review = reviewComments(comments).filter((b) => String(b).includes(REVIEW_LINE.changes)).at(-1) || "";
+    t = await triageFix(jev, { review, ciFailed });
+  } catch (err) { t = { fix: true, kind: "unknown", confidence: 0, why: `could not ask Jev (${err.message})` }; }
+  host.record?.("jev", { decision: "fix", pr: String(pr), run: t.fix, kind: t.kind, confidence: t.confidence, why: t.why });
+  return t;
 }
 
 /**

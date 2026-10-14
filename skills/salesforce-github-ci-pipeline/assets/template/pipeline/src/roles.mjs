@@ -18,8 +18,10 @@ export const ROLES = {
   "ui-test": { model: "claude-sonnet-5-5", turns: 30, turnLimitOk: true },
 };
 
-export function modelFor(role, override = setting("AI_MODEL")) {
+// AI_MODEL_<ROLE> (AI_MODEL_UI_TEST...) trials one role and rolls back by emptying it; it wins over AI_MODEL
+export function modelFor(role, override) {
   if (!ROLES[role]) throw new Error(`Unknown AI role: ${role}`);
+  if (override === undefined) override = setting(`AI_MODEL_${role.toUpperCase().replace(/-/g, "_")}`) || setting("AI_MODEL");
   if (override && String(override).trim()) return String(override).trim();
   return ROLES[role].model;
 }

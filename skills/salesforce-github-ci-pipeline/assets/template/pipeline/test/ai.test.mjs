@@ -227,3 +227,64 @@ test("the review rubric: the UI test spec comes after the review; answers win ov
   assert.match(r, /written by the UI test step \*\*after\*\* this review, so its absence here is never a\nfinding/);
   assert.match(r, /win over the spec text/);
 });
+
+test("AI_MODEL_<ROLE> overrides one role, ahead of AI_MODEL", async () => {
+  const { modelFor } = await import("../src/roles.mjs");
+  const prev = process.env.PIPELINE_VARS;
+  process.env.PIPELINE_VARS = JSON.stringify({ AI_MODEL: "m-all", AI_MODEL_UI_TEST: "m-ui" });
+  try {
+    assert.equal(modelFor("ui-test"), "m-ui");
+    assert.equal(modelFor("review"), "m-all");
+  } finally { if (prev === undefined) delete process.env.PIPELINE_VARS; else process.env.PIPELINE_VARS = prev; }
+});
+
+test("fix triage: only a confident minor-only or disputed review skips the fix; CI failed, unsure or Jev down means fix", async () => {
+  const { triageFix } = await import("../src/jev.mjs");
+  const review = "### Standards\n- [minor] rename a variable\nAI-REVIEW: CHANGES";
+  const minor = fakeJev({ findings: { type: "choice", choice: "minor-only", confidence: 0.9 } });
+  const t = await triageFix(minor, { review });
+  assert.deepEqual([t.fix, t.kind], [false, "minor-only"]);
+  assert.equal((await triageFix(fakeJev({ findings: { type: "choice", choice: "disputed", confidence: 0.9 } }), { review })).fix, false);
+  assert.equal((await triageFix(fakeJev({ findings: { type: "choice", choice: "actionable", confidence: 0.95 } }), { review })).fix, true);
+  assert.equal((await triageFix(fakeJev({ findings: { type: "choice", choice: "minor-only", confidence: 0.7 } }), { review })).fix, true, "not sure enough");
+  assert.equal((await triageFix(fakeJev({}, 500), { review })).fix, true, "Jev down");
+  assert.equal((await triageFix(minor, { review, ciFailed: true })).fix, true, "a failed CI always gets the fix");
+  assert.equal((await triageFix(minor, { review: "" })).fix, true, "nothing to judge");
+});
+
+test("the fix gate: a chained fix Jev skips posts /review-ok and no dispatch; a person's start and no Jev run as before", async () => {
+  const start = await import("../src/start.mjs");
+  const on = { review: true, fix: true, uiTest: true, autoChain: true };
+  const did = [], events = [];
+  const host = { repo: "o/r", runUrl: "u", dispatch: (...a) => did.push(["dispatch", ...a]), status: () => {}, api: () => ({}), workflowRuns: () => [],
+    record: (k, d) => events.push([k, d]), prFacts: () => ({ pr: { headRefName: "issue-5", baseRefName: "release/w", headRefOid: "h5", state: "OPEN", labels: [], commits: [] }, checkRuns: [] }) };
+  const gh = (a) => {
+    did.push(a.slice(0, 3).join(" "));
+    if (a[0] === "pr" && a[1] === "view" && a.includes("comments")) return { comments: [{ author: { login: "github-actions" }, body: "- [minor] naming\nAI-REVIEW: CHANGES", createdAt: "2026-10-14T01:00:00Z" }] };
+    return a[0] === "pr" && a[1] === "view" ? { headRefName: "issue-5", baseRefName: "release/w", headRefOid: "h5", labels: [], state: "OPEN", commits: [] } : null;
+  };
+  const minor = fakeJev({ findings: { type: "choice", choice: "minor-only", confidence: 0.9 } });
+  const d = await start.startJob("fix", 5, { host, gh, cards: {}, ai: on, jev: minor });
+  assert.equal(d.run, false);
+  assert.ok(!did.some((x) => Array.isArray(x)), "no fix runner");
+  assert.ok(did.includes("pr comment 5"), "says what a person can do");
+  assert.deepEqual([events[0][0], events[0][1].decision, events[0][1].run], ["jev", "fix", false]);
+  did.length = 0;
+  await start.startJob("fix", 5, { host, gh, cards: {}, ai: on, jev: minor, explicit: true });
+  assert.deepEqual(did.find(Array.isArray), ["dispatch", "ai-fix.yml", { pr: 5 }], "a person asked: it runs");
+  did.length = 0;
+  await start.startJob("fix", 5, { host, gh, cards: {}, ai: on });
+  assert.deepEqual(did.find(Array.isArray), ["dispatch", "ai-fix.yml", { pr: 5 }], "no Jev (AI_TRIAGE off): it runs");
+  const s = events.length;
+  await start.startJob("fix", 5, { host, gh, cards: {}, ai: on, jev: fakeJev({}, 500) });
+  assert.equal(events.at(-1)[1].run, true, "Jev down: recorded, and it runs");
+  assert.equal(events.length, s + 1);
+});
+
+test("Jev decisions are events, and the metrics count what they saved", () => {
+  const at = "2026-10-14T00:00:00Z";
+  const s = events.summarize([{ kind: "jev", at, decision: "fix", run: false }, { kind: "jev", at, decision: "review", run: false }, { kind: "jev", at, decision: "fix", run: true }], { days: 28 });
+  assert.deepEqual(s.ai.jev, { decisions: 3, skippedReviews: 1, skippedFixes: 1 });
+  assert.match(events.toMarkdown(s), /3 decisions: 1 reviews and 1 fix rounds not needed/);
+  assert.equal(events.event("jev", { decision: "fix" }).kind, "jev");
+});
