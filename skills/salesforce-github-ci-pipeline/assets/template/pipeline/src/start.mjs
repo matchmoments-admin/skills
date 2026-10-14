@@ -2,7 +2,7 @@
 // (or CI's static job), before the long job starts: GitHub bills every job at least a minute, a 75-minute job that
 // starts only to find it has nothing to do costs a runner and a lane wait, and a rule in a release branch's YAML stays
 // stale until a back-merge. decide() and ciPlan() are pure; `pipe start` and `pipe ci plan` gather the facts and act.
-import { storyOf, sprintOf, uiFacing } from "./conventions.mjs";
+import { storyOf, sprintOf, uiNeeded } from "./conventions.mjs";
 import { STATUS, standing, carriedFrom, CARRY, TRUSTED_STATUS_CREATORS } from "./gate.mjs";
 import { CHECKS } from "./conventions.mjs";
 import { fixRoundsUsed, MAX_FIX_ROUNDS } from "./verdict.mjs";
@@ -28,7 +28,7 @@ export function ciPlan({ ref, base, files, carried = null }) {
   // since (gate.CARRY's no-sf rule): the org already holds this source, so no deploy and no Apex run (story #193
   // deployed five times, three of them for spec-only pushes). The check is skipped, which the gate counts as passed.
   const org = kind === "release" || kind === "backmerge" ? false : sf && !carried;
-  return { kind, sf, org, ui: files === null || uiFacing(files).length > 0, target, all: kind !== "story" && kind !== "maintenance", carried: carried || "" };
+  return { kind, sf, org, ui: uiNeeded(files), target, all: kind !== "story" && kind !== "maintenance", carried: carried || "" };
 }
 
 /**

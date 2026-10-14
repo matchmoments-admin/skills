@@ -63,6 +63,8 @@ const UI_FACING = [/\/lwc\//, /\/aura\//, /\/flexipages\//, /\/layouts\//, /\/ob
   /\/tabs\//, /\/applications\//, /\/flows\//, /\/validationRules\//, /\/listViews\//, /\/compactLayouts\//, /\/pages\//, /\/triggers\//,
   /\/reports\//, /\/reportTypes\//, /\/dashboards\//, /\/recordTypes\//, /\/webLinks\//];   // a reporting story is seen in the UI too (spec #125 got "not needed")
 export const uiFacing = (files) => files.filter((f) => f.startsWith("force-app/") && UI_FACING.some((re) => re.test(f)));
+/** Does a change need a UI test? Unknown files (null, a failed diff) count as yes. The one rule the gate, the journey and CI use. */
+export const uiNeeded = (files) => !Array.isArray(files) || uiFacing(files).length > 0;
 
 // ---- settings and AI feature flags ---------------------------------------------------------------------------
 // Every setting, its default and its meaning: pipeline/src/settings.mjs (one table; setting() throws on an undeclared one)

@@ -9,7 +9,7 @@
 // AI is optional (facts.ai, from the AI_* repo variables). Required verdicts: the AI review only when AI_REVIEW is on;
 // the UI test when the change is UI-facing and either AI_UI_TEST is on or the PR commits its story spec. A failed
 // verdict on the code always blocks, whatever the flags. With every flag off, CI plus a person's approval is the gate.
-import { CHECKS, storyOf, sprintOf, uiFacing, storySpec, isPipelineAuthor, isHumanAuthor, setting, touchesPipeline } from "./conventions.mjs";
+import { CHECKS, storyOf, sprintOf, uiNeeded, storySpec, isPipelineAuthor, isHumanAuthor, setting, touchesPipeline } from "./conventions.mjs";
 
 // signoff: a person's sign-off on a story PR into the sprint (a ticked box or /ship), recorded by an agent-free job.
 // approval: the gate's record of the approval it accepted, posted when it decides to merge (close-out reads it, so a
@@ -244,7 +244,7 @@ export const readyAfterPush = (facts) => readyBy(facts).length > 0;
 /** Which verdicts this PR needs, given the AI flags and what it changes (prFiles: files changed against its base). */
 export function requiredVerdicts({ ai = {}, compare = {} }, story) {
   const files = compare.prFiles;                       // undefined if the comparison failed: assume UI-facing
-  const ui = !files || uiFacing(files).length > 0;
+  const ui = uiNeeded(files);
   const spec = Boolean(story) && Array.isArray(files) && files.includes(storySpec(story));
   return [
     { context: STATUS.review, what: "AI review", required: Boolean(ai.review), how: "it starts when the PR opens and after each push; or tick Run the AI review again" },
@@ -296,11 +296,15 @@ export function evaluate(facts) {
   const st = standing(facts);
   const rules = st.rules;
   const reasons = [];
+  // reasons no row of the story card stands for (a draft, conflicts, blockers...): the card's Next names the first one,
+  // so it never says "everything else is green" while the gate blocks (14 Oct review)
+  const other = [];
+  const blockedBy = (why, failed = false) => { other.push(why); if (failed) fail(why); else reasons.push(why); };
   let blocking = "pending";
   const fail = (why) => { blocking = "failure"; reasons.push(why); };
   if (pr.state && pr.state !== "OPEN") reasons.push(`the PR is ${String(pr.state).toLowerCase()}`);
-  if (pr.isDraft) reasons.push("the PR is a draft");
-  if (pr.mergeable === "CONFLICTING") fail("it has merge conflicts with its base; update the branch");
+  if (pr.isDraft) blockedBy("the PR is a draft: mark it ready for review");
+  if (pr.mergeable === "CONFLICTING") blockedBy("it has merge conflicts with its base; update the branch", true);
 
   for (const [name, c] of Object.entries(st.checks)) {
     if (c.state === "failed") fail(`check "${name}" is ${c.conclusion}`);
@@ -336,21 +340,21 @@ export function evaluate(facts) {
   // a story PR that changes pipeline code (it runs with production credentials) never merges through the gate: CI's
   // guard says so too, but a branch's own workflows can fake CI's result; the gate reads the diff itself
   const pipelineFiles = rules.verdicts && Array.isArray(compare.prFiles) ? touchesPipeline(compare.prFiles) : [];
-  if (pipelineFiles.length) fail(`a story PR cannot change pipeline code (${pipelineFiles.slice(0, 3).join(", ")}): open a maintenance PR`);
+  if (pipelineFiles.length) blockedBy(`a story PR cannot change pipeline code (${pipelineFiles.slice(0, 3).join(", ")}): open a maintenance PR`, true);
   if (rules.trusted) {
-    if (!isPipelineAuthor(pr.author?.login)) reasons.push("a back-merge must be opened by the pipeline");
-    if (compare.headInMain !== true) reasons.push("a back-merge must contain only commits already in main");
+    if (!isPipelineAuthor(pr.author?.login)) blockedBy("a back-merge must be opened by the pipeline");
+    if (compare.headInMain !== true) blockedBy("a back-merge must contain only commits already in main");
 
   }
   if (rules.pure && compare.unreleasedSprintCommits > 0) {
-    reasons.push(`it carries ${compare.unreleasedSprintCommits} unreleased sprint commit(s); a hotfix must branch from main`);
+    blockedBy(`it carries ${compare.unreleasedSprintCommits} unreleased sprint commit(s); a hotfix must branch from main`);
   }
   // production was rolled back: nothing ships to main until the bad change is reverted or fixed (the open issue says how)
   if (["release", "hotfix", "maintenance"].includes(r) && validate_(rules, compare) && facts.rolledBack) {
-    reasons.push(`production was rolled back (#${facts.rolledBack}): revert or fix forward on main first, then close that issue`);
+    blockedBy(`production was rolled back (#${facts.rolledBack}): revert or fix forward on main first, then close that issue`);
   }
   // a story whose blockers have not landed in the sprint (or shipped) waits for them
-  for (const b of facts.blockers || []) if (!b.landed) reasons.push(`blocked by #${b.number}: it has not merged into the sprint yet`);
+  for (const b of facts.blockers || []) if (!b.landed) blockedBy(`blocked by #${b.number}: it has not merged into the sprint yet`);
   // approvals (Approver): the story's approver, never the person who pushed the latest change, when APPROVERS is set
   if (rules.approval !== "none") {
     const a = st.approval;
@@ -364,7 +368,7 @@ export function evaluate(facts) {
   const forceApp = Boolean(compare.forceAppChanged);
   const validate = rules.validate === true || (rules.validate === "if-force-app" && forceApp);
   const after = followUps(pr, compare.prFiles || [], { forceApp });   // one rule for the gate and an emergency merge
-  return { route: r, rules, reasons, blocking, mergeable: reasons.length === 0, story: storyOf(pr.headRefName), validate, after, standing: st };
+  return { route: r, rules, reasons, other, blocking, mergeable: reasons.length === 0, story: storyOf(pr.headRefName), validate, after, standing: st };
 }
 
 const validate_ = (rules, compare) => rules.validate === true || (rules.validate === "if-force-app" && Boolean(compare.forceAppChanged));

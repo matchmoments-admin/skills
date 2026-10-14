@@ -4,7 +4,7 @@
 // stage's job ends with `pipe next --after <stage>`, and this module decides from the head's Standing. Pure:
 // nextSteps() takes Standing and settings and returns what to start; `pipe next` gathers and acts.
 import { STATUS, standing } from "./gate.mjs";
-import { CHECKS, uiFacing } from "./conventions.mjs";
+import { CHECKS, uiNeeded } from "./conventions.mjs";
 
 /** The stages, in order. Story PRs: into the sprint's release branch; the release PR: into main, then production. */
 export const STAGES = {
@@ -79,7 +79,7 @@ async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, log = () 
   const facts = host.prFacts(pr);
   if (facts.pr.state !== "OPEN") return { steps: [], said: `nothing starts after ${after}: PR #${pr} is ${String(facts.pr.state).toLowerCase()}` };
   const files = facts.compare?.prFiles;
-  const steps = nextSteps(after, standing(facts), { ai, uat, uiNeeded: !files || uiFacing(files).length > 0, pr });
+  const steps = nextSteps(after, standing(facts), { ai, uat, uiNeeded: uiNeeded(files), pr });
   for (const s of steps) {
     log(`next after ${after}: ${s.start || s.dispatch} (${s.why})`);
     if (s.start) await startJob(s.start, pr, { host, gh, cards, ai, mode: s.mode || "run", log });

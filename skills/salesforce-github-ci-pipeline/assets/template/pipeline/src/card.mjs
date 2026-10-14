@@ -72,6 +72,7 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
     if (failed) next = failed[1].startsWith("CI") ? `Fix the failing tests ([see what failed](${prUrl}/checks))${ai.fix ? ": tick **Fix … with Claude** below, or push a fix" : `, then push to ${branchLink}`}.`
       : failed[1] === "AI review" ? `Address the review comments on [#${pr.number}](${prUrl})${ai.fix ? ", or tick **Fix … with Claude** below" : ""}.`
       : `Fix the UI test failure ([report](${prUrl}/checks))${ai.fix ? ": tick **Fix … with Claude**, or fix it yourself and tick **Run the UI test**" : ", then tick **Run the UI test** below"}.`;
+    else if (decision?.other?.length) next = `Blocked: ${decision.other[0]}.`;   // what no row shows (a draft, conflicts, a blocker...)
     else if (decision?.mergeable) next = "Nothing to do: merging now.";
     else if (waiting && waiting[1] !== "Approval" && waiting[0] === "running") next = `Waiting for ${waiting[1].toLowerCase()}. You can approve now: **[Approve here](${prUrl}/files)**.`;
     else if (waiting && waiting[1] === "Approval") next = `**[Approve here](${prUrl}/files)**: everything else is green.`;
@@ -144,7 +145,7 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
   // every UI spec, once per release (#273): it starts when the release PR opens, beside UAT
   const ui = merged ? { state: "success" } : verdictFor(STATUS.uiRegression, ctx);
   const uiRow = { success: ["done", "every UI spec passed"], failure: ["failed", `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)`],
-    stale: ["waiting", "passed on an older commit: it runs again"], missing: ["running", "runs once per release, now that the release PR is open"] }[ui.state] || ["waiting", ui.state];
+    stale: ["waiting", "passed on an older commit: it runs again"], pending: ["running", "running on the staging org"], missing: ["running", "runs once per release, now that the release PR is open"] }[ui.state] || ["waiting", ui.state];
   rows.push([uiRow[0], "UI regression (every UI spec)", uiRow[1]]);
   if (uat) {
     const u = merged ? { state: "success" } : verdictFor(STATUS.uat, ctx);

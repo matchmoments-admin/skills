@@ -1154,6 +1154,23 @@ test("settings come from the one PIPELINE_VARS line (toJSON(vars)); an env var o
   assert.equal(names.setting("UI_REGRESSION", { PIPELINE_VARS: "not json" }), "release");
 });
 
+test("the story card never says everything is green while the gate blocks: its Next names what no row shows (14 Oct review)", () => {
+  const f = open(fixture(12));
+  for (const [facts, why] of [[{ ...f, pr: { ...f.pr, isDraft: true } }, /Blocked: the PR is a draft/], [{ ...f, pr: { ...f.pr, mergeable: "CONFLICTING" } }, /Blocked: it has merge conflicts/],
+    [{ ...f, blockers: [{ number: 41, landed: false }] }, /Blocked: blocked by #41/]]) {
+    const decision = gate.evaluate(facts);
+    assert.ok(decision.other.length, "a reason no row stands for");
+    const md = storyCard({ key: "12", repoUrl: "https://github.com/o/r", branch: facts.pr.headRefName, base: facts.pr.baseRefName, pr: facts.pr, facts, decision });
+    assert.match(md, why);
+    assert.doesNotMatch(md, /everything else is green/);
+  }
+  assert.deepEqual(gate.evaluate(f).other, [], "nothing extra on a clean PR");
+  // one rule for "does it need a UI test": unknown files count as yes
+  assert.equal(names.uiNeeded(null), true);
+  assert.equal(names.uiNeeded(["docs/x.md"]), false);
+  assert.equal(names.uiNeeded(["force-app/main/default/layouts/A.layout-meta.xml"]), true);
+});
+
 test("settings are declared once: every name the code and the workflows read is declared, and documented in the handbook", () => {
   const declared = new Set(settings.SETTINGS.map(([n]) => n));
   const src = [...readdirSync(new URL("../src/", import.meta.url)).filter((f) => f.endsWith(".mjs")).map((f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")), pipeSources()].join("\n");
