@@ -659,3 +659,28 @@ test("the masked production sample for UAT: off by default, a protected environm
   assert.ok(cfg.objects.find((o) => /FROM Contact/.test(o.query)).mockFields.some((m) => m.name === "Email"), "emails are masked");
   assert.ok(cfg.objects.find((o) => /FROM Case/.test(o.query)).mockFields.some((m) => m.name === "Origin"), "no email-origin Cases (they queue Apex jobs in UAT)");
 });
+
+test("a login error from a snapshot is tried once more and never refuses it; a real snapshot error still does", () => {
+  const list = [{ SnapshotName: "LCB2610140537", Status: "Active", CreatedDate: "2026-10-14T05:37:00.000+0000" }];
+  const run = (errors) => {
+    const refused = [], events = [];
+    let creates = 0;
+    const sf = (a) => {
+      if (a[0] === "org" && a[2] === "snapshot") return list;
+      if (a[0] === "org" && a[1] === "create" && a.some((x) => String(x).includes("snapshot-"))) { const e = errors[creates++]; if (e) throw new Error(e); return {}; }
+      if (a[0] === "org" && a[1] === "list") return { scratchOrgs: [] };
+      return {};
+    };
+    const r = orgRegistry({ sf, sleep: () => {}, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" }, record: (k, d) => events.push([k, d]), refuseSnapshot: (n) => refused.push(n) });
+    const how = r.create({ alias: "staging", description: "staging-2027-w01", days: 30, kind: "sprint", definition: "qa" });
+    return { how, refused, creates, events };
+  };
+  const jwt = "sf org create scratch failed: JwtAuthError: Error authenticating with JWT. Errors encountered: <!DOCTYPE HTML>";
+  const once = run([jwt]);
+  assert.deepEqual([once.how.fromSnapshot, once.creates, once.refused], [true, 2, []], "the second try works");
+  const twice = run([jwt, jwt]);
+  assert.deepEqual([twice.how.fromSnapshot, twice.refused], [false, []], "falls back to shape, the snapshot kept");
+  assert.equal(twice.events.find(([k]) => k === "snapshot")[1].transient, true);
+  const real = run(["SnapshotNotActive: The snapshot is not active"]);
+  assert.deepEqual([real.creates, real.refused], [1, ["LCB2610140537"]], "a snapshot error: no second try, refused");
+});
