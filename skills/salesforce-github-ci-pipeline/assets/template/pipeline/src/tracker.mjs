@@ -3,6 +3,7 @@
 //   comment(key, text) · done(key, text) · carry(key, sprint, text)
 //   sprintStories(sprint) -> [{ key, title, state }] · openSprint(sprint) · closeSprint(sprint)
 // Pick with TRACKER=github (default) or TRACKER=jira. Everything Salesforce- or gate-related ignores the tracker.
+import { setting } from "./settings.mjs";
 import { milestoneTitle } from "./conventions.mjs";
 
 export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY }) {
@@ -120,5 +121,5 @@ export function jiraTracker({ fetch = globalThis.fetch, base = process.env.JIRA_
 }
 
 export function tracker(io, env = process.env) {
-  return (env.TRACKER || "github") === "jira" ? jiraTracker({}) : githubTracker({ gh: io.gh, ghPages: io.ghPages });
+  return setting("TRACKER", env) === "jira" ? jiraTracker({}) : githubTracker({ gh: io.gh, ghPages: io.ghPages });
 }

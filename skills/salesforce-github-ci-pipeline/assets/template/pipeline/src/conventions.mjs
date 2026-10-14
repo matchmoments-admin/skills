@@ -65,13 +65,9 @@ const UI_FACING = [/\/lwc\//, /\/aura\//, /\/flexipages\//, /\/layouts\//, /\/ob
 export const uiFacing = (files) => files.filter((f) => f.startsWith("force-app/") && UI_FACING.some((re) => re.test(f)));
 
 // ---- settings and AI feature flags ---------------------------------------------------------------------------
-// Settings are repository variables (Settings > Secrets and variables > Actions > Variables). Every workflow passes all
-// of them in one line, `PIPELINE_VARS: ${{ toJSON(vars) }}`, so a new switch needs no workflow edits and no workflow can
-// forget one. An env var of the same name, if set, wins (a step that overrides one setting).
-export function setting(name, env = process.env) {
-  if (env[name] !== undefined && env[name] !== "") return env[name];
-  try { return JSON.parse(env.PIPELINE_VARS || "{}")[name] ?? ""; } catch { return ""; }
-}
+// Every setting, its default and its meaning: pipeline/src/settings.mjs (one table; setting() throws on an undeclared one)
+import { setting } from "./settings.mjs";
+export { setting };
 // Each AI step is its own variable; unset = off, so the pipeline is fully manual by default.
 export const AI_FLAGS = { plan: "AI_PLAN", implement: "AI_IMPLEMENT", review: "AI_REVIEW", fix: "AI_FIX", uiTest: "AI_UI_TEST", autoChain: "AI_AUTO_CHAIN", triage: "AI_TRIAGE" };
 export function aiFeatures(env = process.env) {

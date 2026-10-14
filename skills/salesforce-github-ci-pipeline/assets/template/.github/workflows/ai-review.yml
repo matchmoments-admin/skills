@@ -53,6 +53,16 @@ jobs:
   review:
     if: github.event_name == 'workflow_dispatch' && vars.AI_REVIEW == 'true'
     runs-on: ubuntu-latest
+    # The agent runs here: this job's token cannot post verdicts (statuses) or start workflows (actions). The verdict
+    # job after it, agent-free, does both. (It inherited the workflow's write scopes until the 14 Oct review.)
+    permissions:
+      contents: write       # the event log (the agent's cost); the review is posted as the App
+      pull-requests: write
+      issues: write
+      id-token: write
+      checks: read
+      statuses: read
+      actions: read
     concurrency:
       group: ai-review-${{ github.event.pull_request.number || inputs.pr }}   # a newer review of the same PR replaces an older one
       cancel-in-progress: true

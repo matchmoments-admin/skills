@@ -42,6 +42,7 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync, readdirSync } 
 import { join } from "node:path";
 import { io, PIPELINE_ROOT } from "../src/io.mjs";
 import * as names from "../src/conventions.mjs";
+import { orgSettings, settingsTable } from "../src/settings.mjs";
 import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
 import * as closeout from "../src/closeout.mjs";
@@ -102,7 +103,7 @@ const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;
 const refuseSnapshot = (n) => { const sha = host.api("GET", `repos/${host.repo}/git/ref/heads/main`)?.object?.sha; if (sha) host.api("POST", `repos/${host.repo}/git/refs`, { ref: `refs/tags/snapshot-refused-${n}`, sha }); };
 const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, log });
 const freed = async () => { try { log((await nextAfter("org-freed")).said); } catch (e) { log(`::warning::could not start what waited for a slot: ${e.message}`); } };   // UAT first, else the story waiting longest
-const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, sameSource: sameSourceVia((a, b) => host.api("GET", `repos/${host.repo}/compare/${a}...${b}`)), env: { ...process.env, ORG_RESERVE: names.setting("ORG_RESERVE"), SCRATCH_SNAPSHOT: names.setting("SCRATCH_SNAPSHOT"), BASELINE: names.setting("BASELINE"), VOLUME_RECORDS: names.setting("VOLUME_RECORDS") || undefined } });
+const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, sameSource: sameSourceVia((a, b) => host.api("GET", `repos/${host.repo}/compare/${a}...${b}`)), env: { ...process.env, ...orgSettings() } });   // every setting org provisioning reads, resolved (SEED=off once never arrived)
 const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 
@@ -114,6 +115,7 @@ const commands = {
     output(ctx);
     return say(Object.entries(ctx).map(([k, v]) => `${k}=${v}`).join("\n"));
   },
+  "settings ": () => say(settingsTable().map((x) => `${x.name.padEnd(18)} ${String(x.value).padEnd(18)} ${x.value === x.default ? "(default)" : `(default ${x.default || "empty"})`}  ${x.what}`).join("\n")),   // every setting, its value and default
   "labels sync": () => {
     for (const [name, l] of Object.entries(names.LABELS)) { io.gh(["label", "create", name, "--color", l.color, "--description", l.description, "--force"]); log(`label ${name}`); }
   },

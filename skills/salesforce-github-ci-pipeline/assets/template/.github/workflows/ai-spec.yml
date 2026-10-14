@@ -32,6 +32,13 @@ jobs:
   write:
     if: github.event.label.name == 'ai:spec' && vars.AI_PLAN == 'true'
     runs-on: ubuntu-latest
+    # the agent runs here: its own scopes, never statuses or actions write (the trust test checks every agent job)
+    permissions:
+      contents: write       # the event log only; the agent has no shell or git tools
+      issues: write
+      id-token: write
+      checks: read
+      statuses: read
     concurrency:
       group: spec-${{ github.event.issue.number }}
       cancel-in-progress: true   # a newer /spec replaces an older one

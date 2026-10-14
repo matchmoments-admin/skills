@@ -1,0 +1,58 @@
+// Settings (see docs/handbook.md, "Settings"): every switch the pipeline reads, declared once, with its default.
+// Settings are repository variables (Settings > Secrets and variables > Actions > Variables). Every workflow passes all
+// of them in one line, `PIPELINE_VARS: ${{ toJSON(vars) }}`, so a new switch needs no workflow edits; an env var of the
+// same name, if set, wins (a step that overrides one setting). A name not declared here is a bug: setting() throws, and
+// a test checks every name the code and the workflows read is declared and documented in the handbook.
+
+/** [name, default, what it does]. Defaults are what the pipeline does with the variable unset. */
+export const SETTINGS = [
+  // AI switches: each AI step is its own variable; unset = off, so the pipeline is fully manual by default
+  ["AI_PLAN", "false", "Claude plans a story and writes specs (/plan, /spec)"],
+  ["AI_IMPLEMENT", "false", "Claude builds a story (/build)"],
+  ["AI_REVIEW", "false", "Claude reviews every story PR"],
+  ["AI_FIX", "false", "Claude fixes review comments and failed checks"],
+  ["AI_UI_TEST", "false", "Claude writes and runs the story's Playwright spec"],
+  ["AI_AUTO_CHAIN", "false", "a review, fix and UI test start each other"],
+  ["AI_TRIAGE", "false", "Jev triages review risk and UI failures"],
+  ["AI_MODEL", "", "one model for every role (empty: per role)"],
+  ["UI_EVIDENCE", "false", "a passing UI test posts one screenshot per criterion"],
+  // people and identities
+  ["APPROVERS", "", "who approves stories (empty: anyone with write access, never the last pusher)"],
+  ["PIPELINE_BOTS", "github-actions", "the pipeline's own bot logins, trusted to start agents"],
+  ["BOARD_PROJECT", "", "a GitHub Project number for the delivery board"],
+  ["TRACKER", "github", "github or jira"],
+  // UAT
+  ["UAT_ENABLED", "false", "releases go to UAT and need /uat-pass"],
+  ["UAT_TESTERS", "{}", "{\"github-login\": \"email\"} for UAT logins"],
+  ["UAT_TESTER_ROLE", "", "the role a UAT login gets when no story names a persona"],
+  ["SF_UAT_LOGIN_URL", "", "the UAT sandbox's login URL (with secret SF_UAT_USERNAME)"],
+  // orgs
+  ["SCRATCH_SNAPSHOT", "", "a snapshot to force, or off (empty: the newest pipeline snapshot)"],
+  ["BASELINE", "soft", "the production baseline in every scratch org: soft, strict or off"],
+  ["BASELINE_NIGHTLY", "false", "prod-baseline also runs nightly (drift from Setup changes in production)"],
+  ["SEED", "on", "synthetic test data in every scratch org: on or off"],
+  ["VOLUME_RECORDS", "5000", "volume records in the staging org"],
+  ["ORG_RESERVE", "0", "scratch-org slots a new story org leaves free"],
+  // tests
+  ["UI_REGRESSION", "release", "the staging UI regression: once per release, or every merge"],
+  ["CI_TEST_LEVEL", "RunRelevantTests", "a story's Apex tests: RunRelevantTests or selector"],
+  ["PROD_TEST_LEVEL", "RunRelevantTests", "production validation's Apex tests"],
+  ["FLOW_COVERAGE_MIN", "0", "minimum Flow coverage (percent) a story's tests must reach"],
+];
+const BY_NAME = new Map(SETTINGS.map(([n, d]) => [n, d]));
+
+/** A setting's value: an env var of that name, else the repository variable (PIPELINE_VARS), else its default. */
+export function setting(name, env = process.env) {
+  if (!BY_NAME.has(name)) throw new Error(`setting ${name} is not declared in pipeline/src/settings.mjs`);
+  if (env[name] !== undefined && env[name] !== "") return env[name];
+  let v;
+  try { v = JSON.parse(env.PIPELINE_VARS || "{}")[name]; } catch { v = undefined; }
+  return v === undefined || v === null || v === "" ? BY_NAME.get(name) : String(v);
+}
+
+/** The settings org provisioning reads (orgRegistry's env): resolved here, so a repository variable reaches it. */
+export const ORG_SETTINGS = ["SCRATCH_SNAPSHOT", "BASELINE", "SEED", "VOLUME_RECORDS", "ORG_RESERVE"];
+export const orgSettings = (env = process.env) => Object.fromEntries(ORG_SETTINGS.map((n) => [n, setting(n, env)]));
+
+/** Every setting with its value now, for `pipe settings`. */
+export const settingsTable = (env = process.env) => SETTINGS.map(([n, d, what]) => ({ name: n, value: setting(n, env), default: d, what }));

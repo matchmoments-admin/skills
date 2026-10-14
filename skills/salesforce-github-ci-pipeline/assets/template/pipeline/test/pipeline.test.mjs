@@ -3,12 +3,14 @@ process.env.PIPELINE_BOTS = "github-actions,__owner__-pipeline";   // the pipeli
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import * as names from "../src/conventions.mjs";
 import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
 import * as roles from "../src/roles.mjs";
 import * as journey from "../src/journey.mjs";
 import * as capacity from "../src/capacity.mjs";
+import * as settings from "../src/settings.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
 import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed, sameSourceVia } from "../src/org.mjs";
@@ -1146,9 +1148,26 @@ test("settings come from the one PIPELINE_VARS line (toJSON(vars)); an env var o
   const env = { PIPELINE_VARS: JSON.stringify({ AI_PLAN: "true", AI_REVIEW: "false", UAT_ENABLED: "true", PIPELINE_BOTS: "github-actions,acme-bot" }) };
   assert.equal(names.setting("UAT_ENABLED", env), "true");
   assert.equal(names.setting("AI_REVIEW", { ...env, AI_REVIEW: "true" }), "true");
-  assert.equal(names.setting("MISSING", env), "");
+  assert.throws(() => names.setting("MISSING", env), /not declared in pipeline\/src\/settings\.mjs/, "an undeclared setting is a bug");
+  assert.equal(names.setting("BASELINE", env), "soft", "unset: its declared default");
   assert.deepEqual([names.aiFeatures(env).plan, names.aiFeatures(env).review], [true, false]);
-  assert.equal(names.setting("X", { PIPELINE_VARS: "not json" }), "");
+  assert.equal(names.setting("UI_REGRESSION", { PIPELINE_VARS: "not json" }), "release");
+});
+
+test("settings are declared once: every name the code and the workflows read is declared, and documented in the handbook", () => {
+  const declared = new Set(settings.SETTINGS.map(([n]) => n));
+  const src = [...readdirSync(new URL("../src/", import.meta.url)).filter((f) => f.endsWith(".mjs")).map((f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")), pipeSources()].join("\n");
+  const read = new Set([...src.matchAll(/setting\("([A-Z_]+)"/g)].map((m) => m[1]));
+  const wfDir = new URL("../../.github/workflows/", import.meta.url);
+  const yml = readdirSync(wfDir).map((f) => readFileSync(new URL(f, wfDir), "utf8")).join("\n");
+  for (const m of yml.matchAll(/vars\.([A-Z_]+)/g)) read.add(m[1]);
+  for (const n of read) assert.ok(declared.has(n), `${n} is read but not declared in settings.mjs`);
+  const handbook = readFileSync(new URL("../../docs/handbook.md", import.meta.url), "utf8");
+  for (const n of declared) assert.match(handbook, new RegExp(`^\\| \`${n}\``, "m"), `${n} has a row in the handbook's settings table`);
+  // org provisioning gets every setting it reads, resolved: SEED=off as a repository variable once never reached it
+  assert.equal(settings.orgSettings({ PIPELINE_VARS: JSON.stringify({ SEED: "off" }) }).SEED, "off");
+  assert.deepEqual(settings.orgSettings({}), { SCRATCH_SNAPSHOT: "", BASELINE: "soft", SEED: "on", VOLUME_RECORDS: "5000", ORG_RESERVE: "0" });
+  assert.match(pipeSources(), /\.\.\.orgSettings\(\)/, "orgRegistry's env carries them");
 });
 
 test("every workflow passes every repository variable in one line, and lists no switch by hand", () => {
@@ -1450,11 +1469,18 @@ test("tick boxes: the card-actions workflow acts only on a person's edit of a ca
 test("agent jobs cannot post verdicts or start workflows; follow-ups run on a fresh runner; no endless fix loop", () => {
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
   const job = (y, name) => y.split(/\n  (?=[a-z-]+:\n)/).find((b) => b.startsWith(`${name}:`)) || "";
-  for (const [n, j] of [["ai-implement", "implement"], ["ai-fix", "fix"], ["ui-test", "write"]]) {
-    const b = job(wf(n), j);
-    assert.match(b, /permissions:\n/, `${n}/${j} sets its own permissions`);
-    assert.doesNotMatch(b, /statuses: write|actions: write/, `${n}/${j}`);
-    assert.doesNotMatch(b, /gh workflow run/, `${n}/${j} dispatches nothing`);
+  // every job that runs an agent, in every workflow (ai-review's inherited the workflow's write scopes until 14 Oct)
+  const ls = readdirSync, yaml = createRequire(import.meta.url)("js-yaml");
+  const agentJobs = [];
+  for (const f of ls(new URL("../../.github/workflows/", import.meta.url)).filter((x) => x.endsWith(".yml"))) {
+    const doc = yaml.load(wf(f.replace(/\.yml$/, "")));
+    for (const [name, j] of Object.entries(doc.jobs || {})) if ((j.steps || []).some((st) => /claude-agent/.test(st.uses || ""))) agentJobs.push([f, name, j]);
+  }
+  assert.ok(agentJobs.length >= 6, `found ${agentJobs.map(([f, n]) => `${f}/${n}`).join(", ")}`);
+  for (const [f, name, j] of agentJobs) {
+    assert.ok(j.permissions && typeof j.permissions === "object", `${f}/${name} sets its own permissions`);
+    assert.ok(j.permissions.statuses !== "write" && j.permissions.actions !== "write", `${f}/${name} cannot post verdicts or start workflows`);
+    assert.doesNotMatch(JSON.stringify(j.steps), /gh workflow run/, `${f}/${name} dispatches nothing`);
   }
   assert.match(job(wf("ai-fix"), "follow-up"), /the fix pushed nothing: no new review/);
   assert.match(job(wf("ai-fix"), "route"), /pipe\.mjs start fix --pr/, "the round limit is decided before the fix job starts");
