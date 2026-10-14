@@ -3,8 +3,8 @@
 // starts only to find it has nothing to do costs a runner and a lane wait, and a rule in a release branch's YAML stays
 // stale until a back-merge. decide() and ciPlan() are pure; `pipe start` and `pipe ci plan` gather the facts and act.
 import { storyOf, sprintOf, uiNeeded } from "./conventions.mjs";
-import { STATUS, standing, carriedFrom, CARRY, TRUSTED_STATUS_CREATORS } from "./gate.mjs";
-import { CHECKS } from "./conventions.mjs";
+import { STATUS, standing, carriedFrom, CARRY } from "./gate.mjs";
+import { CHECKS, LIVE_TESTS_CHECK } from "./conventions.mjs";
 import { fixRoundsUsed, MAX_FIX_ROUNDS } from "./verdict.mjs";
 
 /** What kind of branch this is: story | release | backmerge | maintenance. One rule for every workflow. Pure. */
@@ -46,39 +46,44 @@ export function ciCarry({ ref, base, git, host }) {
   return carriedFrom(CARRY.apex, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed, changedSince });
 }
 
-/** The staging regression an earlier release-branch commit passed, if nothing it tests changed since (gate.CARRY
- *  staging, #237): the commit that carries it, or null. Same shape as ciCarry, on the release branch's own history,
- *  the head included. passedOn(sha): did it pass there (default: the "staging regression" check). */
-export function stagingCarry({ git, host, passedOn = null }) {
+/** The staging regression's Apex and Flow run an earlier release-branch commit passed, if nothing it tests changed
+ *  since (gate.CARRY staging, #237): the commit that carries it, or null. Same shape as ciCarry, on the release branch's
+ *  own history, the head included. A commit counts only where the tests really ran: its live "Salesforce tests" check
+ *  succeeded. A superseded run (it skipped everything) or a UI-only run ends green without one (code review, 14 Oct). */
+export function stagingCarry({ git, host }) {
   const shas = (git(["rev-list", "--max-count=16", "HEAD"], { allowFail: true }) || "").split("\n").filter(Boolean);
   const latest = (runs) => [...runs].sort((a, b) => String(a.started_at).localeCompare(String(b.started_at))).pop();
-  // completed runs only: this run's own check is in progress on the head while it asks (#273)
-  const checkPassed = (sha) => latest((host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(CHECKS.staging)}`)?.check_runs || []).filter((r) => r.status !== "in_progress" && r.status !== "queued"))?.conclusion === "success";
-  const passed = shas.filter(passedOn || checkPassed);
+  const testsPassed = (sha) => latest((host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(LIVE_TESTS_CHECK)}`)?.check_runs || []).filter((r) => r.status === "completed"))?.conclusion === "success";
   const changedSince = (sha) => { const d = git(["diff", "--name-only", sha, "HEAD"], { allowFail: true }); return d === null ? null : d.split("\n").filter(Boolean); };
-  return carriedFrom(CARRY.staging, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed, changedSince });
+  return carriedFrom(CARRY.staging, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed: shas.filter(testsPassed), changedSince });
 }
 
 /**
  * What a staging run does (#273). Apex and Flow on every run, unless they passed on this code (or one it carries to).
  * The UI regression (every UI spec) only when it is due, UI_REGRESSION: "release" (the default) once the release PR is
- * open, so once per release; "every" on every run. And not if it already passed on this code. Pure.
+ * open, so once per release; "every" on every run. And not if it already passed on this code. superseded: the release
+ * PR's head moved on since this run started (its own run tests that). Pure.
  */
-export function stagingPlan({ policy = "release", releaseOpen = false, apexPassed = false, uiPassed = false }) {
+export function stagingPlan({ policy = "release", releaseOpen = false, apexPassed = false, uiPassed = false, superseded = false }) {
+  if (superseded) return { apex: "skip", ui: "skip", done: true, why: "superseded: the release PR's head moved on; its own run tests it" };
   const due = policy === "every" || releaseOpen;
   const apex = apexPassed ? "skip" : "run", ui = due && !uiPassed ? "run" : "skip";
   const why = `Apex and Flow: ${apexPassed ? "already passed on this code" : "run"}; UI regression: ${ui === "run" ? "run" : !due ? "not yet (it runs once per release, when the release PR opens)" : "already passed on this code"}`;
   return { apex, ui, done: apex === "skip" && ui === "skip", why };
 }
 
-/** stagingPlan with the facts gathered: the release PR (branch, open?), the check and status on this code. */
+/**
+ * stagingPlan with the facts gathered. The UI regression's standing is the gate's own (gate.standing on the release PR:
+ * the newest trusted status, its carry, PROVEN), so the plan, the journey and the gate can never disagree about it (a
+ * disagreement looped staging runs: code review, 14 Oct). Without an open release PR it is not due (UI_REGRESSION
+ * release) or runs (every).
+ */
 export function stagingPlanFor({ git, host, gh, branch, policy }) {
-  const releaseOpen = Boolean(branch) && (gh(["pr", "list", "--head", branch, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || []).length > 0;
-  const uiOn = (sha) => {   // the newest trusted pipeline/ui-regression on that commit is a success
-    const mine = (host.api("GET", `repos/${host.repo}/commits/${sha}/statuses?per_page=100`) || []).filter?.((x) => x.context === STATUS.uiRegression && TRUSTED_STATUS_CREATORS.includes(x.creator?.login)) || [];
-    return mine.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).pop()?.state === "success";
-  };
-  return stagingPlan({ policy, releaseOpen, apexPassed: Boolean(stagingCarry({ git, host })), uiPassed: Boolean(stagingCarry({ git, host, passedOn: uiOn })) });
+  const pr = branch ? (gh(["pr", "list", "--head", branch, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || [])[0]?.number : null;
+  const st = pr ? standing(host.prFacts(pr)) : null;
+  const head = git(["rev-parse", "HEAD"], { allowFail: true })?.trim();
+  const superseded = Boolean(st?.ctx?.pr?.headRefOid && head && st.ctx.pr.headRefOid !== head);
+  return stagingPlan({ policy, releaseOpen: Boolean(pr), superseded, apexPassed: Boolean(stagingCarry({ git, host })), uiPassed: st?.uiRegression?.state === "success" });
 }
 
 /**

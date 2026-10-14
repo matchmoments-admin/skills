@@ -150,13 +150,16 @@ test("#237: a back-merge that changes nothing staging tests keeps the regression
   for (const f of ["force-app/main/default/classes/X.cls", "e2e/story-218.spec.ts", "data/seed/accounts.json", "config/scratch-dev.json", "pipeline/src/org.mjs", "pipeline/src/org/data.mjs", "pipeline/src/tests.mjs", ".github/actions/sf-auth/action.yml", ".github/workflows/staging-deploy.yml", "package-lock.json"])
     assert.equal(gate.carries("no-staging-input", "a", "h", [...backmerge, f]), false, f);
   const git = (a) => (a[0] === "rev-list" ? "p1\np2" : a[0] === "rev-parse" ? "h" : a[0] === "diff" ? (a[1] === "p1" ? backmerge.join("\n") : "") : null);
-  const host = { repo: "o/r", api: (m, p) => ({ check_runs: p.includes("/p1/") ? [{ conclusion: "success", started_at: "1" }] : [] }) };
+  // the live "Salesforce tests" check is what carries: it exists only where the tests really ran
+  const runs = (map) => ({ repo: "o/r", api: (m, p) => ({ check_runs: p.includes("check_name=Salesforce%20tests") ? Object.entries(map).flatMap(([sha, list]) => (p.includes(`/${sha}/`) ? list : [])) : [{ conclusion: "success", started_at: "9", status: "completed" }] }) });
+  const done = (conclusion, started_at = "1") => ({ conclusion, started_at, status: "completed" });
+  const host = runs({ p1: [done("success")] });
   assert.equal(start.stagingCarry({ git, host }), "p1");
   assert.equal(start.stagingCarry({ git: (a) => (a[0] === "diff" ? "force-app/x.cls" : git(a)), host }), null, "Salesforce source changed: run it");
-  const failedSince = { repo: "o/r", api: (m, p) => ({ check_runs: p.includes("/p1/") ? [{ conclusion: "success", started_at: "1" }, { conclusion: "failure", started_at: "2" }] : [] }) };
-  assert.equal(start.stagingCarry({ git, host: failedSince }), null, "the newest run on that commit is the truth");
+  assert.equal(start.stagingCarry({ git, host: runs({ p1: [done("success", "1"), done("failure", "2")] }) }), null, "the newest run on that commit is the truth");
+  assert.equal(start.stagingCarry({ git, host: runs({}) }), null, "a green staging check without a test run (superseded, UI only) carries nothing");
   const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   assert.match(wf, /path: candidate, fetch-depth: 20/);
   assert.match(wf, /pipe\.mjs ci staging-plan --branch/);
-  assert.equal(start.stagingCarry({ git: (a) => (a[0] === "rev-list" ? "h\np1" : git(a)), host: { repo: "o/r", api: (m, p) => ({ check_runs: p.includes("/h/") ? [{ conclusion: "success", started_at: "1", status: "completed" }, { status: "in_progress", started_at: "2" }] : [] }) } }), "h", "the head itself counts; this run's own check (in progress) does not hide its pass");
+  assert.equal(start.stagingCarry({ git: (a) => (a[0] === "rev-list" ? "h\np1" : git(a)), host: runs({ h: [done("success", "1"), { status: "in_progress", started_at: "2" }] }) }), "h", "the head itself counts; a run in progress does not hide its pass");
 });

@@ -320,3 +320,24 @@ test("the UI regression runs once per release (#273): Apex on every staging run,
   assert.match(nudge, /status set pipeline\/ui-regression "\$S" "\$GITHUB_SHA"/);
   assert.ok(nudge.indexOf("pipeline/ui-regression") < nudge.indexOf("next --after staging"), "recorded before the journey asks what is owed");
 });
+
+test("the staging plan reads the gate's own Standing for the UI regression, so plan, journey and gate agree (code review, 14 Oct)", () => {
+  const ui = (state, extra = {}) => ({ sha: "h", context: gate.STATUS.uiRegression, state, created_at: "t", creator: { login: "github-actions[bot]" }, ...extra });
+  const facts = (statuses, headRefOid = "h") => ({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid }, checkRuns: [], statuses, reviews: [] });
+  const plan = (f, head = "h") => start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? head : a[0] === "rev-list" ? "" : ""), host: { repo: "o/r", prFacts: () => f, api: () => ({ check_runs: [] }) },
+    gh: () => [{ number: 7 }], branch: "release/2026-w1", policy: "release" });
+  assert.equal(plan(facts([ui("success")])).ui, "skip", "passed on the release head: done");
+  assert.equal(plan(facts([ui("success", { trusted: false })])).ui, "run", "a status a story branch's workflow posted does not count");
+  assert.equal(plan(facts([ui("failure")])).ui, "run", "failed: runs again on this run");
+  assert.equal(plan(facts([])).ui, "run");
+  assert.deepEqual([plan(facts([]), "older").done, plan(facts([]), "older").why], [true, "superseded: the release PR's head moved on; its own run tests it"]);
+  const noPr = start.stagingPlanFor({ git: () => "", host: { repo: "o/r", api: () => ({ check_runs: [] }) }, gh: () => [], branch: "release/2026-w1", policy: "release" });
+  assert.equal(noPr.ui, "skip", "no release PR yet: not due");
+  // the workflow: issues read for the PR's facts; the lane stays held after the UI run; a planned run that never ran fails
+  const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  assert.match(wf, /issues: read/);
+  assert.match(wf, /if: always\(\) && steps\.current\.outputs\.superseded != 'true' && steps\.fresh\.outputs\.ui != 'run'/);
+  assert.match(wf, /needs\.staging\.outputs\.ui-planned == 'run'/);
+  assert.match(wf, /the UI regression could not run/);
+  assert.equal(gate.STAGING_INPUTS.test("pipeline/src/settings.mjs"), true, "the seed and baseline defaults change what staging builds");
+});

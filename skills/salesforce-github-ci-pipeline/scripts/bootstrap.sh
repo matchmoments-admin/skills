@@ -38,11 +38,11 @@ done
 chmod +x "$TARGET"/scripts/ci/*.sh "$TARGET"/pipeline/bin/pipe.mjs 2>/dev/null || true
 
 # the placeholders, everywhere the template has them (production's org ID only when given: it comes in Phase 2)
-grep -rlI -e "__project__" -e "__OWNER__" -e "__owner__" -e "__PROD_ALIAS__" -e "__PROD_ORG_ID__" "$TARGET" --exclude-dir=node_modules --exclude-dir=force-app | while read -r f; do
+grep -rlI -e "__project__" -e "__OWNER__" -e "__owner__" -e "__PROD_ALIAS__" -e "__PROD_ORG_ID__" "$TARGET" --exclude-dir=node_modules --exclude-dir=force-app --exclude-dir=.claude | while read -r f; do
   sed -i.bak -e "s#__project__#$PROJECT#g" -e "s#__OWNER__#$OWNER#g" -e "s#__owner__#$OWNER_LC#g" -e "s#__PROD_ALIAS__#$ALIAS#g" \
     ${ORG:+-e "s#__PROD_ORG_ID__#$ORG#g"} "$f" && rm -f "$f.bak"
 done
-LEFT=$(grep -rlI -e "__project__" -e "__OWNER__" -e "__owner__" -e "__PROD_ALIAS__" "$TARGET" --exclude-dir=node_modules --exclude-dir=force-app || true)
+LEFT=$(grep -rlI -e "__project__" -e "__OWNER__" -e "__owner__" -e "__PROD_ALIAS__" "$TARGET" --exclude-dir=node_modules --exclude-dir=force-app --exclude-dir=.claude || true)
 [ -z "$LEFT" ] || { echo "placeholders left in: $LEFT" >&2; exit 1; }
 echo "filled: owner $OWNER (bot ${OWNER_LC}-pipeline), project $PROJECT, alias $ALIAS${ORG:+, org $ORG}"
 

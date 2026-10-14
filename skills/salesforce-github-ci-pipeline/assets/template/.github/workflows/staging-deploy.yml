@@ -16,8 +16,9 @@ jobs:
       actions: read         # the org lane checks whether the holder's run has ended (lane.mjs)
       contents: write       # the staging org's lane only (a ref under refs/locks/); the specs never see a token
       checks: write         # the live "Salesforce tests" check on the release head
-      pull-requests: read   # is the release PR open (the UI regression is due once it is)
-      statuses: read        # has the UI regression already passed on this code
+      pull-requests: read   # the release PR: is it open, and its standing (the UI regression is due once it is)
+      statuses: read        # has the UI regression already passed on this code (the gate's own reading)
+      issues: read          # the release PR's facts (gate.gather reads its events and comments)
     timeout-minutes: 75   # 45 of them may be waiting for the staging org's lane (release-PR CI, a back-merge)
     env:
       GH_TOKEN: ${{ github.token }}
@@ -25,6 +26,7 @@ jobs:
     outputs:
       release: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
       ui: ${{ steps.uirun.outcome }}   # the UI regression: success, failure, or skipped (not due, or already passed)
+      ui-planned: ${{ steps.fresh.outputs.ui }}   # run: it was due, so a skipped outcome means its setup failed
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
@@ -93,8 +95,11 @@ jobs:
           else
             echo "No UI specs yet"
           fi
-      - name: Let the next job into the staging org's lane
-        if: always() && steps.current.outputs.superseded != 'true'
+      - name: Let the next job into the staging org's lane (not after the UI regression, see below)
+        # After the UI regression the lane stays held until this run ends (the holder is then stale, lane.mjs): the
+        # nudge job records pipeline/ui-regression first, so a queued run reads the result instead of repeating the
+        # suite (code review, 14 Oct).
+        if: always() && steps.current.outputs.superseded != 'true' && steps.fresh.outputs.ui != 'run'
         working-directory: .pipeline
         run: node pipeline/bin/pipe.mjs lane release "sprint:${{ steps.ctx.outputs.SPRINT }}" || true
       - uses: actions/upload-artifact@v4
@@ -128,9 +133,12 @@ jobs:
       - uses: actions/checkout@v4
         with: { ref: main }
       - name: Record the UI regression on this commit (the release gate needs it once per release)
-        if: needs.staging.outputs.ui == 'success' || needs.staging.outputs.ui == 'failure'
+        # planned but not run (its Playwright setup failed, or the deploy before it): a failure, so nothing waits on it
+        if: needs.staging.outputs.ui == 'success' || needs.staging.outputs.ui == 'failure' || needs.staging.outputs.ui-planned == 'run'
         run: |
-          if [ "${{ needs.staging.outputs.ui }}" = success ]; then S=success; D="every UI spec passed on the staging org"; else S=failure; D="a UI spec failed on the staging org"; fi
+          if [ "${{ needs.staging.outputs.ui }}" = success ]; then S=success; D="every UI spec passed on the staging org"
+          elif [ "${{ needs.staging.outputs.ui }}" = failure ]; then S=failure; D="a UI spec failed on the staging org"
+          else S=failure; D="the UI regression could not run (its setup or the deploy failed): see the staging run"; fi
           node pipeline/bin/pipe.mjs status set pipeline/ui-regression "$S" "$GITHUB_SHA" "$D"
       - name: Ship now if the release PR is already approved
         run: |

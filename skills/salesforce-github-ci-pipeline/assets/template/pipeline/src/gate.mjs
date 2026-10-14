@@ -127,7 +127,7 @@ export const CARRY = { [STATUS.review]: "specs", [STATUS.signoff]: "specs", [STA
 /** What the staging regression tests: Salesforce source, specs, seed and org config, and the code that builds and runs
  *  staging. A release-branch commit that changes none of these (a back-merge of other pipeline work) keeps the
  *  regression an earlier commit passed (#237). */
-export const STAGING_INPUTS = /^(force-app\/|e2e\/|data\/|config\/|baseline\/|sfdx-project\.json$|package(-lock)?\.json$|playwright\.config\.ts$|\.github\/actions\/|\.github\/workflows\/staging-deploy\.yml$|pipeline\/src\/(org|tests|evidence|baseline|io)\.mjs$|pipeline\/src\/org\/)/;
+export const STAGING_INPUTS = /^(force-app\/|e2e\/|data\/|config\/|baseline\/|sfdx-project\.json$|package(-lock)?\.json$|playwright\.config\.ts$|\.github\/actions\/|\.github\/workflows\/staging-deploy\.yml$|pipeline\/src\/(org|tests|evidence|baseline|io|settings|conventions|harness)\.mjs$|pipeline\/src\/org\/)/;   // settings: the seed and baseline defaults; harness: main's copy over the specs
 export function carries(rule, sha, head, files) {
   if (sha === head) return true;
   if (rule === "exact" || !Array.isArray(files)) return false;

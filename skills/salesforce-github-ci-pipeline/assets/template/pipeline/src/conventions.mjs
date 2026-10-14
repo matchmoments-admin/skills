@@ -38,6 +38,10 @@ export const CHECKS = {
   staging: "staging regression",
 };
 
+/** The live check the Apex and Flow run posts on its commit (tests.mjs, which keeps the literal: it has no imports). It
+ *  exists only where the tests really ran, so it is what a staging pass carries from (#273's code review). */
+export const LIVE_TESTS_CHECK = "Salesforce tests";
+
 export const COVERAGE_MIN = 75;
 
 /** Pipeline code: story PRs may not change it (it runs with production credentials). */
