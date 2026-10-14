@@ -208,7 +208,7 @@ const commands = {
         regate: () => shipping.regate(io, host, log) });
     return say(`follow-ups: ${steps.join(" ") || "none"}`);
   },
-  "ci staging-carry": () => { const c = start.stagingCarry({ git: io.git, host }); output({ carried: c || "" }); return say(c ? `the staging regression passed on ${c.slice(0, 7)} and nothing it tests changed since` : "no earlier pass carries: run it"); },
+  "ci staging-plan": () => { const p = start.stagingPlanFor({ git: io.git, host, gh: io.gh, branch: flag("branch"), policy: names.setting("UI_REGRESSION") || "release" }); output(p); return say(p.why); },   // what this staging run does (#273)
   "ci plan": () => {   // which CI jobs need a runner, from what changed (a failed diff assumes everything)
     const base = flag("base", "main");
     const out = io.git(["diff", "--name-only", `origin/${base}...HEAD`], { allowFail: true });

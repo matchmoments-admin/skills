@@ -44,8 +44,13 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
   if (["staging", "release-pr", "org-freed"].includes(after)) {
     // UAT follows the staging regression on the release PR's head, whichever finished last (the release PR can open
     // after staging passed, story #193), and is retried when an org slot frees up
-    if (st.route !== "release" || !uat) return out;
+    if (st.route !== "release") return out;
     const staging = st.checks?.[CHECKS.staging];
+    // the UI regression runs once per release (#273): when the release PR is open and its head has staging's Apex pass
+    // but no UI pass, a staging run does it (a run going now does it itself: only a finished one counts as passed).
+    // It runs beside UAT, which uses another org; a failed one is not owed, so it never loops.
+    if (staging?.state === "passed" && owed(st.uiRegression) && st.ctx?.pr?.headRefName) out.push({ dispatch: "staging-deploy.yml", inputs: {}, ref: st.ctx.pr.headRefName, why: "the release PR is open and its head has no UI regression yet" });
+    if (!uat) return out;
     if (staging?.state === "passed" && owed(st.uat)) out.push({ dispatch: "uat-deploy.yml", inputs: { pr: String(pr) }, why: "staging passed on this commit and UAT does not have it" });
     // the release PR opened before staging passed: build UAT's org now, alongside staging, so UAT after it is quick
     else if (after === "release-pr" && owed(st.uat)) out.push({ dispatch: "uat-deploy.yml", inputs: { pr: String(pr), warm: "true" }, why: "UAT's org is built while staging runs" });
@@ -78,7 +83,7 @@ async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, log = () 
   for (const s of steps) {
     log(`next after ${after}: ${s.start || s.dispatch} (${s.why})`);
     if (s.start) await startJob(s.start, pr, { host, gh, cards, ai, mode: s.mode || "run", log });
-    else host.dispatch(s.dispatch, s.inputs);
+    else host.dispatch(s.dispatch, s.inputs, s.ref);
   }
   return { steps, said: steps.length ? `started: ${steps.map((x) => `${x.start || x.dispatch} (${x.why})`).join("; ")}` : `nothing owed after ${after} on PR #${pr}` };
 }

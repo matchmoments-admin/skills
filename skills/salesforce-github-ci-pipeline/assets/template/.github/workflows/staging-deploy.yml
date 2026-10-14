@@ -16,12 +16,15 @@ jobs:
       actions: read         # the org lane checks whether the holder's run has ended (lane.mjs)
       contents: write       # the staging org's lane only (a ref under refs/locks/); the specs never see a token
       checks: write         # the live "Salesforce tests" check on the release head
+      pull-requests: read   # is the release PR open (the UI regression is due once it is)
+      statuses: read        # has the UI regression already passed on this code
     timeout-minutes: 75   # 45 of them may be waiting for the staging org's lane (release-PR CI, a back-merge)
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     outputs:
       release: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
+      ui: ${{ steps.uirun.outcome }}   # the UI regression: success, failure, or skipped (not due, or already passed)
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
@@ -42,16 +45,11 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.current.outputs.superseded != 'true'
         with: { ref: "${{ github.sha }}", path: candidate, fetch-depth: 20, persist-credentials: false }   # exactly the commit this run is for (and the ones before it: #237)
-      - name: Already tested? (a re-run of a commit that already passed)
+      - name: What this run does (Apex unless passed on this code; the UI regression once per release, UI_REGRESSION)
         id: fresh
         if: steps.current.outputs.superseded != 'true'
         working-directory: candidate
-        run: |
-          SHA=$(git rev-parse HEAD)
-          N=$(gh api "repos/$GH_REPO/commits/$SHA/check-runs?check_name=staging%20regression" --jq '[.check_runs[] | select(.conclusion=="success")] | length')
-          if [ "$N" != "0" ]; then echo "done=true" >> "$GITHUB_OUTPUT"; echo "${SHA:0:7} already passed the staging regression"; fi
-          # a back-merge that changes nothing the regression tests keeps the pass of the commit before it (#237)
-          if [ "$N" = "0" ]; then node ../.pipeline/pipeline/bin/pipe.mjs ci staging-carry | tee carry.txt; grep -q "passed on" carry.txt && echo "done=true" >> "$GITHUB_OUTPUT" || true; fi
+        run: node ../.pipeline/pipeline/bin/pipe.mjs ci staging-plan --branch "${{ steps.ctx.outputs.RELEASE_BRANCH }}"
       - uses: ./.pipeline/.github/actions/sf-auth
         if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         with:
@@ -64,27 +62,28 @@ jobs:
         run: |
           node ../.pipeline/pipeline/bin/pipe.mjs org ready "sprint:${{ steps.ctx.outputs.SPRINT }}"   # this candidate, deployed and prepared
       - name: Full regression (every Apex and Flow test), live on the release head as "Salesforce tests"
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.apex == 'run' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
         run: node ../.pipeline/pipeline/bin/pipe.mjs tests run staging --all --base HEAD --sha "$(git rev-parse HEAD)" --out test-results
       - name: Drop production access before running the branch's specs
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.ui == 'run' && steps.current.outputs.superseded != 'true'
         run: |
           # loginAs reads these: once the Dev Hub is logged out, `sf org display` fails
           sf org display -o staging --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}"
       - name: The test harness from main (login, personas, evidence), not the release branch's copy
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.ui == 'run' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
         run: node ../.pipeline/pipeline/bin/pipe.mjs harness overlay staging --from ../.pipeline
       - uses: ./.pipeline/.github/actions/playwright
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
+        if: steps.fresh.outputs.ui == 'run' && steps.current.outputs.superseded != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
         env:
           GH_TOKEN: ""          # installs the branch's packages: no token
         with: { working-directory: candidate }
       - name: UI regression (every spec in e2e/)
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        id: uirun
+        if: steps.fresh.outputs.ui == 'run' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
         env:
           GH_TOKEN: ""
@@ -120,7 +119,7 @@ jobs:
       checks: read
       issues: write
       pull-requests: write
-      statuses: read
+      statuses: write       # pipeline/ui-regression on the commit the staging job tested
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -128,6 +127,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: main }
+      - name: Record the UI regression on this commit (the release gate needs it once per release)
+        if: needs.staging.outputs.ui == 'success' || needs.staging.outputs.ui == 'failure'
+        run: |
+          if [ "${{ needs.staging.outputs.ui }}" = success ]; then S=success; D="every UI spec passed on the staging org"; else S=failure; D="a UI spec failed on the staging org"; fi
+          node pipeline/bin/pipe.mjs status set pipeline/ui-regression "$S" "$GITHUB_SHA" "$D"
       - name: Ship now if the release PR is already approved
         run: |
           RPR=$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')

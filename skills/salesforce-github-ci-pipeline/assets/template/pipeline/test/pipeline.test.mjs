@@ -170,12 +170,16 @@ test("PR #12 (hotfix): approved on its head, validated against production; refus
   assert.match(gate.evaluate(withVerdicts(f, { compare: { unreleasedSprintCommits: 3 } })).reasons.join(), /3 unreleased sprint commit/);
 });
 
-test("PR #26 (release): needs CI, the staging regression and an approval on its head; merge commit", () => {
-  const d = gate.evaluate(open(fixture(26)));
+// a release head the UI regression passed on (#273): the release gate needs it
+const uiPassed = (f) => ({ ...f, statuses: [...(f.statuses || []), { sha: f.pr.headRefOid, context: gate.STATUS.uiRegression, state: "success", created_at: "2026-10-05T00:00:00Z", creator: { login: "github-actions[bot]" } }] });
+
+test("PR #26 (release): needs CI, the staging regression, the UI regression and an approval on its head; merge commit", () => {
+  assert.match(gate.evaluate(open(fixture(26))).reasons.join(), /UI regression has not run on this release yet/, "once per release, before production (#273)");
+  const d = gate.evaluate(uiPassed(open(fixture(26))));
   assert.equal(d.route, "release");
   assert.deepEqual(d.reasons, []);
   assert.equal(d.rules.merge, "merge");
-  const noStaging = { ...open(fixture(26)), checkRuns: fixture(26).checkRuns.filter((c) => c.name !== names.CHECKS.staging) };
+  const noStaging = { ...uiPassed(open(fixture(26))), checkRuns: fixture(26).checkRuns.filter((c) => c.name !== names.CHECKS.staging) };
   assert.match(gate.evaluate(noStaging).reasons.join(), /staging regression" is missing/);
 });
 
@@ -633,15 +637,15 @@ test("production validation: RunRelevantTests, live progress, fallback to every 
 
 // ---------------------------------------------------------------- UAT
 test("UAT: with UAT_ENABLED a release needs a sign-off on its current code; off, nothing changes", () => {
-  const f = open(fixture(26)), head = f.pr.headRefOid;
+  const f = uiPassed(open(fixture(26))), head = f.pr.headRefOid;
   const st = (state, sha = head, description = "") => ({ sha, context: gate.STATUS.uat, state, description, created_at: "2026-10-05T00:00:00Z", creator: { login: "github-actions[bot]" } });
   assert.deepEqual(gate.evaluate({ ...f, uat: false }).reasons, []);
   assert.match(gate.evaluate({ ...f, uat: true }).reasons.join(), /not in UAT yet/);
-  assert.match(gate.evaluate({ ...f, uat: true, statuses: [st("pending")] }).reasons.join(), /waiting for UAT sign-off/);
-  assert.match(gate.evaluate({ ...f, uat: true, statuses: [st("failure", head, "totals wrong")] }).reasons.join(), /UAT failed \(totals wrong\)/);
+  assert.match(gate.evaluate({ ...f, uat: true, statuses: [...f.statuses, st("pending")] }).reasons.join(), /waiting for UAT sign-off/);
+  assert.match(gate.evaluate({ ...f, uat: true, statuses: [...f.statuses, st("failure", head, "totals wrong")] }).reasons.join(), /UAT failed \(totals wrong\)/);
   const older = "0000000000000000000000000000000000000009";
-  assert.match(gate.evaluate({ ...f, uat: true, statuses: [st("success", older)], diffsToHead: { [older]: ["force-app/x.cls"] } }).reasons.join(), /older version/);
-  assert.deepEqual(gate.evaluate({ ...f, uat: true, statuses: [st("success")] }).reasons, []);
+  assert.match(gate.evaluate({ ...f, uat: true, statuses: [...f.statuses, st("success", older)], diffsToHead: { [older]: ["force-app/x.cls"] } }).reasons.join(), /older version/);
+  assert.deepEqual(gate.evaluate({ ...f, uat: true, statuses: [...f.statuses, st("success")] }).reasons, []);
   const o = names.orgFor("uat:2026-w45");
   assert.deepEqual([o.alias, o.description, o.lock, o.days], ["uat", "uat-2026-w45", "org-uat", 30]);
 });
@@ -2975,10 +2979,10 @@ test("the journey decides what starts next from Standing: after a review, after 
 test("journey.next finds the open release PR when none is named, and acts through the start decision or a dispatch", async () => {
   const did = [];
   const facts = { pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: "success", started_at: "t" }], statuses: [], reviews: [], compare: { prFiles: ["force-app/x"] } };
-  const host = { openRelease: () => "origin/release/2026-w1", prFacts: () => facts, dispatch: (w, i) => did.push([w, i]) };
+  const host = { openRelease: () => "origin/release/2026-w1", prFacts: () => facts, dispatch: (w, i, ref) => did.push([w, i, ref]) };
   const gh = (a) => (a[0] === "pr" && a[1] === "list" ? [{ number: 197 }] : null);
   const r = await journey.next("org-freed", null, { host, gh, ai: {}, uat: true, startJob: async () => {} });
-  assert.deepEqual(did, [["uat-deploy.yml", { pr: "197" }]]);
+  assert.deepEqual(did, [["staging-deploy.yml", {}, "release/2026-w1"], ["uat-deploy.yml", { pr: "197" }, undefined]], "the UI regression (on the release branch) beside UAT");
   assert.match(r.said, /uat-deploy/);
   const none = await journey.next("staging", null, { host: { openRelease: () => null }, gh, ai: {}, uat: true });
   assert.match(none.said, /no pull request/);
@@ -3392,7 +3396,39 @@ test("#237: a back-merge that changes nothing staging tests keeps the regression
   assert.equal(start.stagingCarry({ git, host: failedSince }), null, "the newest run on that commit is the truth");
   const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   assert.match(wf, /path: candidate, fetch-depth: 20/);
-  assert.match(wf, /pipe\.mjs ci staging-carry/);
+  assert.match(wf, /pipe\.mjs ci staging-plan --branch/);
+  assert.equal(start.stagingCarry({ git: (a) => (a[0] === "rev-list" ? "h\np1" : git(a)), host: { repo: "o/r", api: (m, p) => ({ check_runs: p.includes("/h/") ? [{ conclusion: "success", started_at: "1", status: "completed" }, { status: "in_progress", started_at: "2" }] : [] }) } }), "h", "the head itself counts; this run's own check (in progress) does not hide its pass");
+});
+
+test("the UI regression runs once per release (#273): Apex on every staging run, every UI spec once the release PR is open; UI_REGRESSION=every keeps the old way", () => {
+  const plan = (o) => start.stagingPlan(o);
+  assert.deepEqual([plan({}).apex, plan({}).ui], ["run", "skip"], "a story merge mid-sprint: Apex and Flow only");
+  assert.match(plan({}).why, /once per release, when the release PR opens/);
+  assert.deepEqual([plan({ releaseOpen: true }).apex, plan({ releaseOpen: true }).ui], ["run", "run"]);
+  assert.deepEqual([plan({ releaseOpen: true, apexPassed: true }).apex, plan({ releaseOpen: true, apexPassed: true }).ui], ["skip", "run"], "the release's UI run on a head staging already tested");
+  assert.equal(plan({ releaseOpen: true, apexPassed: true, uiPassed: true }).done, true);
+  assert.equal(plan({ policy: "every" }).ui, "run", "the flag turns it back on for every run");
+  // the journey starts it when the release PR is open, beside UAT; a pass or a failure on the head stops it
+  const rel = (statuses = []) => gate.standing({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: "success", started_at: "t" }], statuses, reviews: [] });
+  const ui = (state) => ({ sha: "h", context: gate.STATUS.uiRegression, state, created_at: "t", creator: { login: "github-actions[bot]" } });
+  assert.deepEqual(journey.nextSteps("release-pr", rel(), { uat: false, pr: 1 }).map((x) => [x.dispatch, x.ref]), [["staging-deploy.yml", "release/2026-w1"]], "UAT off: still once per release");
+  assert.deepEqual(journey.nextSteps("staging", rel([ui("success")]), { uat: false, pr: 1 }), []);
+  assert.deepEqual(journey.nextSteps("staging", rel([ui("failure")]), { uat: false, pr: 1 }), [], "a failure is not owed: no loop");
+  const running = gate.standing({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: null, status: "in_progress", started_at: "t" }], statuses: [], reviews: [] });
+  assert.deepEqual(journey.nextSteps("release-pr", running, { uat: false, pr: 1 }), [], "a staging run going now does it itself");
+  // the gate: failed and stale say so
+  const f = open(fixture(26)), st = (state, sha = f.pr.headRefOid) => ({ ...ui(state), sha });
+  assert.match(gate.evaluate({ ...f, statuses: [st("failure")] }).reasons.join(), /UI regression failed/);
+  const older = "0000000000000000000000000000000000000009";
+  assert.match(gate.evaluate({ ...f, statuses: [st("success", older)], diffsToHead: { [older]: ["e2e/story-9.spec.ts"] } }).reasons.join(), /older commit/);
+  assert.deepEqual(gate.evaluate({ ...f, statuses: [st("success", older)], diffsToHead: { [older]: ["docs/handbook.md"] } }).reasons, [], "a docs-only back-merge carries it");
+  // the workflow: the plan decides, the UI step's outcome travels out, and the agent-free nudge job records it
+  const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  assert.match(wf, /id: uirun\n\s+if: steps\.fresh\.outputs\.ui == 'run'/);
+  assert.match(wf, /ui: \$\{\{ steps\.uirun\.outcome \}\}/);
+  const nudge = wf.slice(wf.indexOf("  nudge:"));
+  assert.match(nudge, /status set pipeline\/ui-regression "\$S" "\$GITHUB_SHA"/);
+  assert.ok(nudge.indexOf("pipeline/ui-regression") < nudge.indexOf("next --after staging"), "recorded before the journey asks what is owed");
 });
 
 test("capacity: stories in flight from the Dev Hub's allowance, the staging regression's time, and a month's cost", () => {
@@ -3406,6 +3442,9 @@ test("capacity: stories in flight from the Dev Hub's allowance, the staging regr
   assert.equal(ent.orgs.atRelease, 1, "a UAT sandbox takes no scratch org");
   assert.deepEqual(ent.advice, ["The defaults carry this load."]);
   assert.ok(ent.cost.monthlyMinutes > dev.cost.monthlyMinutes);
-  assert.match(capacity.report(dev), /## Pipeline capacity[\s\S]*Staging regression/);
+  assert.match(capacity.report(dev), /## Pipeline capacity[\s\S]*once per release/);
+  const every = capacity.plan({ devhub: { activeMax: 3 }, team: { devs: 2, storiesPerSprint: 5 }, ui: { tests: 38 }, uiPolicy: "every" });
+  assert.ok(every.cost.monthlyMinutes > capacity.plan({ devhub: { activeMax: 3 }, team: { devs: 2, storiesPerSprint: 5 }, ui: { tests: 38 } }).cost.monthlyMinutes);
+  assert.match(every.advice.join(" "), /saves about 89 min a sprint/);
   assert.deepEqual(capacity.countSpecs("e2e-missing"), { tests: 0 });
 });

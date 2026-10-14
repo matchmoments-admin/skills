@@ -14,7 +14,8 @@ import { CHECKS, storyOf, sprintOf, uiFacing, storySpec, isPipelineAuthor, isHum
 // signoff: a person's sign-off on a story PR into the sprint (a ticked box or /ship), recorded by an agent-free job.
 // approval: the gate's record of the approval it accepted, posted when it decides to merge (close-out reads it, so a
 // policy change after the merge never rewrites who approved).
-export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", uat: "pipeline/uat", signoff: "pipeline/sign-off", approval: "pipeline/approval" };
+// uiRegression: every UI spec passed on the staging org on this code (once per release by default: UI_REGRESSION)
+export const STATUS = { review: "pipeline/ai-review", ui: "pipeline/ui-test", uat: "pipeline/uat", signoff: "pipeline/sign-off", approval: "pipeline/approval", uiRegression: "pipeline/ui-regression" };
 /** The gate's own verdict on the PR's head. The branch rules require it, so GitHub's merge button stays locked until
  *  the gate is satisfied; admins (and any team the rules name) can still bypass in an emergency. */
 export const GATE_STATUS = "pipeline/gate";
@@ -52,7 +53,7 @@ export const TRUSTED_STATUS_CREATORS = ["github-actions[bot]"];
  * branch's own workflow files), and a dispatch only on main or a release branch. run: the Actions run, or null when the
  * status links no run (unknown: not trusted). Pure.
  */
-export const PROVEN = [STATUS.review, STATUS.signoff];
+export const PROVEN = [STATUS.review, STATUS.signoff, STATUS.uiRegression];   // uiRegression: posted by staging-deploy on a release branch (#273)
 export function trustedRun(run) {
   if (!run || !run.event) return false;
   const onTrusted = run.head_branch === "main" || /^release\//.test(String(run.head_branch || ""));
@@ -122,7 +123,7 @@ export const checkPassed = (conclusion) => checkState(conclusion) === "passed";
  *            pipeline file either: a commit whose workflows were the branch's own could have faked that pass
  * files: what changed from that commit to the head (null if unknown, which never carries). Pure.
  */
-export const CARRY = { [STATUS.review]: "specs", [STATUS.signoff]: "specs", [STATUS.ui]: "exact", [STATUS.uat]: "exact", [STATUS.approval]: "exact", apex: "no-sf", staging: "no-staging-input" };
+export const CARRY = { [STATUS.review]: "specs", [STATUS.signoff]: "specs", [STATUS.ui]: "exact", [STATUS.uat]: "exact", [STATUS.approval]: "exact", apex: "no-sf", staging: "no-staging-input", [STATUS.uiRegression]: "no-staging-input" };
 /** What the staging regression tests: Salesforce source, specs, seed and org config, and the code that builds and runs
  *  staging. A release-branch commit that changes none of these (a back-merge of other pipeline work) keeps the
  *  regression an earlier commit passed (#237). */
@@ -265,7 +266,7 @@ export function standing(facts) {
   const kind = rules?.approval || "review";
   return {
     route: r, rules, ctx,
-    review: verdictFor(STATUS.review, ctx), ui: verdictFor(STATUS.ui, ctx), signoff: verdictFor(STATUS.signoff, ctx), uat: verdictFor(STATUS.uat, ctx),
+    review: verdictFor(STATUS.review, ctx), ui: verdictFor(STATUS.ui, ctx), signoff: verdictFor(STATUS.signoff, ctx), uat: verdictFor(STATUS.uat, ctx), uiRegression: verdictFor(STATUS.uiRegression, ctx),
     record: verdictFor(STATUS.approval, ctx),
     approval: kind === "none" ? { ok: true, by: [], who: [], refused: [], none: true } : approval(ctx, { signOff: kind === "sign-off" }),
     checks: Object.fromEntries((rules?.checks || [CHECKS.static, CHECKS.apex]).map((n) => { const c = latestCheck(checkRuns, n); return [n, { conclusion: c, state: checkState(c) }]; })),
@@ -315,6 +316,14 @@ export function evaluate(facts) {
         else if (got.state !== "success") fail(`${v.what} did not pass (${got.state})`);
       } else if (["failure", "error"].includes(got.state)) fail(`${v.what} did not pass (${got.state})`);
     }
+  }
+  // The UI regression (every UI spec on the staging org): once per release, on this code or one it carries to (#273).
+  if (r === "release") {
+    const u = st.uiRegression;
+    if (u.state === "missing") reasons.push("the UI regression has not run on this release yet (it starts when the release PR opens)");
+    else if (u.state === "stale") reasons.push("the UI regression passed on an older commit; it runs again on this one");
+    else if (u.state === "pending") reasons.push("the UI regression is running");
+    else if (u.state !== "success") fail(`the UI regression failed (${u.description || u.state}): see the staging regression run`);
   }
   // UAT (UAT_ENABLED): a release ships only after a person signed off the release in UAT (/uat-pass), on this code.
   if (r === "release" && facts.uat) {

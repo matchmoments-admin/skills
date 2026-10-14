@@ -140,7 +140,12 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
   const ciState = merged ? "done" : ci.includes("failed") ? "failed" : ci.every((s) => s === "done") ? "done" : "running";
   rows.push([ciState, "CI (every test, staging org)", ciState === "failed" ? `[see what failed](${prUrl}/checks)` : ciState === "done" ? "passed" : `[running](${prUrl}/checks)`]);
   const staging = merged ? "done" : stateOf(latestCheck(runs, CHECKS.staging));
-  rows.push([staging, "Staging regression (Apex, Flow and UI)", staging === "failed" ? `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)` : staging === "done" ? "passed on this commit" : "runs after each merge into the sprint"]);
+  rows.push([staging, "Staging regression (Apex and Flow)", staging === "failed" ? `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)` : staging === "done" ? "passed on this commit" : "runs after each merge into the sprint"]);
+  // every UI spec, once per release (#273): it starts when the release PR opens, beside UAT
+  const ui = merged ? { state: "success" } : verdictFor(STATUS.uiRegression, ctx);
+  const uiRow = { success: ["done", "every UI spec passed"], failure: ["failed", `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)`],
+    stale: ["waiting", "passed on an older commit: it runs again"], missing: ["running", "runs once per release, now that the release PR is open"] }[ui.state] || ["waiting", ui.state];
+  rows.push([uiRow[0], "UI regression (every UI spec)", uiRow[1]]);
   if (uat) {
     const u = merged ? { state: "success" } : verdictFor(STATUS.uat, ctx);
     const open = u.url ? `**[open UAT](${u.url})** (⌘/Ctrl-click: a new tab; GitHub links cannot open one themselves)` : "open UAT";

@@ -32,7 +32,7 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
   "org deploy": () => { orgs().deploy(arg(0), { manifest: flag("manifest") }); },
   "org temp": () => { const o = orgs().temporary(arg(0)); record("org", { action: "created", org: o.description }); output({ alias: o.alias, temp: true }); return say(o.alias); },
   "org changes": () => { const o = orgs(), c = o.retrieveChanges(arg(0), o.setupChanges(arg(0), { exclude: JSON.parse(readFileSync("config/baseline.json", "utf8")).exclude })); output({ count: c.length }); return say(c.map((x) => `${x.type}:${x.name}`).join("\n") || "no Setup changes"); },
-  "org capacity": () => say(capacity.report(capacity.plan(capacity.gather({ limits: () => orgs().limits(), flag, has })))),   // how much load this carries, and the settings for more
+  "org capacity": () => say(capacity.report(capacity.plan({ ...capacity.gather({ limits: () => orgs().limits(), flag, has }), uiPolicy: names.setting("UI_REGRESSION") || "release" }))),   // how much load this carries, and the settings for more
   "org limits": () => { const l = orgs().limits(); return say(`active scratch orgs ${l.active.remaining}/${l.active.max} free, created today ${l.daily.max - l.daily.remaining}/${l.daily.max}`); },
   "org sweep": async () => {
     // every orphan: CI orgs whose run died, merged or closed stories' orgs, staging and UAT orgs of sprints no longer open

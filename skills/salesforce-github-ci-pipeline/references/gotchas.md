@@ -112,6 +112,9 @@ Every entry happened in a real run. Search this file for the error text you see.
   2-core runner timed out across many specs (#268). → One browser. Sharding across runners was built and removed (#271):
   shards hold the staging org across jobs (a re-run or a long queue breaks that), persona specs cap the gain, and each
   shard costs a runner setup.
+- **Staging re-ran every UI spec after every merge into the sprint** (about 18 min each, growing with every story) →
+  each story's own spec already ran in its org. → The UI regression runs once per release, when the release PR opens,
+  beside UAT; the release gate needs `pipeline/ui-regression` (#273). `UI_REGRESSION=every` restores the old way.
 - **UAT's scratch org took 14 minutes after staging** → it was built only when staging passed. → The journey builds it
   when the release PR opens (`uat-deploy` `warm=true`), so UAT is ready about a minute after staging.
 - **Jev (TypeSafe) is for decisions only.** It cannot write code or reviews. `noul` criteria must be `{true, false}`; score criteria are levels lowest first; keys start `apik`; failures return `{ok:false}` and the caller falls back.

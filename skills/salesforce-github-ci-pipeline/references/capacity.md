@@ -20,7 +20,7 @@ orgs held by other projects), `--uat-sandbox`.
 |---|---|---|---|
 | **Active scratch orgs** | stories in flight: one org each, plus staging (and UAT's stand-in at release) | 3: one story at a time beside staging | Enterprise 40, Unlimited and Performance 100 (more can be bought) |
 | **Daily scratch orgs** | new stories and rebuilds a day | 6 | 80 / 200 |
-| **The staging regression** | one job, one browser: every Apex, Flow and UI test on the release branch | about 25 min with 38 UI tests | grows about 1.5 min with every story's spec |
+| **The staging regression** | every Apex and Flow test after each merge (about 6 min); the UI regression, one browser, once per release (`UI_REGRESSION`) | the UI part about 22 min with 38 tests | grows about 1.5 min with every story's spec |
 | **Runner minutes** | everything | a small budget with a hard stop | billed on the company's plan |
 | **Salesforce API and test queue** | deploys and test runs in production and the shared orgs | rarely | one deploy at a time per org; a daily cap on Apex test classes queued; `RunRelevantTests` keeps validation short |
 | **Claude** | AI steps | a personal subscription token | an organisation API key; about $2 to $2.50 a story with every switch on |
@@ -32,7 +32,8 @@ orgs held by other projects), `--uat-sandbox`.
   snapshots.
 - **UAT on a sandbox:** `SF_UAT_USERNAME` (and `SF_UAT_LOGIN_URL`). This frees a scratch org at every release, and
   testers keep their sandbox logins.
-- **Keep the UI suite lean.** Staging runs every spec, one browser at a time: a Lightning page is CPU-heavy, and more
+- **Keep the UI suite lean.** The UI regression runs every spec once per release, one browser at a time (each story's
+  own spec already ran in its org before it merged): a Lightning page is CPU-heavy, and more
   browsers on one runner time out (#268). Keep each story's spec to its acceptance criteria, and retire specs whose
   behaviour is covered by a newer story. `pipe org capacity` warns past 20 minutes.
 - **Why not split the UI suite across runners (sharding)?** It was built and removed (#271). The shards hold the staging

@@ -20,10 +20,11 @@ export const MEASURED = {
 
 /**
  * The plan for a team. devhub { activeMax, dailyMax, activeUsed (held outside the pipeline) }, team { devs,
- * storiesPerSprint, sprintDays, inFlight }, ui { tests, testSeconds }, uatSandbox (UAT needs no scratch org).
+ * storiesPerSprint, sprintDays, inFlight }, ui { tests, testSeconds }, uatSandbox (UAT needs no scratch org), uiPolicy
+ * (UI_REGRESSION: "release", the UI regression once per release; "every", on every staging run).
  * Returns { orgs, ui, cost, advice[] }. Pure.
  */
-export function plan({ devhub = {}, team = {}, ui = {}, uatSandbox = false, m = MEASURED } = {}) {
+export function plan({ devhub = {}, team = {}, ui = {}, uatSandbox = false, uiPolicy = "release", m = MEASURED } = {}) {
   const devs = team.devs || 2, sprintDays = team.sprintDays || 10, stories = team.storiesPerSprint || devs * 3;
   const inFlight = team.inFlight || devs;
   const reserved = m.reservedOrgs + (devhub.activeUsed || 0);
@@ -35,15 +36,18 @@ export function plan({ devhub = {}, team = {}, ui = {}, uatSandbox = false, m = 
   const sec = ui.testSeconds || m.testSeconds, tests = ui.tests || 0;
   const uiOut = { tests, minutes: round((tests * sec) / 60), perStoryMinutes: round((2.5 * sec) / 60) };
 
-  const stagingMinutes = m.deployMinutes + m.apexMinutes + uiOut.minutes;
+  // a staging run per story merge (deploy, Apex and Flow); the UI regression on each of them ("every") or once per release
+  const every = uiPolicy === "every", mergeMinutes = m.deployMinutes + m.apexMinutes + (every ? uiOut.minutes : 0);
   const releasesPerMonth = 21 / sprintDays, storiesPerMonth = stories * releasesPerMonth;
-  const monthlyMinutes = m.fixedMonthlyMinutes + storiesPerMonth * m.storyMinutes + releasesPerMonth * (stagingMinutes + m.releaseOtherMinutes);
-  const cost = { stagingMinutes: round(stagingMinutes), storiesPerMonth: round(storiesPerMonth), monthlyMinutes: Math.round(monthlyMinutes),
+  const uiPerMonth = every ? 0 : releasesPerMonth * (1 + uiOut.minutes);   // the release's UI run: the org already holds the code
+  const monthlyMinutes = m.fixedMonthlyMinutes + storiesPerMonth * (m.storyMinutes + mergeMinutes) + uiPerMonth + releasesPerMonth * m.releaseOtherMinutes;
+  const cost = { mergeMinutes: round(mergeMinutes), uiPolicy, storiesPerMonth: round(storiesPerMonth), monthlyMinutes: Math.round(monthlyMinutes),
     monthlyActionsUsd: round(monthlyMinutes * m.usdPerMinute), monthlyAiUsd: round(storiesPerMonth * m.aiUsdPerStory) };
 
   const advice = [];
   if (inFlight > inFlightMax) advice.push(`The Dev Hub allows ${orgs.activeMax} active scratch orgs: with staging${devhub.activeUsed ? ` and ${devhub.activeUsed} held outside the pipeline` : ""} that is ${plural(inFlightMax, "story", "stories")} in flight, not ${inFlight}. Move the Dev Hub to an Enterprise or Unlimited org (far higher allowances), use a sandbox for UAT (SF_UAT_USERNAME), or keep fewer stories in flight; the rest wait in line (waiting:org).`);
   if (orgs.dailyMax !== null && dailyNeeded > orgs.dailyMax) advice.push(`About ${dailyNeeded} scratch orgs a day are needed and the Dev Hub allows ${orgs.dailyMax}.`);
+  if (every && stories > 1) advice.push(`UI_REGRESSION=every runs the UI regression on each of the ${stories} story merges a sprint; the default (once per release) saves about ${Math.round((stories - 1) * uiOut.minutes)} min a sprint.`);
   if (uiOut.minutes > m.uiWarnMinutes) advice.push(`The staging UI regression takes about ${uiOut.minutes} min and grows about ${uiOut.perStoryMinutes} min with every story. Retire specs whose stories are covered elsewhere, and keep each story's spec to its acceptance criteria.`);
   if (!advice.length) advice.push("The defaults carry this load.");
   return { orgs, ui: uiOut, cost, advice };
@@ -78,7 +82,7 @@ export function report(p) {
     "## Pipeline capacity",
     "",
     `- **Stories in flight:** ${p.orgs.inFlight} wanted, ${p.orgs.inFlightMax} possible (${p.orgs.activeMax ?? "?"} active scratch orgs; ${p.orgs.activeNeeded} needed with staging, ${p.orgs.atRelease} at release with UAT). About ${p.orgs.dailyNeeded} new orgs a day (allowance ${p.orgs.dailyMax ?? "?"}).`,
-    `- **Staging regression:** about ${p.cost.stagingMinutes} min (UI: ${p.ui.tests} tests, about ${p.ui.minutes} min, one browser).`,
+    `- **Staging:** about ${p.cost.mergeMinutes} min per story merge; the UI regression (${p.ui.tests} tests, about ${p.ui.minutes} min, one browser) ${p.cost.uiPolicy === "every" ? "on every merge (UI_REGRESSION=every)" : "once per release"}.`,
     `- **Cost a month:** about ${p.cost.monthlyMinutes} Actions minutes ($${p.cost.monthlyActionsUsd}) for ${p.cost.storiesPerMonth} stories when nothing fails, plus about $${p.cost.monthlyAiUsd} of Claude with every AI switch on. Failures and re-runs add to it: keep a margin.`,
     "",
     ...p.advice.map((a) => `- ${a}`),
