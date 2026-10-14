@@ -80,7 +80,11 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   }
   const mergedActions = merged && !shipped && base !== "main" && !releasePr ? ["release-cut"] : [];   // nobody has cut the release yet
   if (mergedActions.length) next = `${next} When the sprint's stories are merged, tick **Cut the sprint's release** below.`;
-  return render(key, next, rows, now, merged ? mergedActions : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }));
+  // who the story needs now: its approver once everything else is green (notifyNeeds mentions them once)
+  const green = pr.state === "OPEN" && !merged && !rows.some((r) => ["failed", "running"].includes(r[0])) && !decision?.other?.length;
+  const needs = green && rows.find((r) => r[1] === "Approval")?.[0] === "waiting"
+    ? { who: facts?.storyApprover ? [facts.storyApprover] : facts?.approvers || [], what: `story #${key} is ready for your approval: ${prUrl}/files` } : null;
+  return render(key, next, rows, now, merged ? mergedActions : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }), { needs });
 }
 
 /** The Approval row: who approved, or who should and how; a refused approval says why (approval() in gate.mjs). */
@@ -190,7 +194,11 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
     if (validation === "failed") ids.push("gate");
   }
   if (shipped) ids.push("sprint");
-  return render(`release ${sprint}`, next, rows, activityLine(activity), [...new Set(ids)], { release: true });
+  // who the release needs now: the UAT testers while it is in UAT, then the approvers (notifyNeeds mentions them once)
+  const open = !merged && pr.state === "OPEN" && !failed;
+  const needs = !open ? null : at("UAT sign-off") === "running" ? { who: testers(), what: `release ${sprint} is in UAT: test it, then tick **UAT passed** on ${prUrl}` }
+    : at("Approval") === "waiting" ? { who: facts.approvers || [], what: `release ${sprint} needs your approval: ${prUrl}/files` } : null;
+  return render(`release ${sprint}`, next, rows, activityLine(activity), [...new Set(ids)], { release: true, needs });
 }
 
 /**
@@ -229,7 +237,25 @@ export function storyMap(rows) {
 }
 
 
-function render(key, next, rows, now = null, actions = [], { release = false } = {}) {
+/** Who a card needs now, as a hidden line on it: <!-- pipeline:needs login,login|what -->. A change of it is what
+ *  notifies (notifyNeeds): cards are edited in place, and GitHub never notifies on an edit (14 Oct review). */
+const NEEDS = "<!-- pipeline:needs ";
+export const needsLine = (needs) => (needs?.who?.length ? `${NEEDS}${needs.who.join(",")}|${needs.what} -->` : "");
+export function needsOf(body) {
+  const m = String(body || "").match(/<!-- pipeline:needs ([^|]*)\|(.*?) -->/);
+  return m ? { who: m[1].split(",").filter(Boolean), what: m[2] } : null;
+}
+/** One comment naming the people a card now needs, when that changed since the card was last written (GitHub). */
+export async function notifyNeeds({ tracker, number, body, mark = CARD_MARK }) {
+  if (!tracker?.prior || !tracker?.comment) return false;
+  const now = needsOf(body), before = needsOf(await tracker.prior(number, mark).catch(() => ""));
+  if (!now?.who?.length || (before && before.who.join() === now.who.join() && before.what === now.what)) return false;
+  await tracker.comment(number, `${now.who.map((w) => `@${w}`).join(" ")}: ${now.what}`);
+  return true;
+}
+const testers = () => { try { return Object.keys(JSON.parse(setting("UAT_TESTERS") || "{}")); } catch { return []; } };
+
+function render(key, next, rows, now = null, actions = [], { release = false, needs = null } = {}) {
   return [
     CARD_MARK,
     `### ${release ? `Release status: ${key.replace(/^release /, "sprint ")}` : CARD_TITLE} (kept up to date by the pipeline)`,
@@ -243,6 +269,7 @@ function render(key, next, rows, now = null, actions = [], { release = false } =
     "| | Stage | Details |",
     "|---|---|---|",
     ...rows.map(([s, stage, d]) => `| ${ICON[s]} | ${stage} | ${d} |`),
+    ...(needsLine(needs) ? ["", needsLine(needs)] : []),
   ].join("\n");
 }
 
@@ -277,7 +304,10 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
         const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, base: c.base, releasePr: c.releasePr,
           shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null, activity });
         await tracker.card(key, body, CARD_MARK, CARD_TITLE);
-        if (c.pr) await prTracker.card(c.pr.number, body, CARD_MARK, CARD_TITLE);   // the same card on the PR
+        if (c.pr) {
+          await notifyNeeds({ tracker: prTracker, number: c.pr.number, body }).catch((e) => log(`::warning::nobody notified: ${e.message}`));
+          await prTracker.card(c.pr.number, body, CARD_MARK, CARD_TITLE);   // the same card on the PR
+        }
         if (!light) await syncBoard({ host, key, pr: c.pr, facts: c.facts, shipped: Boolean(tag), log });
       } catch (e) { log(`::warning::story card for ${key} not updated: ${e.message}`); }
     },
@@ -302,6 +332,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
           const stories = await tracker.sprintStories(sprintOf(pr.headRefName)).catch(() => []);
           const body = releaseCard({ repoUrl: host.repoUrl, pr, facts, decision: evaluate(facts), uat: facts.uat, stories, activity,
             shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null });
+          await notifyNeeds({ tracker: prTracker, number: pr.number, body }).catch((e) => log(`::warning::nobody notified: ${e.message}`));
           await prTracker.card(pr.number, body, CARD_MARK, CARD_TITLE);
           return "release";
         }

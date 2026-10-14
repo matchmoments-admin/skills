@@ -152,6 +152,9 @@ export function verdictFor(context, { statuses = [], head, diffsToHead = {} }) {
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   if (!mine.length) return { state: "missing" };
   const last = mine[mine.length - 1];
+  // still running, and only specs changed since (the AI UI test's own spec commit): running, not stale (the card said
+  // "run it again" while the test ran, 14 Oct)
+  if (last.state === "pending" && carries("specs", last.sha, head, diffsToHead[last.sha])) return { state: "pending", description: last.description || "", url: last.url || null, sha: last.sha, at: last.created_at || null };
   // A spec-only push keeps a review or sign-off, but not the UI test: the spec IS that test, so a changed spec has
   // not passed yet (story #166: a weakened spec rode on the earlier pass). Nor UAT: a person signed off that code.
   if (!carries(CARRY[context] || "specs", last.sha, head, diffsToHead[last.sha])) return { state: "stale", sha: last.sha };

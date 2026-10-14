@@ -220,3 +220,32 @@ test("approver (enterprise B): Sign off and /review-ok refuse an approval that w
   const card = storyCard({ key: "23", repoUrl: "https://github.com/o/r", branch: "issue-23", base: "release/w", pr: { ...f.pr, state: "OPEN" }, facts: { ...f, reviews: [], approvers: ["alice", "carol"], storyApprover: "alice", lastPusher: "bob" }, decision: { mergeable: false } });
   assert.match(card, /@alice \(the approver\): \*\*\[Approve here\]/);
 });
+
+test("a person is told once when a card needs them; a UI test still running over its own spec commit reads as running (14 Oct review)", async () => {
+  const { needsOf, needsLine, notifyNeeds } = await import("../src/card.mjs");
+  // pending on the head before the spec commit, with only e2e/ since: still running
+  const older = "0000000000000000000000000000000000000001";
+  const pend = { sha: older, context: gate.STATUS.ui, state: "pending", created_at: "t", creator: { login: "github-actions[bot]" } };
+  assert.equal(gate.verdictFor(gate.STATUS.ui, { statuses: [pend], head: "h", diffsToHead: { [older]: ["e2e/story-1.spec.ts"] } }).state, "pending");
+  assert.equal(gate.verdictFor(gate.STATUS.ui, { statuses: [pend], head: "h", diffsToHead: { [older]: ["force-app/x.cls"] } }).state, "stale", "code changed: stale");
+  // the hidden line round-trips
+  assert.deepEqual(needsOf(`card\n${needsLine({ who: ["alice", "bob"], what: "approve it" })}`), { who: ["alice", "bob"], what: "approve it" });
+  assert.equal(needsLine({ who: [], what: "x" }), "", "nobody to name: no line");
+  // one comment when who or what changes; none when it is the same, or when nobody is needed
+  const said = [];
+  let prior = "";
+  const tracker = { prior: async () => prior, comment: async (n, t) => said.push([n, t]) };
+  const body = (who, what) => `card\n${needsLine({ who, what })}`;
+  assert.equal(await notifyNeeds({ tracker, number: 7, body: body(["alice"], "approve #7") }), true);
+  prior = body(["alice"], "approve #7");
+  assert.equal(await notifyNeeds({ tracker, number: 7, body: body(["alice"], "approve #7") }), false, "the same need: no second mention");
+  assert.equal(await notifyNeeds({ tracker, number: 7, body: "card" }), false, "nobody needed");
+  assert.equal(await notifyNeeds({ tracker: { card: async () => {} }, number: 7, body: body(["alice"], "x") }), false, "a tracker without prior (Jira): nothing");
+  assert.deepEqual(said, [[7, "@alice: approve #7"]]);
+  // the story card asks its approver once everything else is green
+  const f = { ...open(fixture(12)), reviews: [], storyApprover: "alice" };   // everything green, not approved yet
+  const card = (facts) => storyCard({ key: "12", repoUrl: "https://github.com/o/r", branch: facts.pr.headRefName, base: facts.pr.baseRefName, pr: facts.pr, facts, decision: gate.evaluate(facts) });
+  assert.deepEqual(needsOf(card(f)), { who: ["alice"], what: "story #12 is ready for your approval: https://github.com/o/r/pull/12/files" });
+  assert.equal(needsOf(card(open(fixture(12)))), null, "approved: nobody needed");
+  assert.equal(needsOf(card({ ...f, pr: { ...f.pr, isDraft: true } })), null, "a draft: the author, not the approver");
+});

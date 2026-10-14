@@ -21,6 +21,10 @@ export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || proce
     async comments(key) {
       return list(`repos/${repo}/issues/${key}/comments?per_page=100`).map((c) => ({ author: c.user?.login || "", body: c.body || "", created: c.created_at }));
     },
+    /** The body of the comment with this marker now, or "" (the card before an update: who it asked for). */
+    async prior(key, mark) {
+      return list(`repos/${repo}/issues/${key}/comments?per_page=100`).find((c) => String(c.body || "").includes(mark))?.body || "";
+    },
     /** Create or update the one comment with this marker (the story card, the build plan); returns its URL. The
      *  comment found is remembered, so refreshing it again in the same process costs one call. */
     async card(key, body, mark) {
