@@ -1,0 +1,72 @@
+// Pipeline tests: settings (split from the one test file on 14 Oct; shared fakes in ./helpers.mjs).
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import * as names from "../src/conventions.mjs";
+import * as gate from "../src/gate.mjs";
+import * as verdict from "../src/verdict.mjs";
+import * as roles from "../src/roles.mjs";
+import * as journey from "../src/journey.mjs";
+import * as capacity from "../src/capacity.mjs";
+import * as settings from "../src/settings.mjs";
+import { plan } from "../src/closeout.mjs";
+import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
+import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed, sameSourceVia } from "../src/org.mjs";
+import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
+import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
+import * as plans from "../src/plan.mjs";
+import { storyCard, CARD_MARK, startingCard, activityLine } from "../src/card.mjs";
+import * as board from "../src/board.mjs";
+import * as tests from "../src/tests.mjs";
+import * as production from "../src/production.mjs";
+import * as access from "../src/access.mjs";
+import * as pack from "../src/context-pack.mjs";
+import * as shipping from "../src/shipping.mjs";
+import * as closeout from "../src/closeout.mjs";
+import { lane, jobId, wakeAll, waiterJob } from "../src/lane.mjs";
+import * as events from "../src/events.mjs";
+import { codeHost } from "../src/github.mjs";
+import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
+import * as actions from "../src/actions.mjs";
+import * as specs from "../src/spec.mjs";
+import * as evidence from "../src/evidence.mjs";
+import * as baselineMod from "../src/baseline.mjs";
+import * as orgMod from "../src/org.mjs";
+import * as start from "../src/start.mjs";
+import * as harness from "../src/harness.mjs";
+import { fixture, open, ok, FULL_AI, withVerdicts, uiPassed, fakeSf, fakeJev, src, files, pick, repo, O, SHA, fakeRefs, fakeGitHub, scratchSkill, webp, meta, provisionSf, deliveryIo, BOT, wfSteps, pipeSources, st_, read, TREE } from "./helpers.mjs";
+
+test("settings are declared once: every name the code and the workflows read is declared, and documented in the handbook", () => {
+  const declared = new Set(settings.SETTINGS.map(([n]) => n));
+  const src = [...readdirSync(new URL("../src/", import.meta.url)).filter((f) => f.endsWith(".mjs")).map((f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8")), pipeSources()].join("\n");
+  const read = new Set([...src.matchAll(/setting\("([A-Z_]+)"/g)].map((m) => m[1]));
+  const wfDir = new URL("../../.github/workflows/", import.meta.url);
+  const yml = readdirSync(wfDir).map((f) => readFileSync(new URL(f, wfDir), "utf8")).join("\n");
+  for (const m of yml.matchAll(/vars\.([A-Z_]+)/g)) read.add(m[1]);
+  for (const n of read) assert.ok(declared.has(n), `${n} is read but not declared in settings.mjs`);
+  const handbook = readFileSync(new URL("../../docs/handbook.md", import.meta.url), "utf8");
+  for (const n of declared) assert.match(handbook, new RegExp(`^\\| \`${n}\``, "m"), `${n} has a row in the handbook's settings table`);
+  // org provisioning gets every setting it reads, resolved: SEED=off as a repository variable once never reached it
+  assert.equal(settings.orgSettings({ PIPELINE_VARS: JSON.stringify({ SEED: "off" }) }).SEED, "off");
+  assert.deepEqual(settings.orgSettings({}), { SCRATCH_SNAPSHOT: "", BASELINE: "soft", SEED: "on", VOLUME_RECORDS: "5000", ORG_RESERVE: "0" });
+  assert.match(pipeSources(), /\.\.\.orgSettings\(\)/, "orgRegistry's env carries them");
+});
+
+test("capacity: stories in flight from the Dev Hub's allowance, the staging regression's time, and a month's cost", () => {
+  const dev = capacity.plan({ devhub: { activeMax: 3, dailyMax: 6, activeUsed: 1 }, team: { devs: 2 }, ui: { tests: 38 } });
+  assert.equal(dev.orgs.inFlightMax, 1, "3 active orgs: staging, one held elsewhere, one story");
+  assert.match(dev.advice.join(" "), /1 story in flight, not 2.*Enterprise or Unlimited/);
+  assert.equal(dev.ui.minutes, 22.2, "38 tests at 35 s, one browser");
+  assert.match(dev.advice.join(" "), /grows about 1\.5 min with every story/);
+  const ent = capacity.plan({ devhub: { activeMax: 40, dailyMax: 80 }, team: { devs: 10, storiesPerSprint: 30 }, ui: { tests: 20 }, uatSandbox: true });
+  assert.equal(ent.orgs.inFlightMax, 39);
+  assert.equal(ent.orgs.atRelease, 1, "a UAT sandbox takes no scratch org");
+  assert.deepEqual(ent.advice, ["The defaults carry this load."]);
+  assert.ok(ent.cost.monthlyMinutes > dev.cost.monthlyMinutes);
+  assert.match(capacity.report(dev), /## Pipeline capacity[\s\S]*once per release/);
+  const every = capacity.plan({ devhub: { activeMax: 3 }, team: { devs: 2, storiesPerSprint: 5 }, ui: { tests: 38 }, uiPolicy: "every" });
+  assert.ok(every.cost.monthlyMinutes > capacity.plan({ devhub: { activeMax: 3 }, team: { devs: 2, storiesPerSprint: 5 }, ui: { tests: 38 } }).cost.monthlyMinutes);
+  assert.match(every.advice.join(" "), /saves about 89 min a sprint/);
+  assert.deepEqual(capacity.countSpecs("e2e-missing"), { tests: 0 });
+});
