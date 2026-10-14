@@ -137,7 +137,7 @@ export function summarize(events, { days = 28 } = {}) {
       totalUsd: Math.round(agents.reduce((a, x) => a + (Number(x.usd) || 0), 0) * 100) / 100,
       medianFixRounds: median(Object.values(fixRounds)),
       passedFirstReview: pct(reviewed.filter((s) => s === "success").length, reviewed.length),
-      jev: { decisions: of("jev").length, skippedReviews: of("jev").filter((j) => j.decision === "review" && !j.run).length, skippedFixes: of("jev").filter((j) => j.decision === "fix" && !j.run).length },
+      jev: { decisions: of("jev").length, skippedReviews: of("jev").filter((j) => j.decision === "review" && j.skipped).length, skippedFixes: of("jev").filter((j) => j.decision === "fix" && j.skipped).length },
     },
   };
 }

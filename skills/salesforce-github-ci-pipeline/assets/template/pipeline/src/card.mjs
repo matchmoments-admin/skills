@@ -196,8 +196,11 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
   if (shipped) ids.push("sprint");
   // who the release needs now: the UAT testers while it is in UAT, then the approvers (notifyNeeds mentions them once)
   const open = !merged && pr.state === "OPEN" && !failed;
+  // approvers are called only when every row above Approval is done: release 2027-w01 mentioned them as its PR opened,
+  // half an hour before staging and UAT (one mention, so it must come when there is something to approve)
+  const readyForApproval = rows.slice(0, rows.findIndex((r) => r[1] === "Approval")).every((r) => r[0] === "done");
   const needs = !open ? null : at("UAT sign-off") === "running" ? { who: testers(), what: `release ${sprint} is in UAT: test it, then tick **UAT passed** on ${prUrl}` }
-    : at("Approval") === "waiting" ? { who: facts.approvers || [], what: `release ${sprint} needs your approval: ${prUrl}/files` } : null;
+    : at("Approval") === "waiting" && readyForApproval ? { who: facts.approvers || [], what: `release ${sprint} is ready for your approval: ${prUrl}/files` } : null;
   return render(`release ${sprint}`, next, rows, activityLine(activity), [...new Set(ids)], { release: true, needs });
 }
 

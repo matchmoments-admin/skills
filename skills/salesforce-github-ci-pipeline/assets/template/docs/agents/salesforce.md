@@ -66,6 +66,9 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   by one. Assert such a date within one day of `Date.today()` plus the offset, and no wider. An exact assertion passes
   in CI and fails production validation hours later (stories #218 and #241: the CI user in Sydney, the org in Los
   Angeles).
+- UI specs, a date: the runner counts days in UTC and the persona user in the org's time zone (Sydney here), up to a
+  day apart. A date that must be in the future or the past is at least 3 days out (story #293: "tomorrow" was today
+  for 11 hours of every day, and the release UI regression failed on it).
 - UI specs (Playwright): a record page opens on its Activity, Chatter or Related tab, so click the **Details** tab
   (`page.getByRole("tab", { name: "Details" })`) before asserting a field's value; match a field's value exactly
   (`toHaveText`), since a label and a help text can both contain it (story #193: 31 agent minutes on both). When a run
@@ -114,8 +117,9 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   UI tests, Flow checks and people: read seed records by name, create only what a test changes.
 - **A story that adds an object, or a field people test, ships its own seed:** `data/seed/stories/<story key>/plan.json`
   plus one JSON file per object (`sf data import tree` format, as `data/seed`). Up to about 20 synthetic records that
-  show the feature working: link them to the seed's Accounts by name (`@Acc01`-style references in the same plan, or
-  a lookup by an existing Account's Name), use picklist codes, never real people or emails. The story's org, then
+  show the feature working. A tree plan's `@ref` references reach only records in the same plan, so when the records
+  need a parent (an Account), the story's plan makes its own few synthetic parents first and references them
+  (`@SomeAcc01`). Use picklist codes, never real people or emails. The story's org, then
   staging and UAT load it (once, by its marker), so testers and the UI tests find records to look at. A shipped story's
   seed is folded into the core seed by a bot PR after the release.
 - **Every Apex test class declares what it tests:** `@IsTest(testFor='ApexClass:CaseHandler,ApexTrigger:CaseTrigger')`

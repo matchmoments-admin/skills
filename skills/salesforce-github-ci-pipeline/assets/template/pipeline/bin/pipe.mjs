@@ -257,7 +257,7 @@ const commands = {
   "triage review": async () => {
     const range = `${flag("base", "origin/main")}...${flag("head", "HEAD")}`;
     const t = await triageReview(jev(), { files: (io.git(["diff", "--name-only", range]) || "").split("\n").filter(Boolean), diff: io.git(["diff", range]) || "" });
-    output({ review: t.review, why: t.why }); record("jev", { decision: "review", pr: flag("pr"), run: t.review, why: t.why });
+    output({ review: t.review, why: t.why }); record("jev", { decision: "review", pr: flag("pr"), skipped: !t.review, why: t.why });
     return say(`${t.review ? "review" : "skip"} (${t.why})`);
   },
 

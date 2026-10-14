@@ -206,7 +206,7 @@ export async function fixGate(pr, { host, gh, jev }) {
     const review = reviewComments(comments).filter((b) => String(b).includes(REVIEW_LINE.changes)).at(-1) || "";
     t = await triageFix(jev, { review, ciFailed });
   } catch (err) { t = { fix: true, kind: "unknown", confidence: 0, why: `could not ask Jev (${err.message})` }; }
-  host.record?.("jev", { decision: "fix", pr: String(pr), run: t.fix, kind: t.kind, confidence: t.confidence, why: t.why });
+  host.record?.("jev", { decision: "fix", pr: String(pr), skipped: !t.fix, kind: t.kind, confidence: t.confidence, why: t.why });
   return t;
 }
 

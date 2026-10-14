@@ -8,7 +8,7 @@ when the team turns it on. The handbook's "Test data" table is the operator view
 | Layer | Where | How it loads |
 |---|---|---|
 | **Core seed** | `data/seed/` (`sf data import tree` plan + one file per object, standard fields only) | Every scratch org (story, CI, staging, UAT, the snapshot), once per org through a marker Account. Date tokens (`${TODAY}`, `${THIS_YEAR}`…) are filled at load time. A changed seed replaces the old one in long-lived orgs |
-| **Story seed** | `data/seed/stories/<key>/plan.json` (same format) | Claude writes it with the build when a story adds an object (or a field people test): about 20 synthetic records linked to the seed's Accounts by name. It loads into the story's org, then staging and UAT. After the release, `seed-fold` opens a PR folding it into the core seed |
+| **Story seed** | `data/seed/stories/<key>/plan.json` (same format) | Claude writes it with the build when a story adds an object (or a field people test): about 20 synthetic records, with a few synthetic parent Accounts made in the same plan (tree `@references` reach only their own plan). It loads into the story's org, then staging and UAT. After the release, `seed-fold` opens a PR folding it into the core seed |
 | **Volume** | generated (`VOLUME_RECORDS`, default 5000) | Staging only: accounts with opportunities by anonymous Apex, so lists, reports and Flows meet production-like numbers |
 | **Masked UAT sample** | `config/uat-sample/export.json` | Only with `UAT_SAMPLE=on`: SFDMU copies a production subset into UAT org to org, replacing names, emails and phones (`mockFields`). Then `pipe sample guard` fails if a production email domain (`UAT_SAMPLE_DOMAINS`) survived |
 

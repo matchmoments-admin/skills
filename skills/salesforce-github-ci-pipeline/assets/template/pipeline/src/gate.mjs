@@ -123,15 +123,19 @@ export const checkPassed = (conclusion) => checkState(conclusion) === "passed";
  *            pipeline file either: a commit whose workflows were the branch's own could have faked that pass
  * files: what changed from that commit to the head (null if unknown, which never carries). Pure.
  */
-export const CARRY = { [STATUS.review]: "specs", [STATUS.signoff]: "specs", [STATUS.ui]: "exact", [STATUS.uat]: "exact", [STATUS.approval]: "exact", apex: "no-sf", staging: "no-staging-input", [STATUS.uiRegression]: "no-staging-input" };
+export const CARRY = { [STATUS.review]: "specs", [STATUS.signoff]: "specs", [STATUS.ui]: "exact", [STATUS.uat]: "exact", [STATUS.approval]: "exact", apex: "no-sf", staging: "no-apex-input", [STATUS.uiRegression]: "no-staging-input" };
 /** What the staging regression tests: Salesforce source, specs, seed and org config, and the code that builds and runs
  *  staging. A release-branch commit that changes none of these (a back-merge of other pipeline work) keeps the
  *  regression an earlier commit passed (#237). */
 export const STAGING_INPUTS = /^(force-app\/|e2e\/|data\/|config\/|baseline\/|sfdx-project\.json$|package(-lock)?\.json$|playwright\.config\.ts$|\.github\/actions\/|\.github\/workflows\/staging-deploy\.yml$|pipeline\/src\/(org|tests|evidence|baseline|io|settings|conventions|harness)\.mjs$|pipeline\/src\/org\/)/;   // settings: the seed and baseline defaults; harness: main's copy over the specs
+const UI_ONLY = /^(e2e\/|playwright\.config\.ts$)/;
 export function carries(rule, sha, head, files) {
   if (sha === head) return true;
   if (rule === "exact" || !Array.isArray(files)) return false;
   if (rule === "no-staging-input") return !files.some((f) => STAGING_INPUTS.test(f));
+  // staging's Apex and Flow run: specs are the UI regression's input, not theirs (release 2027-w01 re-ran 149 Apex
+  // tests for a one-line spec fix)
+  if (rule === "no-apex-input") return !files.some((f) => STAGING_INPUTS.test(f) && !UI_ONLY.test(f));
   return rule === "no-sf" ? !files.some((f) => f.startsWith("force-app/")) && !touchesPipeline(files).length : files.every((f) => f.startsWith("e2e/"));
 }
 /** True if every file changed between a commit and the head is under e2e/ (the UI tester's spec). */
@@ -153,8 +157,9 @@ export function verdictFor(context, { statuses = [], head, diffsToHead = {} }) {
   if (!mine.length) return { state: "missing" };
   const last = mine[mine.length - 1];
   // still running, and only specs changed since (the AI UI test's own spec commit): running, not stale (the card said
-  // "run it again" while the test ran, 14 Oct)
-  if (last.state === "pending" && carries("specs", last.sha, head, diffsToHead[last.sha])) return { state: "pending", description: last.description || "", url: last.url || null, sha: last.sha, at: last.created_at || null };
+  // "run it again" while the test ran, 14 Oct). The UI test only: UAT pending on an older commit is UAT owed on the
+  // head (release 2027-w01: the journey read it as running, /uat-pass refused it, and nothing redeployed UAT)
+  if (last.state === "pending" && context === STATUS.ui && carries("specs", last.sha, head, diffsToHead[last.sha])) return { state: "pending", description: last.description || "", url: last.url || null, sha: last.sha, at: last.created_at || null };
   // A spec-only push keeps a review or sign-off, but not the UI test: the spec IS that test, so a changed spec has
   // not passed yet (story #166: a weakened spec rode on the earlier pass). Nor UAT: a person signed off that code.
   if (!carries(CARRY[context] || "specs", last.sha, head, diffsToHead[last.sha])) return { state: "stale", sha: last.sha };

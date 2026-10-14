@@ -268,7 +268,7 @@ test("the fix gate: a chained fix Jev skips posts /review-ok and no dispatch; a 
   assert.equal(d.run, false);
   assert.ok(!did.some((x) => Array.isArray(x)), "no fix runner");
   assert.ok(did.includes("pr comment 5"), "says what a person can do");
-  assert.deepEqual([events[0][0], events[0][1].decision, events[0][1].run], ["jev", "fix", false]);
+  assert.deepEqual([events[0][0], events[0][1].decision, events[0][1].skipped], ["jev", "fix", true]);
   did.length = 0;
   await start.startJob("fix", 5, { host, gh, cards: {}, ai: on, jev: minor, explicit: true });
   assert.deepEqual(did.find(Array.isArray), ["dispatch", "ai-fix.yml", { pr: 5 }], "a person asked: it runs");
@@ -277,14 +277,16 @@ test("the fix gate: a chained fix Jev skips posts /review-ok and no dispatch; a 
   assert.deepEqual(did.find(Array.isArray), ["dispatch", "ai-fix.yml", { pr: 5 }], "no Jev (AI_TRIAGE off): it runs");
   const s = events.length;
   await start.startJob("fix", 5, { host, gh, cards: {}, ai: on, jev: fakeJev({}, 500) });
-  assert.equal(events.at(-1)[1].run, true, "Jev down: recorded, and it runs");
+  assert.equal(events.at(-1)[1].skipped, false, "Jev down: recorded, and it runs");
   assert.equal(events.length, s + 1);
 });
 
 test("Jev decisions are events, and the metrics count what they saved", () => {
   const at = "2026-10-14T00:00:00Z";
-  const s = events.summarize([{ kind: "jev", at, decision: "fix", run: false }, { kind: "jev", at, decision: "review", run: false }, { kind: "jev", at, decision: "fix", run: true }], { days: 28 });
+  const s = events.summarize([{ kind: "jev", at, decision: "fix", skipped: true, run: "1" }, { kind: "jev", at, decision: "review", skipped: true, run: "2" }, { kind: "jev", at, decision: "fix", skipped: false, run: "3" }], { days: 28 });
   assert.deepEqual(s.ai.jev, { decisions: 3, skippedReviews: 1, skippedFixes: 1 });
   assert.match(events.toMarkdown(s), /3 decisions: 1 reviews and 1 fix rounds not needed/);
   assert.equal(events.event("jev", { decision: "fix" }).kind, "jev");
+  // the event's own `run` is the Actions run id: a decision's field must not be called run (story #293's events)
+  assert.equal(events.event("jev", { skipped: false }, { GITHUB_RUN_ID: "9" }).skipped, false);
 });

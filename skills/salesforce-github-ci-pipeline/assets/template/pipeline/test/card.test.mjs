@@ -228,6 +228,8 @@ test("a person is told once when a card needs them; a UI test still running over
   const pend = { sha: older, context: gate.STATUS.ui, state: "pending", created_at: "t", creator: { login: "github-actions[bot]" } };
   assert.equal(gate.verdictFor(gate.STATUS.ui, { statuses: [pend], head: "h", diffsToHead: { [older]: ["e2e/story-1.spec.ts"] } }).state, "pending");
   assert.equal(gate.verdictFor(gate.STATUS.ui, { statuses: [pend], head: "h", diffsToHead: { [older]: ["force-app/x.cls"] } }).state, "stale", "code changed: stale");
+  // UAT pending on an older commit is owed on the head, even over a spec-only change (release 2027-w01's deadlock)
+  assert.equal(gate.verdictFor(gate.STATUS.uat, { statuses: [{ ...pend, context: gate.STATUS.uat }], head: "h", diffsToHead: { [older]: ["e2e/story-293.spec.ts"] } }).state, "stale");
   // the hidden line round-trips
   assert.deepEqual(needsOf(`card\n${needsLine({ who: ["alice", "bob"], what: "approve it" })}`), { who: ["alice", "bob"], what: "approve it" });
   assert.equal(needsLine({ who: [], what: "x" }), "", "nobody to name: no line");
@@ -248,4 +250,17 @@ test("a person is told once when a card needs them; a UI test still running over
   assert.deepEqual(needsOf(card(f)), { who: ["alice"], what: "story #12 is ready for your approval: https://github.com/o/r/pull/12/files" });
   assert.equal(needsOf(card(open(fixture(12)))), null, "approved: nobody needed");
   assert.equal(needsOf(card({ ...f, pr: { ...f.pr, isDraft: true } })), null, "a draft: the author, not the approver");
+});
+
+test("a release calls its approvers only when everything above Approval is done (2027-w01 called them as its PR opened)", async () => {
+  const { needsOf } = await import("../src/card.mjs");
+  const pr = { number: 296, state: "OPEN", headRefName: "release/2027-w01", baseRefName: "main", headRefOid: "h" };
+  const run = (name, conclusion) => ({ name, conclusion, status: conclusion ? "completed" : "in_progress", started_at: "2026-10-14T12:00:00Z" });
+  const st = (context, state) => ({ sha: "h", context, state, description: "", created_at: "2026-10-14T12:30:00Z", creator: { login: "github-actions[bot]" } });
+  const base = { repoUrl: "https://github.com/o/r", pr, uat: true, stories: [{ key: "293", title: "Competitor mentions" }], facts: { approvers: ["lead"] } };
+  const green = [run("static checks (no org)", "success"), run("deploy and Apex tests (scratch org)", "success"), run("staging regression", "success")];
+  const opened = releaseCard({ ...base, facts: { ...base.facts, checkRuns: [run("static checks (no org)", null), run("staging regression", null)], statuses: [], reviews: [] } });
+  assert.equal(needsOf(opened), null, "staging and UAT still to come: nobody is called");
+  const done = releaseCard({ ...base, facts: { ...base.facts, checkRuns: green, statuses: [st(gate.STATUS.uat, "success"), st(gate.STATUS.uiRegression, "success")], reviews: [] } });
+  assert.deepEqual(needsOf(done)?.who, ["lead"]);
 });
