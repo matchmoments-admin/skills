@@ -38,3 +38,16 @@ jobs:
         run: |
           mkdir -p /tmp/test-skills-dest
           CLAUDE_SKILLS_DIR=/tmp/test-skills-dest ./scripts/install.sh --dry-run
+
+  salesforce-pipeline-template:
+    # The salesforce-github-ci-pipeline skill rebuilds its pipeline: a fresh copy of the template, bootstrapped for a
+    # made-up owner and project, installs (npm ci) and passes the pipeline's own tests. Catches a template that only
+    # works in the repo it was copied from.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Bootstrap a fresh repo from the template and run its tests
+        run: skills/salesforce-github-ci-pipeline/scripts/bootstrap.sh "$RUNNER_TEMP/acme-sf" --owner Acme-Co --project acme-sf

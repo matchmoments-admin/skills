@@ -9,7 +9,7 @@
       "default": false
     }
   ],
-  "name": "sf-lifecycle-labs",
+  "name": "__project__",
   "namespace": "",
   "sfdcLoginUrl": "https://login.salesforce.com",
   "sourceApiVersion": "67.0"

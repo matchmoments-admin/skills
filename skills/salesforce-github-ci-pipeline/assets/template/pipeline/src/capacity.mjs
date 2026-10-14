@@ -4,7 +4,7 @@
 // CPU-heavy, #268) and what a month costs. plan() is pure; gather() reads.
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 
-/** Measured on this pipeline (sf-lifecycle-labs, Oct 2026, 2-core GitHub runners); every one can be overridden. */
+/** Measured on the reference pipeline (Oct 2026, 2-core GitHub runners); every one can be overridden. */
 export const MEASURED = {
   testSeconds: 35,          // one UI test on the staging org (35 tests in 18 min)
   deployMinutes: 3.5,       // the release branch into the staging org

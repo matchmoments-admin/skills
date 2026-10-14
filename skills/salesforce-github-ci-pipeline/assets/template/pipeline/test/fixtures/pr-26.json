@@ -35,7 +35,7 @@
  "reviews": [
   {
    "user": {
-    "login": "matchmoments-admin",
+    "login": "alex-admin",
     "type": "User"
    },
    "state": "APPROVED",

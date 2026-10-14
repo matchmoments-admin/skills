@@ -53,7 +53,7 @@ Done when: all fourteen answers are written down.
 
 ## Phase 1 — Repo from the template
 
-Run [`scripts/bootstrap.sh`](scripts/bootstrap.sh) `<target-repo-dir>`. It copies the template, keeps any existing `force-app/`, and prints what it changed. Then edit `CLAUDE.md` (project rules) and `REVIEW.md` (review rubric) for the project.
+Run [`scripts/bootstrap.sh`](scripts/bootstrap.sh) `<target-repo-dir> --owner <github-owner> [--project <repo-name>] [--org <prod-org-id>] [--alias <prod-alias>]`. It copies the template, keeps any existing `force-app/`, fills every placeholder (owner, the App's bot name `<owner>-pipeline`, project, production alias; the org ID can come after Phase 2 step 4), refuses to finish with one left, then runs `npm ci` and the pipeline's tests. The skills repo's CI does the same for a made-up owner on every push, so the template is known to stand up on its own. Then edit `CLAUDE.md` (project rules) and `REVIEW.md` (review rubric) for the project.
 
 Done when: `npm ci && npm run test:pipeline` passes in the target repo, and `actionlint .github/workflows/*.yml` is clean.
 

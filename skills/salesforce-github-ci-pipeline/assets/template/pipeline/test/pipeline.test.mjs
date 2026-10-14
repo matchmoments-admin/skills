@@ -1806,10 +1806,10 @@ test("pipe act parses the workflows' own arguments: who acted and that it is a P
   const valueFlags = new Set(JSON.parse(`[${src.match(/const VALUE_FLAGS = new Set\(\[([\s\S]*?)\]\)/)[1].replace(/\s+/g, " ")}]`));
   const switches = [...new Set([...src.matchAll(/has\("([a-z-]+)"\)/g)].map((m) => m[1]))];
   assert.deepEqual(switches.filter((s) => valueFlags.has(s)), [], "a switch that is also a value flag swallows the next argument");
-  const argv = ["--number", "110", "--is-pr", "--by", "matchmoments-admin", "--by-type", "User", "--command", "/uat-pass"];
+  const argv = ["--number", "110", "--is-pr", "--by", "alex-admin", "--by-type", "User", "--command", "/uat-pass"];
   const flags = {};
   for (let i = 0; i < argv.length; i++) if (argv[i].startsWith("--")) { const n = argv[i].slice(2); flags[n] = valueFlags.has(n) ? argv[++i] : true; }
-  assert.deepEqual([flags.number, flags["is-pr"], flags.by, flags["by-type"], flags.command], ["110", true, "matchmoments-admin", "User", "/uat-pass"]);
+  assert.deepEqual([flags.number, flags["is-pr"], flags.by, flags["by-type"], flags.command], ["110", true, "alex-admin", "User", "/uat-pass"]);
 });
 
 // ---------------------------------------------------------------- UI evidence
@@ -2058,7 +2058,7 @@ test("the UI tester's screenshots must show the criterion met: data first, the e
 // ---------------------------------------------------------------- end-to-end round 1 (the spec #125 release)
 test("round 1: a weak UI spec fails; evidence never boxes the page header; closed stories' comments are rewritten before their screenshots go", async () => {
   assert.deepEqual(evidence.specProblems("await expect(page.getByRole('heading').first()).toBeVisible();").length, 2);
-  assert.deepEqual(evidence.specProblems(readFileSync(new URL("../../e2e/story-84.spec.ts", import.meta.url), "utf8")), []);
+  assert.deepEqual(evidence.specProblems(readFileSync(new URL("fixtures/specs/record-spec.ts", import.meta.url), "utf8")), []);
   // story #166: Claude's rewrite polled for "No data" to go, carried on regardless, and asserted isVisible() with toBe(true)
   const weak = "let n = await d.getByText('No data').count();\nwhile (n > 0 && i < 30) { await page.waitForTimeout(3000); n = await d.getByText('No data').count(); }\nconst v = await c.isVisible();\nexpect(v).toBe(true);";
   assert.equal(evidence.specProblems(weak).length, 2);
@@ -2066,7 +2066,7 @@ test("round 1: a weak UI spec fails; evidence never boxes the page header; close
   assert.deepEqual(evidence.specProblems("await expect(x).toHaveText('A');\nif (await dialog.isVisible()) await dialog.click();"), []);
   assert.deepEqual(evidence.specProblems("for (let i = 0; i < 3; i++) { await r.click(); await page.waitForTimeout(2000); }\nawait expect(d.getByText('No data')).toHaveCount(0);"), []);
   assert.deepEqual(evidence.specProblems("let n = 1;\nwhile (n > 0 && i < 30) { await page.waitForTimeout(3000); n = await d.count(); }\nexpect(n).toBe(0);"), []);
-  assert.deepEqual(evidence.specProblems(readFileSync(new URL("../../e2e/story-166.spec.ts", import.meta.url), "utf8")), []);
+  assert.deepEqual(evidence.specProblems(readFileSync(new URL("fixtures/specs/dashboard-spec.ts", import.meta.url), "utf8")), []);
   assert.match(readFileSync(new URL("../../e2e/support/evidence.ts", import.meta.url), "utf8"), /its locator points into the page header/);
   const ui = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
   assert.match(ui, /pipe\.mjs ui spec-check --file/);
@@ -2200,7 +2200,7 @@ test("Org provisioning: ready() holds the commit once; creates from the snapshot
 // ---------------------------------------------------------------- production baseline + snapshots (round 3)
 test("baseline: all of production, minus the managed, the platform's own and exclusions; sanitized; force-app owns what it holds", async () => {
   const config = JSON.parse(readFileSync(new URL("../../config/baseline.json", import.meta.url), "utf8"));
-  const m = (fullName, extra = {}) => ({ fullName, manageableState: "unmanaged", lastModifiedByName: "Brendan Milton", lastModifiedDate: "2026-10-01T00:00:00Z", ...extra });
+  const m = (fullName, extra = {}) => ({ fullName, manageableState: "unmanaged", lastModifiedByName: "Alex Admin", lastModifiedDate: "2026-10-01T00:00:00Z", ...extra });
   const manifest = baselineMod.manifestFor({
     CustomObject: [m("Timesheet__c"), m("Account"), m("pkg__Thing__c", { namespacePrefix: "pkg" })],
     CustomField: [m("Account.SLA__c"), m("Incident.Old__c", { lastModifiedDate: "2026-09-20T00:30:00Z" }), m("Timesheet__c.Hours__c", { lastModifiedDate: "2026-09-20T00:30:00Z" })],
@@ -2242,7 +2242,7 @@ test("baseline: all of production, minus the managed, the platform's own and exc
   assert.deepEqual(proj.packageDirectories.map((p) => p.path), ["baseline", "force-app"]);
   assert.equal(proj.replacements[0].replaceWithEnv, "SCRATCH_ADMIN");
   assert.ok(existsSync(join(dir, "baseline/objects/Account/fields/SLA__c.field-meta.xml")));
-  assert.match(baselineMod.driftSummary(["?? baseline/main/default/objects/Account/fields/SLA__c.field-meta.xml"], { CustomField: [m("Account.SLA__c")] }), /\| added \| `objects\/Account\/fields\/SLA__c` \| Brendan Milton, 2026-10-01 \|/);
+  assert.match(baselineMod.driftSummary(["?? baseline/main/default/objects/Account/fields/SLA__c.field-meta.xml"], { CustomField: [m("Account.SLA__c")] }), /\| added \| `objects\/Account\/fields\/SLA__c` \| Alex Admin, 2026-10-01 \|/);
 });
 
 test("baseline in orgs: one combined deploy; soft falls back to force-app alone; the newest Active snapshot is found; baseline/ is pipeline-owned", async () => {
@@ -2410,11 +2410,11 @@ test("approver (enterprise B): the story's approver approves, never the person w
     { committedDate: "2026-10-09T02:00:00Z", authors: [{ login: "dave" }, { login: "claude" }] },
   ]), "dave");
 
-  // the gate: PR #23 was approved by matchmoments-admin; with a policy, only the named approver's approval counts
+  // the gate: PR #23 was approved by alex-admin; with a policy, only the named approver's approval counts
   const f = withVerdicts(fixture(23));
-  assert.deepEqual(gate.evaluate({ ...f, approvers: ["matchmoments-admin"], storyApprover: null, lastPusher: "someone-else" }).reasons, []);
-  assert.match(gate.evaluate({ ...f, approvers: ["matchmoments-admin", "lead"], storyApprover: "lead", lastPusher: "x" }).reasons.join(), /approval does not count: @lead is this story's approver/);
-  assert.match(gate.evaluate({ ...f, approvers: ["matchmoments-admin"], lastPusher: "matchmoments-admin" }).reasons.join(), /pushed the latest change/);
+  assert.deepEqual(gate.evaluate({ ...f, approvers: ["alex-admin"], storyApprover: null, lastPusher: "someone-else" }).reasons, []);
+  assert.match(gate.evaluate({ ...f, approvers: ["alex-admin", "lead"], storyApprover: "lead", lastPusher: "x" }).reasons.join(), /approval does not count: @lead is this story's approver/);
+  assert.match(gate.evaluate({ ...f, approvers: ["alex-admin"], lastPusher: "alex-admin" }).reasons.join(), /pushed the latest change/);
   // a ticked Sign off names its person (the trusted status says who); it is checked the same way
   const signed = { ...f, reviews: [], statuses: [...f.statuses, { ...ok(f.pr.headRefOid, gate.STATUS.signoff), description: "Signed off by @alice" }] };
   assert.deepEqual(gate.approval({ ...signed, head: f.pr.headRefOid, ...team }, { signOff: true }).by, ["alice"]);
@@ -2423,16 +2423,16 @@ test("approver (enterprise B): the story's approver approves, never the person w
 
 test("who pushed last: GitHub's push record counts, so a commit email not linked to an account cannot dodge separation of duties (story #193)", () => {
   const commits = [{ committedDate: "2026-10-12T09:22:00Z", authors: [{ login: "__owner__-pipeline" }, { login: "claude" }] },
-    { committedDate: "2026-10-12T09:41:00Z", authors: [{ name: "Brendan Milton" }] }];   // no login: the email is not linked
+    { committedDate: "2026-10-12T09:41:00Z", authors: [{ name: "Alex Admin" }] }];   // no login: the email is not linked
   assert.equal(gate.lastPusherOf(commits), null, "commit authors alone miss the person");
-  const pushes = [{ activity_type: "push", actor: { login: "matchmoments-admin", type: "User" }, timestamp: "2026-10-12T09:41:32Z" },
+  const pushes = [{ activity_type: "push", actor: { login: "alex-admin", type: "User" }, timestamp: "2026-10-12T09:41:32Z" },
     { activity_type: "push", actor: { login: "__owner__-pipeline[bot]", type: "Bot" }, timestamp: "2026-10-12T09:22:05Z" }];
-  assert.equal(gate.lastPusherOf(commits, pushes), "matchmoments-admin");
+  assert.equal(gate.lastPusherOf(commits, pushes), "alex-admin");
   // the pipeline pushing a person's change for them (Bring my Setup changes) still names the person, if newer
   const setup = [{ committedDate: "2026-10-12T10:00:00Z", authors: [{ login: "__owner__-pipeline" }, { login: "carol" }] }];
   assert.equal(gate.lastPusherOf(setup, [...pushes, { activity_type: "push", actor: { login: "__owner__-pipeline[bot]", type: "Bot" }, timestamp: "2026-10-12T10:00:05Z" }]), "carol");
   // and the refusal follows
-  assert.match(gate.approvalProblem({ approvers: ["matchmoments-admin"], lastPusher: gate.lastPusherOf(commits, pushes) }, "matchmoments-admin"), /pushed the latest change/);
+  assert.match(gate.approvalProblem({ approvers: ["alex-admin"], lastPusher: gate.lastPusherOf(commits, pushes) }, "alex-admin"), /pushed the latest change/);
 });
 
 test("start decisions: a job that has nothing to do is decided before a runner starts, in main's code", async () => {
@@ -3134,7 +3134,7 @@ test("the baseline drops empty shells, and keeps members production lists with a
   assert.ok(!isEmptyMetadata("objects/A__c/A__c.object-meta.xml", `${x}<CustomObject xmlns="x">\n  <label>A</label>\n</CustomObject>`));
   // a 1970-01-01 date is how production lists custom metadata records, assignment rules and workflows (13 Oct): it is not
   // "never modified", so it keeps them (the empty shells above are what drop ContactPointEmail's matching rules)
-  const m = manifestFor({ AssignmentRules: [{ fullName: "Case", lastModifiedByName: "Brendan Milton", lastModifiedDate: "1970-01-01T00:00:00.000Z" }], CustomMetadata: [{ fullName: "Claude_Setting.Default", lastModifiedByName: "Brendan Milton", lastModifiedDate: "1970-01-01T00:00:00.000Z" }] }, { config: {}, orgCreated: "2026-01-01" });
+  const m = manifestFor({ AssignmentRules: [{ fullName: "Case", lastModifiedByName: "Alex Admin", lastModifiedDate: "1970-01-01T00:00:00.000Z" }], CustomMetadata: [{ fullName: "Claude_Setting.Default", lastModifiedByName: "Alex Admin", lastModifiedDate: "1970-01-01T00:00:00.000Z" }] }, { config: {}, orgCreated: "2026-01-01" });
   assert.deepEqual(m, { AssignmentRules: ["Case"], CustomMetadata: ["Claude_Setting.Default"] });
 });
 
@@ -3176,7 +3176,7 @@ test("production-likeness: sharing defaults that differ, missing packages, users
   const installed = [{ SubscriberPackageName: "HubSpot Integration", SubscriberPackageNamespace: "HubSpot_Inc", SubscriberPackageVersionId: "04t0B00000063ZSQAY" },
     { SubscriberPackageName: "Developer Edition", SubscriberPackageNamespace: "devedapp", SubscriberPackageVersionId: "04tfn000001PPYvAAO" }];
   assert.deepEqual(b.missingPackages(installed, []), ["HubSpot Integration (HubSpot_Inc) 04t0B00000063ZSQAY"], "the edition's own app is not a gap");
-  assert.deepEqual(b.missingPackages(installed, packageList()), [], "config/packages.json installs HubSpot");
+  assert.deepEqual(b.missingPackages(installed, packageList(new URL("fixtures/packages.json", import.meta.url).pathname)), [], "a packages.json that lists HubSpot installs it");
   const ap = '<ApprovalProcess><approvalStep><assignedApprover><approver>\n<name>jane@prod.example</name>\n<type>user</type>\n</approver></assignedApprover></approvalStep><approvalStep><assignedApprover><approver><name>Timesheet_Approvers</name><type>queue</type></approver></assignedApprover></approvalStep></ApprovalProcess>';
   const sa = b.sanitize("baseline/x.approvalProcess-meta.xml", ap);
   assert.match(sa, /<name>__SCRATCH_ADMIN__<\/name>\s*<type>user<\/type>/);
@@ -3249,8 +3249,8 @@ test("no free scratch-org slot: the story waits in line (no runner waits) and th
 
 test("a custom field on a standard object is copied whatever its date: production's rules name Account.SLA__c (13 Oct snapshot)", async () => {
   const { manifestFor } = await import("../src/baseline.mjs");
-  const m = manifestFor({ CustomField: [{ fullName: "Account.SLA__c", lastModifiedByName: "Brendan Milton", lastModifiedDate: "2026-01-01T00:10:00.000Z" },
-    { fullName: "Account.Industry", lastModifiedByName: "Brendan Milton", lastModifiedDate: "2026-01-01T00:10:00.000Z" }] }, { config: {}, orgCreated: "2026-01-01T00:00:00Z" });
+  const m = manifestFor({ CustomField: [{ fullName: "Account.SLA__c", lastModifiedByName: "Alex Admin", lastModifiedDate: "2026-01-01T00:10:00.000Z" },
+    { fullName: "Account.Industry", lastModifiedByName: "Alex Admin", lastModifiedDate: "2026-01-01T00:10:00.000Z" }] }, { config: {}, orgCreated: "2026-01-01T00:00:00Z" });
   assert.deepEqual(m, { CustomField: ["Account.SLA__c"] }, "a standard field unchanged since the org was made still stays out");
 });
 

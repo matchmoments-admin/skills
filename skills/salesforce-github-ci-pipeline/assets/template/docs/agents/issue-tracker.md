@@ -1,7 +1,7 @@
 # Issue tracker
 
 Read by the engineering skills (`to-spec`, `to-tickets`, `triage`, `wayfinder`) and by people. Issues live in **GitHub
-Issues** on `__OWNER__/sf-lifecycle-labs` (Jira can stand in: see `docs/handbook.md`). Use the `gh` CLI. Pull requests
+Issues** on `__OWNER__/__project__` (Jira can stand in: see `docs/handbook.md`). Use the `gh` CLI. Pull requests
 are not a request surface: work starts from an issue.
 
 ## Three kinds of issue
