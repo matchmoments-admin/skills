@@ -1,4 +1,5 @@
 // Pipeline tests: org (split from the one test file on 14 Oct; shared fakes in ./helpers.mjs).
+import * as sample from "../src/sample.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -633,4 +634,28 @@ test("shipped stories' seeds fold into the core seed: files renamed per story, t
   assert.match(readFileSync(new URL("../../.github/workflows/improve.yml", import.meta.url), "utf8"), /seed-fold/);
   assert.match(readFileSync(new URL("../../docs/agents/salesforce.md", import.meta.url), "utf8"), /data\/seed\/stories\/<story key>\/plan\.json/);
   assert.match(readFileSync(new URL("../../.github/workflows/ai-implement.yml", import.meta.url), "utf8"), /data\/seed\/stories\/\$\{\{ env\.KEY \}\}\/plan\.json/);
+});
+
+test("the masked production sample for UAT: off by default, a protected environment, org to org, and a guard that fails on a surviving production email", () => {
+  assert.deepEqual(sample.parseDomains("acme.com, @Acme.co.uk not-a-domain"), ["acme.com", "acme.co.uk"]);
+  assert.deepEqual(sample.guardQueries(""), [], "no domains: nothing to check (the command then refuses to trust the sample)");
+  assert.match(sample.guardQueries("acme.com")[0], /FROM Contact WHERE Email LIKE '%@acme\.com'/);
+  assert.deepEqual(sample.sampleLeaks([]), { ok: true, leaked: [] });
+  assert.deepEqual(sample.sampleLeaks([{ Email: "jane.doe@acme.com" }]), { ok: false, leaked: ["***@acme.com"] }, "the leak is reported without the person's name");
+  assert.equal(settings.setting("UAT_SAMPLE", {}), "off");
+  const wf = readFileSync(new URL("../../.github/workflows/uat-sample.yml", import.meta.url), "utf8");
+  assert.match(wf, /if: vars\.UAT_SAMPLE == 'on'/);
+  assert.match(wf, /environment: production-read/);
+  assert.match(wf, /SF_PROD_READ_USERNAME/, "a read-only production user, not the CI admin");
+  assert.match(wf, /sf org logout -o devhub/);
+  assert.match(wf, /sfdmu@5\.8\.0/, "a pinned SFDMU");
+  assert.match(wf, /pipe\.mjs sample guard --org uat/);
+  assert.doesNotMatch(wf, /upload-artifact|csvfile/, "nothing written or uploaded: org to org only");
+  const cfg = JSON.parse(readFileSync(new URL("../../config/uat-sample/export.json", import.meta.url), "utf8"));
+  for (const o of cfg.objects) {
+    assert.equal(o.updateWithMockData, true, o.query);
+    assert.doesNotMatch(o.query, /\bDescription\b|\bComments?\b/, "no free text is copied");
+  }
+  assert.ok(cfg.objects.find((o) => /FROM Contact/.test(o.query)).mockFields.some((m) => m.name === "Email"), "emails are masked");
+  assert.ok(cfg.objects.find((o) => /FROM Case/.test(o.query)).mockFields.some((m) => m.name === "Origin"), "no email-origin Cases (they queue Apex jobs in UAT)");
 });

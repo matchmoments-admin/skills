@@ -108,6 +108,19 @@ seed. The drift PR lists what production has that scratch orgs do not. Left out 
 
 The one test against production itself is the check-only **production validation** before every release.
 
+### Test data
+
+| Where | What it gets | From |
+| --- | --- | --- |
+| Every scratch org (story, CI, staging, UAT, the snapshot) | the core seed: synthetic Accounts, Contacts, Opportunities, Cases, Leads, dated at load time | `data/seed` (main's copy), once per org by a marker |
+| A story's org | plus the story's own records, when the story adds an object (Claude writes them with the build) | `data/seed/stories/<key>/plan.json` (the branch) |
+| Staging and UAT | plus every story's own records in the release | the release branch |
+| Staging | plus `VOLUME_RECORDS` (5000) accounts with opportunities, for production-like numbers | generated (anonymous Apex) |
+| UAT, when `UAT_SAMPLE=on` | plus a **masked** subset of production: names, emails and phones replaced, no free text | `uat-sample.yml`: SFDMU org to org, in the protected `production-read` environment, then a guard that fails on any production email domain (`UAT_SAMPLE_DOMAINS`) |
+
+After a release, `seed-fold` opens a PR that folds the shipped stories' records into the core seed. Apex tests never
+see any of this: they build their own data.
+
 **Ten developers at once:** each story has its own scratch org, CI and AI jobs, so feature work runs in parallel and
 independently (an Enterprise Dev Hub allows 40 active and 80 new scratch orgs a day). Their work combines on the
 sprint branch; staging re-tests it all together (one at a time: one staging org), UAT signs it off, and the release
@@ -140,6 +153,8 @@ who does each step for any combination.
 | `BASELINE_NIGHTLY` | `prod-baseline` also runs nightly, catching changes made directly in production Setup (it always runs after each release and weekly) | after releases and weekly only |
 | `UAT_TESTER_ROLE` | **Send me a UAT login** gives the tester this role when no story names a `Persona:` | the tester has no role (every permission set in the code) |
 | `ORG_RESERVE` | scratch-org slots a new story org leaves free for staging, UAT and CI | 0 |
+| `UAT_SAMPLE` | `on`: after each UAT deploy, a masked subset of production goes into UAT ([Test data](#test-data); needs secret `SF_PROD_READ_USERNAME`, a read-only production user, and the `production-read` environment) | off: UAT has the synthetic seed only |
+| `UAT_SAMPLE_DOMAINS` | production's email domains (`acme.com,acme.co.uk`): the UAT sample fails if any survives masking | none: `UAT_SAMPLE=on` refuses to trust the sample |
 | `VOLUME_RECORDS` | volume records (accounts and opportunities) loaded into the staging org | 5000 |
 | `SF_UAT_LOGIN_URL` | the UAT sandbox's login URL, with the secret `SF_UAT_USERNAME` (UAT on a sandbox, not a scratch org) | `https://test.salesforce.com` |
 | `TRACKER` | `jira`: stories come from Jira (the skill's `references/jira.md`) | `github`: GitHub Issues |

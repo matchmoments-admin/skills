@@ -4,6 +4,7 @@
 import { readFileSync, readdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import * as names from "../../src/conventions.mjs";
 import * as capacity from "../../src/capacity.mjs";
+import * as sample from "../../src/sample.mjs";
 import { personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered, foldSeeds } from "../../src/org.mjs";
 import { lane, jobId, wakeAll } from "../../src/lane.mjs";
 
@@ -44,6 +45,14 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
     writeFileSync(`${dir}/plan.json`, JSON.stringify(r.plan, null, 2) + "\n");
     for (const k of keys) rmSync(`${root}/${k}`, { recursive: true });
     output({ folded: keys.length, stories: keys.join(",") }); return say(`folded the seeds of ${keys.map((k) => `#${k}`).join(", ")} into data/seed`);
+  },
+  // after the masked production sample went into UAT: fail if any production email domain survived (uat-sample.yml)
+  "sample guard": () => {
+    const qs = sample.guardQueries(names.setting("UAT_SAMPLE_DOMAINS"));
+    if (!qs.length) throw new Error("UAT_SAMPLE_DOMAINS is empty: the sample cannot be checked, so it is not trusted (set production's email domains)");
+    const v = sample.sampleLeaks(qs.flatMap((q) => io.sf(["data", "query", "-o", flag("org", "uat"), "-q", q]).records || []));
+    if (!v.ok) throw new Error(`the UAT sample still holds production emails (${v.leaked.join(", ")}): delete the UAT org's sample and fix config/uat-sample/export.json`);
+    return say("no production email domain in the UAT sample");
   },
   "org limits": () => { const l = orgs().limits(); return say(`active scratch orgs ${l.active.remaining}/${l.active.max} free, created today ${l.daily.max - l.daily.remaining}/${l.daily.max}`); },
   "org sweep": async () => {

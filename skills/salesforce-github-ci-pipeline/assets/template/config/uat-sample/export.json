@@ -1,0 +1,44 @@
+{
+  "objects": [
+    {
+      "query": "SELECT Id, Name, Industry, Type, BillingCity, BillingCountryCode, Phone, Website, AnnualRevenue FROM Account WHERE CreatedDate = LAST_N_DAYS:365 ORDER BY CreatedDate DESC LIMIT 200",
+      "operation": "Insert",
+      "externalId": "Name",
+      "updateWithMockData": true,
+      "mockFields": [
+        { "name": "Name", "pattern": "c_seq_number('Sample Account ',1,1)" },
+        { "name": "Phone", "pattern": "c_set_value(0400 000 000)" },
+        { "name": "Website", "pattern": "c_set_value(https://example.com)" }
+      ]
+    },
+    {
+      "query": "SELECT Id, FirstName, LastName, Email, Phone, Title, AccountId FROM Contact WHERE Account.CreatedDate = LAST_N_DAYS:365 LIMIT 600",
+      "operation": "Insert",
+      "externalId": "Email",
+      "updateWithMockData": true,
+      "mockFields": [
+        { "name": "FirstName", "pattern": "first_name" },
+        { "name": "LastName", "pattern": "last_name" },
+        { "name": "Email", "pattern": "email" },
+        { "name": "Phone", "pattern": "c_set_value(0400 000 000)" }
+      ]
+    },
+    {
+      "query": "SELECT Id, Name, StageName, CloseDate, Amount, Type, AccountId FROM Opportunity WHERE Account.CreatedDate = LAST_N_DAYS:365 LIMIT 600",
+      "operation": "Insert",
+      "externalId": "Name",
+      "updateWithMockData": true,
+      "mockFields": [{ "name": "Name", "pattern": "c_seq_number('Sample Opportunity ',1,1)" }]
+    },
+    {
+      "query": "SELECT Id, Subject, Status, Priority, Origin, AccountId, ContactId FROM Case WHERE Account.CreatedDate = LAST_N_DAYS:365 LIMIT 300",
+      "operation": "Insert",
+      "externalId": "Subject",
+      "updateWithMockData": true,
+      "mockFields": [
+        { "name": "Subject", "pattern": "c_seq_number('Sample case ',1,1)" },
+        { "name": "Origin", "pattern": "c_set_value(Phone)" }
+      ]
+    }
+  ]
+}

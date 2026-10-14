@@ -26,6 +26,8 @@ export const SETTINGS = [
   ["UAT_TESTERS", "{}", "{\"github-login\": \"email\"} for UAT logins"],
   ["UAT_TESTER_ROLE", "", "the role a UAT login gets when no story names a persona"],
   ["SF_UAT_LOGIN_URL", "", "the UAT sandbox's login URL (with secret SF_UAT_USERNAME)"],
+  ["UAT_SAMPLE", "off", "on: a masked subset of production goes into UAT after each UAT deploy (uat-sample.yml, SFDMU)"],
+  ["UAT_SAMPLE_DOMAINS", "", "production's email domains: the sample fails if any survives masking (acme.com,acme.co.uk)"],
   // orgs
   ["SCRATCH_SNAPSHOT", "", "a snapshot to force, or off (empty: the newest pipeline snapshot)"],
   ["BASELINE", "soft", "the production baseline in every scratch org: soft, strict or off"],

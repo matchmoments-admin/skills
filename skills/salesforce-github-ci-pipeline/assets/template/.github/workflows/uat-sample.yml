@@ -1,0 +1,68 @@
+name: uat-sample
+# Test data: a masked subset of production in UAT (setting UAT_SAMPLE=on; off by default). SFDMU (free, `sf sfdmu`)
+# copies the records config/uat-sample/export.json selects from production into the UAT org, with every personal field
+# replaced by a fake on the way (mockFields), then `pipe sample guard` fails the run if any production email domain
+# (UAT_SAMPLE_DOMAINS) survived. Nothing is written to disk or uploaded: SFDMU goes org to org.
+# Production is read as a read-only integration user (secret SF_PROD_READ_USERNAME, pre-authorized on the CI connected
+# app), in the protected environment `production-read` (add required reviewers), never as the CI admin.
+on:
+  workflow_run:
+    workflows: [uat-deploy]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  sample:
+    if: vars.UAT_SAMPLE == 'on' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment: production-read
+    timeout-minutes: 30
+    concurrency:
+      group: org-uat   # never while UAT redeploys
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, persist-credentials: false }
+      - uses: ./.github/actions/sf-auth
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The UAT org (the sandbox if configured, else the sprint's scratch org)
+        env:
+          UAT_USER: ${{ secrets.SF_UAT_USERNAME }}
+          UAT_LOGIN: ${{ vars.SF_UAT_LOGIN_URL }}
+          CLIENT_ID: ${{ secrets.SF_CI_CONSUMER_KEY }}
+        run: |
+          if [ -n "$UAT_USER" ]; then
+            sf org login jwt --client-id "$CLIENT_ID" --jwt-key-file "$SF_CI_KEY_FILE" --username "$UAT_USER" --instance-url "${UAT_LOGIN:-https://test.salesforce.com}" --alias uat >/dev/null
+          else
+            SPRINT=$(node pipeline/bin/pipe.mjs context | sed -n 's/^SPRINT=//p')
+            [ -n "$SPRINT" ] || { echo "::error::No open sprint, so no UAT org"; exit 1; }
+            node pipeline/bin/pipe.mjs org attach "uat:$SPRINT" >/dev/null
+          fi
+      - name: Production as the read-only user; the CI admin's login is dropped
+        env:
+          PROD_USER: ${{ secrets.SF_PROD_READ_USERNAME }}
+          CLIENT_ID: ${{ secrets.SF_CI_CONSUMER_KEY }}
+        run: |
+          [ -n "$PROD_USER" ] || { echo "::error::secret SF_PROD_READ_USERNAME is not set (a read-only production user)"; exit 1; }
+          sf org login jwt --client-id "$CLIENT_ID" --jwt-key-file "$SF_CI_KEY_FILE" --username "$PROD_USER" --instance-url https://login.salesforce.com --alias prod-read >/dev/null
+          sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
+      - name: Copy the masked subset into UAT (SFDMU, org to org)
+        run: |
+          echo y | sf plugins install sfdmu@5.8.0 >/dev/null
+          sf sfdmu run --sourceusername prod-read --targetusername uat --path config/uat-sample --noprompt
+      - name: "The guard: no production email domain survived"
+        run: node pipeline/bin/pipe.mjs sample guard --org uat
+      - name: Drop every login
+        if: always()
+        run: |
+          sf org logout --all --no-prompt >/dev/null 2>&1 || true
+          rm -f "${SF_CI_KEY_FILE:-}"
