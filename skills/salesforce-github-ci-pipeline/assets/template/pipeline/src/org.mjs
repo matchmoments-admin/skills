@@ -1,91 +1,32 @@
 // The org registry: find, create, prepare and delete scratch orgs (see GLOSSARY.md: Issue org, Staging org,
 // Org registry). The Dev Hub's ScratchOrgInfo records are the registry, matched on Description, so a deleted
 // org can never look alive. Logins use the CI certificate (JWT) with the Dev Hub's connected app.
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { orgFor, storyOf } from "./conventions.mjs";
+import { orgFor } from "./conventions.mjs";
 import { PIPELINE_ROOT } from "./io.mjs";
-import { baselineId as idOf, composeProject, excluded, DIR as BASELINE_DIR } from "./baseline.mjs";
+import { baselineId as idOf, composeProject, DIR as BASELINE_DIR } from "./baseline.mjs";
+import { DEVHUB, fleetMethods, shapeOutdated, capacityProblem } from "./org/fleet.mjs";
+import { dataMethods } from "./org/data.mjs";
+import { usersMethods } from "./org/users.mjs";
+import { snapshotMethods } from "./org/snapshot.mjs";
+import { setupChangesMethods } from "./org/setup-changes.mjs";
+// the helpers that moved to org/, still importable from here
+export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB } from "./org/fleet.mjs";
+export { expandSeed, seedReplaceApex, VOLUME_MARKER, volumeApex } from "./org/data.mjs";
+export { roleRebuild, personaOf, permissionSets } from "./org/users.mjs";
 
 // Scratch definitions come from the trusted pipeline checkout, so a PR cannot change its own org's shape.
 const definitionPath = (d) => join(PIPELINE_ROOT, d);
 
-/**
- * Which live scratch orgs nothing needs any more (pure). Orgs whose description the pipeline did not make are left alone.
- *   ci-*                 a CI run's temporary org older than tempHours: its run failed before its cleanup, or died
- *   issue-N / KEY-N      the story merged or closed (isStoryDone): a merged story's org that a late job rebuilt (E16)
- *   staging-S, uat-S     sprint S is not the open sprint (shipped or abandoned)
- */
-export function findOrphans(records, { now = new Date(), isStoryClosed = () => false, isStoryDone = isStoryClosed, openSprint = null, tempHours = 2 } = {}) {
-  const out = [];
-  for (const r of records) {
-    const d = r.Description || "";
-    const age = (now - new Date(r.CreatedDate || now)) / 3600e3;
-    let why = null;
-    if (/^ci-/.test(d) && age > tempHours) why = `CI org ${Math.round(age)} h old (its run did not clean up)`;
-    else if (/^issue-\d+$|^[A-Z][A-Z0-9]+-\d+$/.test(d) && isStoryDone(d)) why = "story merged or closed";
-    else if (/^(staging|uat)-(.+)$/.test(d) && d.replace(/^(staging|uat)-/, "") !== openSprint) why = "sprint no longer open";
-    if (why) out.push({ username: r.SignupUsername, description: d, why });
-  }
-  return out;
-}
 
-/** Is a Description one of this pipeline's orgs? (story, staging, UAT, CI temporary, snapshot source) */
-export const isPipelineOrg = (d) => /^(issue-\d+|[A-Z][A-Z0-9]+-\d+|staging-.+|uat-.+|ci-.+|snapshot-.+)$/.test(String(d || ""));
 
-/**
- * Why a new org cannot be created now, or null. Names who holds the slots (another project's orgs share the Dev Hub's
- * limit: story #193's /start failed on one), and keeps `reserve` slots free for staging, UAT and CI. Unknown limits
- * (the call failed) do not block: creation then fails with Salesforce's own message. Pure.
- */
-export function capacityProblem({ active = {}, daily = {} }, holders = [], reserve = 0) {
-  const who = () => {
-    const ours = holders.filter(isPipelineOrg), others = holders.filter((d) => !isPipelineOrg(d));
-    return ` In use: ${[...ours, ...others.map((d) => `${d || "(no description)"} (not this pipeline)`)].join(", ") || "unknown"}.`;
-  };
-  if (reserve && active.remaining <= reserve) return `Only ${active.remaining} scratch org slot(s) free and ${reserve} kept for staging, UAT and CI (ORG_RESERVE): merge or close a story first.${who()}`;
-  if (active.remaining === 0) return `No free scratch org slot (${active.max} active is the Dev Hub's limit). Merge or delete a story first, or run scratch-janitor.${who()}`;
-  if (daily.remaining === 0) return `The Dev Hub has created its ${daily.max} scratch orgs for today; the count resets at 00:00 UTC.`;
-  return null;
-}
 
-/** Salesforce refuses an org from a shape that a release has aged (E5): refresh the shape and try once more. */
-export const shapeOutdated = (message) => /shape.{0,40}(outdated|out of date|expired)|outdated.{0,40}shape/i.test(String(message || ""));
 
-/** A job for a PR never rebuilds the story org once that PR is no longer open (a late UI test rebuilt issue-193 after
- *  its merge and took the slot UAT needed, E16). Jobs without a PR (start, build) always may: a reopened story gets its
- *  org back. Pure: prState is the job's PR's state, or null. */
-export function createRefusal(org, prState = null) {
-  if (org?.kind !== "story" || !prState || prState === "OPEN") return null;
-  return `story ${org.key}'s PR is ${String(prState).toLowerCase()}: its org is not rebuilt (the job that wanted it is too late)`;
-}
 
-/** createRefusal() for a job that names its PR (--pr), its state read through the gh seam. */
-export const storyRefusal = (gh, pr) => (org) => (pr ? createRefusal(org, gh(["pr", "view", String(pr), "--json", "state"], { allowFail: true })?.state || null) : null);
 
-/** Is a story org left over from a merge? The branch's latest PR merged, none is open, and the org was made before that
- *  merge (one made after belongs to a story reopened and started again). Pure. */
-export const mergedBefore = (prs = [], orgCreated) => {
-  if (prs.some((p) => p.state === "OPEN")) return false;
-  const merged = prs.filter((p) => p.state === "MERGED").map((p) => String(p.mergedAt || "")).sort().pop();
-  return Boolean(merged && orgCreated && String(orgCreated) < merged);
-};
 
-/** The live orgs whose story is done: closed in the tracker, or merged after the org was made (mergedBefore). records:
- *  [{ Description, CreatedDate }]; gh reads the branch's PRs. For sweep(). */
-export async function doneStoryOrgs(records, { tracker, gh, log = () => {} }) {
-  const done = new Set();
-  for (const r of records) {
-    const d = r.Description || "", key = storyOf(d);
-    if (!key) continue;
-    try {
-      const prs = gh(["pr", "list", "--head", d, "--state", "all", "--limit", "20", "--json", "state,mergedAt"], { allowFail: true }) || [];
-      if (mergedBefore(prs, r.CreatedDate) || (await tracker.story(key)).state === "CLOSED") done.add(d);
-    } catch (e) { log(`skipped ${d}: ${e.message}`); }
-  }
-  return done;
-}
 
 /**
  * Did CI's delta deploy (base...head) bring an org that held `held` to exactly `head`? Only on a straight line: held is
@@ -126,7 +67,6 @@ export function packageList(file = join(PIPELINE_ROOT, "config/packages.json")) 
   return list;
 }
 
-const DEVHUB = "devhub";
 /** Written to the scratch org admin user's Title when ready() has finished every step, with the commit it holds. */
 export const READY = "pipeline: ready";
 /**
@@ -142,89 +82,10 @@ export const sameSourceVia = (compare) => (held, head) => {
 
 export const readyMarker =(commit, baseline = null, seed = null) => (commit ? `${READY} ${String(commit).slice(0, 12)}${baseline ? ` b${baseline}` : ""}${seed ? ` s${seed}` : ""}` : READY);
 
-/**
- * The roles an Org Shape scratch org arrives with cannot be given to a user ("invalid cross reference id"; a role made
- * in the org can). Rebuilding them (delete, leaves first; recreate as Role metadata from what was read) makes them
- * usable, so personas, testers and role-shared folders work. Pure: queried UserRoles -> { levels (ids to delete, the
- * deepest first), files ({ DeveloperName: role-meta xml }) }.
- */
-export function roleRebuild(roles) {
-  const byId = new Map(roles.map((r) => [r.Id, r]));
-  const depth = (r, seen = 0) => (r.ParentRoleId && byId.has(r.ParentRoleId) && seen < 50 ? 1 + depth(byId.get(r.ParentRoleId), seen + 1) : 0);
-  const levels = [];
-  for (const r of roles) (levels[depth(r)] ||= []).push(r.Id);
-  const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  const access = (v, d) => (["Edit", "Read", "None"].includes(v) ? v : d);
-  const files = Object.fromEntries(roles.map((r) => [r.DeveloperName, ['<?xml version="1.0" encoding="UTF-8"?>', '<Role xmlns="http://soap.sforce.com/2006/04/metadata">',
-    `    <caseAccessLevel>${access(r.CaseAccessForAccountOwner, "Edit")}</caseAccessLevel>`, `    <contactAccessLevel>${access(r.ContactAccessForAccountOwner, "Edit")}</contactAccessLevel>`,
-    ...(r.RollupDescription ? [`    <description>${esc(r.RollupDescription)}</description>`] : []), `    <mayForecastManagerShare>${Boolean(r.MayForecastManagerShare)}</mayForecastManagerShare>`,
-    `    <name>${esc(r.Name)}</name>`, `    <opportunityAccessLevel>${access(r.OpportunityAccessForAccountOwner, "Edit")}</opportunityAccessLevel>`,
-    ...(r.ParentRoleId && byId.has(r.ParentRoleId) ? [`    <parentRole>${byId.get(r.ParentRoleId).DeveloperName}</parentRole>`] : []), "</Role>", ""].join("\n")]));
-  return { levels: levels.filter(Boolean).reverse(), files };
-}
 
-/** The seed's files with their date tokens filled in (data/seed/README.md). Pure: { name: text } -> { name: text }. */
-export function expandSeed(files, { today = new Date(), marker }) {
-  const y = today.getUTCFullYear();
-  const tokens = { TODAY: today.toISOString().slice(0, 10), THIS_YEAR: String(y), LAST_YEAR: String(y - 1), NEXT_YEAR: String(y + 1), SEED_MARKER: marker };
-  return Object.fromEntries(Object.entries(files).map(([n, t]) => [n, String(t).replace(/\$\{(TODAY|THIS_YEAR|LAST_YEAR|NEXT_YEAR|SEED_MARKER)\}/g, (_, k) => tokens[k])]));
-}
 
-/**
- * Anonymous Apex that removes an earlier version of the seed from a long-lived org (staging, UAT: 30 days) before the
- * new one loads, by the seed's own keys: its accounts by name (their contacts, opportunities and cases with them),
- * its leads by email, and the old markers. Without it a changed seed was inserted beside the old one, two of every
- * account. Records people or specs made on other accounts stay. Pure: seed files, stale marker names -> Apex.
- */
-export function seedReplaceApex(files, staleMarkers) {
-  const recs = (n) => { try { return JSON.parse(files[n] || "{}").records || []; } catch { return []; } };
-  const q = (xs) => xs.map((x) => `'${String(x).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`).join(", ");
-  const names = [...new Set([...recs("Account.json").map((r) => r.Name).filter((n) => n && !n.includes("${")), ...staleMarkers])];
-  const emails = [...new Set(recs("Lead.json").map((r) => r.Email).filter(Boolean))];
-  return [
-    `Set<String> names = new Set<String>{ ${q(names)} };`,
-    "List<Account> a = [SELECT Id FROM Account WHERE Name IN :names];",
-    "delete [SELECT Id FROM Case WHERE AccountId IN :a];",
-    "delete [SELECT Id FROM Opportunity WHERE AccountId IN :a];",
-    "delete [SELECT Id FROM Contact WHERE AccountId IN :a];",
-    "delete a;",
-    ...(emails.length ? [`Set<String> emails = new Set<String>{ ${q(emails)} };`, "delete [SELECT Id FROM Lead WHERE Email IN :emails AND IsConverted = false];"] : []),
-  ].join("\n");
-}
 
-/**
- * Volume for the staging regression (setting VOLUME_RECORDS, default 5000; 0 turns it off): that many accounts, each
- * with an opportunity, in chunks one anonymous Apex call can hold (DML rows and CPU), so list views, reports, Flows
- * and SOQL meet production-like numbers before production does. Pure: n, chunk -> [Apex], plus the marker.
- */
-export const VOLUME_MARKER = (n) => `[volume ${n}]`;
-export function volumeApex(n, chunk = 1000) {
-  const calls = [];
-  for (let from = 0; from < n; from += chunk) {
-    const to = Math.min(n, from + chunk);
-    calls.push([
-      "List<Account> a = new List<Account>();",
-      `for (Integer i = ${from}; i < ${to}; i++) a.add(new Account(Name = 'Volume Account ' + String.valueOf(i).leftPad(6, '0'), Industry = 'Technology', BillingCountryCode = 'AU', NumberOfEmployees = Math.mod(i, 500) + 1));`,
-      "insert a;",
-      "List<Opportunity> o = new List<Opportunity>();",
-      `for (Account x : a) o.add(new Opportunity(Name = x.Name + ' deal', AccountId = x.Id, StageName = 'Prospecting', CloseDate = Date.today().addDays(30), Amount = 10000));`,
-      "insert o;",
-      ...(to === n ? [`insert new Account(Name = '${VOLUME_MARKER(n)}');`] : []),
-    ].join("\n"));
-  }
-  return calls;
-}
 
-/** Who a story is for, from its "Persona:" line (Access section): "Persona: DirectorDirectSales role, Regional_Reporting_Access".
- *  { role, permsets } or null. Pure. */
-export function personaOf(body) {
-  const line = String(body || "").match(/^\s*[-*]?\s*\**Persona:?\**:?\s*(.+)$/im)?.[1];
-  if (!line) return null;
-  const items = line.split(/\s\(|\.(\s|$)/)[0].split(/[,;+]|\band\b/).map((s) => s.replace(/[`*.]/g, "").trim()).filter(Boolean);   // stop at an explanation
-  const role = items.find((i) => /\s+role$/i.test(i))?.replace(/\s+role$/i, "").trim() || null;
-  const permsets = items.filter((i) => !/\s+role$/i.test(i) && /^[A-Za-z][A-Za-z0-9_]*$/.test(i));
-  return role || permsets.length ? { role, permsets } : null;
-}
 
 function resolve(target, opts) {
   const org = typeof target === "object" ? target : orgFor(target, opts);
@@ -232,19 +93,6 @@ function resolve(target, opts) {
   return org;
 }
 
-/** Permission set names in a source folder (scratch orgs get all of them; production never does). */
-export function permissionSets(dir = "force-app") {
-  const out = [];
-  const walk = (d) => {
-    for (const f of readdirSync(d)) {
-      const p = join(d, f);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (f.endsWith(".permissionset-meta.xml")) out.push(basename(f, ".permissionset-meta.xml"));
-    }
-  };
-  try { walk(dir); } catch { /* no source folder */ }
-  return out.sort();
-}
 
 export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key`, packages = packageList(), env = process.env,
   baselineDir = join(PIPELINE_ROOT, BASELINE_DIR), seedDir = join(PIPELINE_ROOT, "data/seed"), record = () => {},
@@ -262,7 +110,10 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
   /** Delete through the Dev Hub's ActiveScratchOrg record: no login to the org itself, so it works on any org. */
   const deleteRecord = (username) => Boolean(sf(["data", "delete", "record", "-o", DEVHUB, "-s", "ActiveScratchOrg", "-w", `SignupUsername='${username}'`], { allowFail: true }));
 
+  // the methods of each concern (pipeline/src/org/), then the provisioning core below, which composes them
+  const ctx = { sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord };
   const self = {
+    ...fleetMethods(ctx), ...dataMethods(ctx), ...usersMethods(ctx), ...snapshotMethods(ctx), ...setupChangesMethods(ctx),
     /** The live org for a target, or null. Description is long text, which SOQL cannot filter, so match here. */
     find(target, opts) {
       const org = resolve(target, opts);
@@ -362,140 +213,12 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       throw new Error(`production's org shape did not become active within ${waitMinutes} minutes: run org-shape-refresh`);
     },
 
-    /**
-     * The snapshot new orgs start from: SCRATCH_SNAPSHOT if set ("off" turns snapshots off), else the newest Active
-     * pipeline snapshot (LCB...) in the Dev Hub, so no variable has to be written when a new one is made.
-     */
-    currentSnapshot() {
-      const set = String(env.SCRATCH_SNAPSHOT || "").trim();
-      if (set.toLowerCase() === "off") return null;
-      if (/^[A-Za-z0-9]{1,15}$/.test(set)) return set;
-      const list = sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || [];
-      return (Array.isArray(list) ? list : []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || "") && s.Status === "Active" && !snapshotRefused(s.SnapshotName))
-        .sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)))[0]?.SnapshotName || null;
-    },
 
-    /** The newest Active pipeline snapshot's age in hours, or null (for "rebuild at most once a day"). */
-    snapshotAgeHours(now = Date.now()) {
-      const list = sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || [];
-      const newest = (Array.isArray(list) ? list : []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || "") && s.Status === "Active")
-        .map((s) => Date.parse(String(s.CreatedDate).replace(/\+0000$/, "Z"))).sort().pop();
-      return newest ? (now - newest) / 3600e3 : null;
-    },
 
-    /**
-     * Make a new snapshot of a ready source org (production's shape + packages + baseline + seed), wait until it is
-     * Active, then keep only the newest `keep` pipeline snapshots. Returns { name, active }.
-     */
-    snapshot(alias, { name, description, waitMinutes = 60, keep = 2 }) {
-      sf(["org", "create", "snapshot", "--name", name, "--source-org", alias, "-v", DEVHUB, "--description", String(description).slice(0, 255)]);
-      let status = "";
-      for (let i = 0; i < Math.ceil(waitMinutes / 2); i++) {
-        status = sf(["org", "get", "snapshot", "--snapshot", name, "-v", DEVHUB], { allowFail: true })?.Status || "";
-        log(`snapshot ${name}: ${status || "?"}`);
-        if (status === "Active" || status === "Error") break;
-        sleep(120_000);
-      }
-      if (status === "Active") {
-        const ours = (sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || ""))
-          .sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)));
-        for (const old of ours.slice(keep)) { sf(["org", "delete", "snapshot", "--snapshot", old.SnapshotName, "-v", DEVHUB, "--no-prompt"], { allowFail: true }); log(`deleted old snapshot ${old.SnapshotName}`); }
-      }
-      return { name, active: status === "Active", status };
-    },
 
-    /**
-     * Load the test data once per org: the core seed (data/seed, from main) unless its marker Account is already there
-     * (a snapshot holds it), then the story's own (data/seed/stories/<key>/plan.json in the working directory) once.
-     * sf data import tree only inserts, so the markers are what make it safe to repeat. Scratch orgs only.
-     */
-    seed(alias, { story = null } = {}) {
-      const loads = [];
-      const id = seedId();
-      if (id) loads.push({ dir: seedDir, marker: `[seed ${id}]` });
-      const own = story ? join(process.cwd(), "data/seed/stories", String(story)) : null;
-      if (id && own && existsSync(join(own, "plan.json"))) loads.push({ dir: own, marker: `[seed story ${story} ${idOf(own)}]` });
-      if (!loads.length) return [];
-      // never production: the Dev Hub is production here (and a production org is never a target of org ready anyway)
-      const [target, prod] = [sf(["org", "display", "-o", alias], { allowFail: true })?.id, sf(["org", "display", "-o", DEVHUB], { allowFail: true })?.id];
-      if (!target || (prod && String(target).slice(0, 15) === String(prod).slice(0, 15))) throw new Error(`refusing to load test data into ${alias}: it is production (or unknown)`);
-      const loaded = [];
-      for (const { dir, marker } of loads) {
-        const have = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${marker}'`], { allowFail: true })?.records?.length;
-        if (have) { log(`${alias} already has ${marker}`); continue; }
-        const files = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => [f, readFileSync(join(dir, f), "utf8")]));
-        // an earlier version of the shared seed in this org: replaced, never loaded beside it
-        const prefix = dir === seedDir ? "[seed " : null;
-        const stale = prefix ? (sf(["data", "query", "-o", alias, "-q", "SELECT Name FROM Account WHERE Name LIKE '[seed %' AND (NOT Name LIKE '[seed story%')"], { allowFail: true })?.records || []).map((r) => r.Name) : [];
-        if (stale.length) {
-          const apex = join(tmpdir(), `seed-replace-${process.pid}.apex`);
-          writeFileSync(apex, seedReplaceApex(files, stale));
-          if (sf(["apex", "run", "--file", apex, "-o", alias], { allowFail: true })) log(`${alias}: removed the earlier seed (${stale.join(", ")}) before loading ${marker}`);
-          else log(`::warning::${alias}: could not remove the earlier seed (${stale.join(", ")}); loading ${marker} beside it`);
-        }
-        if (!files["plan.json"].includes("SEED_MARKER") && !Object.values(files).some((t) => t.includes("${SEED_MARKER}"))) {
-          // a story's plan without its own marker: add one, so it too loads once
-          files["SeedMarker.json"] = JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "SeedMarker" }, Name: "${SEED_MARKER}" }] });
-          files["plan.json"] = JSON.stringify([...JSON.parse(files["plan.json"]), { sobject: "Account", files: ["SeedMarker.json"] }]);
-        }
-        const out = join(tmpdir(), `seed-${process.pid}-${loaded.length}`);
-        mkdirSync(out, { recursive: true });
-        for (const [n, t] of Object.entries(expandSeed(files, { marker }))) writeFileSync(join(out, n), t);
-        sf(["data", "import", "tree", "--plan", join(out, "plan.json"), "-o", alias]);
-        log(`loaded test data ${marker} into ${alias}`);
-        loaded.push(marker);
-      }
-      return loaded;
-    },
 
-    /** Load the staging volume once (volumeApex; its marker account says it is there). Best effort: a failure warns. */
-    volume(alias, n) {
-      if (!n || n < 1) return false;
-      if (sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${VOLUME_MARKER(n)}'`], { allowFail: true })?.records?.length) return false;
-      const t0 = Date.now();
-      for (const [i, apex] of volumeApex(n).entries()) {
-        const f = join(tmpdir(), `volume-${process.pid}-${i}.apex`);
-        writeFileSync(f, apex);
-        if (!sf(["apex", "run", "--file", f, "-o", alias], { allowFail: true })) { log(`::warning::volume data stopped at chunk ${i + 1} in ${alias}`); return false; }
-      }
-      log(`${alias}: ${n} volume accounts and opportunities in ${Math.round((Date.now() - t0) / 1000)} s`);
-      record("seed", { action: "volume", org: alias, records: n * 2 });
-      return true;
-    },
 
-    /** "Administrators Can Log in as Any User" (off in scratch orgs): UI tests log in AS a persona through it, so no
-     *  password ever exists (e2e/support/login.ts loginAs). Scratch orgs only; best effort. */
-    enableLoginAs(alias) {
-      const dir = join(tmpdir(), `security-${process.pid}`);
-      mkdirSync(join(dir, "force-app/main/default/settings"), { recursive: true });
-      writeFileSync(join(dir, "sfdx-project.json"), JSON.stringify({ packageDirectories: [{ path: "force-app", default: true }], sourceApiVersion: "67.0" }));
-      writeFileSync(join(dir, "force-app/main/default/settings/Security.settings-meta.xml"), '<?xml version="1.0" encoding="UTF-8"?>\n<SecuritySettings xmlns="http://soap.sforce.com/2006/04/metadata">\n    <enableAdminLoginAsAnyUser>true</enableAdminLoginAsAnyUser>\n</SecuritySettings>\n');
-      const ok = sf(["project", "deploy", "start", "-o", alias, "-d", "force-app", "--wait", "20"], { cwd: dir, allowFail: true });
-      if (!ok) log(`::warning::could not turn on "log in as" in ${alias}: UI tests cannot log in as a persona`);
-      return Boolean(ok);
-    },
 
-    /** Make a shape org's roles assignable (see roleRebuild). Safe on an org with no roles. Returns how many. */
-    rebuildRoles(alias) {
-      const roles = sf(["data", "query", "-o", alias, "-q", "SELECT Id, Name, DeveloperName, ParentRoleId, RollupDescription, CaseAccessForAccountOwner, ContactAccessForAccountOwner, OpportunityAccessForAccountOwner, MayForecastManagerShare FROM UserRole WHERE PortalType = 'None'"], { allowFail: true })?.records || [];
-      if (!roles.length) return 0;
-      const { levels, files } = roleRebuild(roles);
-      const apex = join(tmpdir(), `roles-${process.pid}.apex`);
-      const all = roles.map((r) => `'${r.Id}'`).join(",");
-      writeFileSync(apex, [   // users holding these roles keep their role DeveloperName in mind: they get it back below
-        `Map<Id, String> held = new Map<Id, String>(); for (User u : [SELECT Id, UserRole.DeveloperName FROM User WHERE UserRoleId IN (${all})]) held.put(u.Id, u.UserRole.DeveloperName);`,
-        "List<User> clear = new List<User>(); for (Id u : held.keySet()) clear.add(new User(Id = u, UserRoleId = null)); update clear;",
-        ...levels.map((ids) => `delete [SELECT Id FROM UserRole WHERE Id IN ('${ids.join("','")}')];`),
-        "System.debug('HELD ' + JSON.serialize(held));"].join("\n") + "\n");
-      if (!sf(["apex", "run", "-o", alias, "--file", apex], { allowFail: true })) { log(`::warning::could not rebuild the roles in ${alias}: personas with a role may fail`); return 0; }
-      const dir = join(tmpdir(), `roles-${process.pid}`);
-      mkdirSync(join(dir, "force-app/main/default/roles"), { recursive: true });
-      writeFileSync(join(dir, "sfdx-project.json"), JSON.stringify({ packageDirectories: [{ path: "force-app", default: true }], sourceApiVersion: "67.0" }));
-      for (const [name, xml] of Object.entries(files)) writeFileSync(join(dir, "force-app/main/default/roles", `${name}.role-meta.xml`), xml);
-      sf(["project", "deploy", "start", "-o", alias, "-d", "force-app", "--wait", "20"], { cwd: dir });   // the roles must come back: fail loudly
-      log(`rebuilt ${roles.length} role(s) in ${alias} so they can be assigned (shape roles cannot)`);
-      return roles.length;
-    },
 
     /** The ready marker: the org's admin user's Title, set only when ready() finished every step for a commit. */
     isReady(alias, want = READY) {
@@ -588,97 +311,10 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       return { baseline: null };
     },
 
-    /** Make the org usable for tests: Lightning on, a valid country (production's shape has State and
-     *  Country picklists), and every permission set in the source assigned. Safe to repeat. Scratch orgs only. */
-    prepare(alias, dir = "force-app") {
-      const username = sf(["org", "display", "-o", alias]).username;
-      sf(["data", "update", "record", "-o", alias, "-s", "User", "-w", `Username='${username}'`, "-v", "CountryCode=AU UserPreferencesLightningExperiencePreferred=true"], { allowFail: true });
-      const assigned = [];
-      for (const p of permissionSets(dir)) if (sf(["org", "assign", "permset", "--name", p, "-o", alias], { allowFail: true })) assigned.push(p);
-      log(`prepared ${alias}: Lightning on, country AU, permission sets ${permissionSets(dir).join(", ") || "none"}`);
-      return assigned;
-    },
 
-    /**
-     * Run fn with the org's running user holding none of the source's permission sets, then give them back: Apex and
-     * Flow tests run with production's access (the CI user deploys and tests as a System Administrator with no story
-     * permission set), so a test that depends on the running user's field access fails here, not at the release.
-     */
-    asProductionUser(alias, fn, dir = "force-app") {
-      const names = permissionSets(dir);
-      if (!names.length) return fn();
-      const username = sf(["org", "display", "-o", alias]).username;
-      const rows = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM PermissionSetAssignment WHERE Assignee.Username = '${username}' AND PermissionSet.Name IN (${names.map((n) => `'${n}'`).join(",")})`], { allowFail: true })?.records || [];
-      for (const r of rows) sf(["data", "delete", "record", "-o", alias, "-s", "PermissionSetAssignment", "-i", r.Id], { allowFail: true });
-      log(`tests run as production's CI user would: ${rows.length} permission set(s) taken from ${username} for the run`);
-      try { return fn(); } finally { self.prepare(alias, dir); }   // prepare gives them back (UI tests and people need them)
-    },
 
-    /**
-     * A tester for a person (a story's org or the UAT stand-in): a Standard User made once per login, and a
-     * password-reset email from Salesforce to their address. No password or session ever leaves the org. With a
-     * persona ({ role, permsets }: the story's "Persona:" line, or UAT_TESTER_ROLE) they get that role and those
-     * permission sets, so they see what that user sees; without one, every permission set in the source.
-     * Returns { username, created, persona }.
-     */
-    tester(alias, { login, email, persona = null, admin = false }, dir = "force-app") {
-      // admin: System Administrator (an admin looking at the story's org as themselves); else Standard User as the persona
-      const sets = admin ? [] : persona?.permsets?.length ? persona.permsets : permissionSets(dir);
-      const q = (soql) => sf(["data", "query", "-o", alias, "-q", soql], { allowFail: true })?.records || [];
-      const orgId = sf(["org", "display", "-o", alias]).id;
-      const username = `${String(login).toLowerCase().replace(/[^a-z0-9]/g, "")}.${admin ? "admin" : "uat"}@${String(orgId).slice(0, 15).toLowerCase()}.pipeline`;
-      const found = q(`SELECT Id, IsActive FROM User WHERE Username = '${username}'`)[0];
-      // a record, not `sf org create user` (it fails with a JWT login on Hyperforce); a full org frees the licence a
-      // UI-test persona holds (they are recreated on their next run), as e2e/support/login.ts does
-      const withLicence = (f) => {
-        try { return f(); } catch (e) {
-          if (!/LICENSE_LIMIT_EXCEEDED|License Limit Exceeded/i.test(e.message)) throw e;
-          for (const u of q(`SELECT Id FROM User WHERE IsActive = true AND Username LIKE 'persona.%'`)) sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", u.Id, "-v", "IsActive=false"], { allowFail: true });
-          return f();
-        }
-      };
-      let id = found?.Id;
-      if (!id) {
-        const profile = q(`SELECT Id FROM Profile WHERE Name = '${admin ? "System Administrator" : "Standard User"}'`)[0]?.Id;
-        id = withLicence(() => sf(["data", "create", "record", "-o", alias, "-s", "User", "-v", [`Username='${username}'`, `Email='${email}'`, `LastName='${String(login).slice(0, 70)}'`,
-          `Alias='t${Date.now() % 1e6}'`, `ProfileId=${profile}`, "TimeZoneSidKey='Australia/Sydney'", "LocaleSidKey='en_AU'", "EmailEncodingKey='UTF-8'", "LanguageLocaleKey='en_US'"].join(" ")]).id);
-      } else if (!found.IsActive) withLicence(() => sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", id, "-v", "IsActive=true"]));
-      for (const p of sets) sf(["org", "assign", "permset", "--name", p, "-o", alias, "--on-behalf-of", username], { allowFail: true });
-      const roleId = persona?.role && !admin ? q(`SELECT Id FROM UserRole WHERE DeveloperName = '${String(persona.role).replace(/[^A-Za-z0-9_]/g, "")}'`)[0]?.Id : null;
-      if (persona?.role && !admin && !roleId) log(`::warning::role ${persona.role} not found in ${alias}: the tester has no role`);
-      sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", id, "-v", `Email=${email} CountryCode=AU UserPreferencesLightningExperiencePreferred=true${roleId ? ` UserRoleId=${roleId}` : ""}`], { allowFail: true });
-      const apex = join(tmpdir(), `reset-${process.pid}.apex`);
-      writeFileSync(apex, `System.resetPassword('${id}', true);\n`);
-      sf(["apex", "run", "-o", alias, "--file", apex]);
-      log(`tester ${username}${admin ? " (System Administrator)" : roleId ? ` (role ${persona.role})` : ""}: password email sent`);
-      return { username, created: !found, admin, persona: { role: roleId ? persona.role : null, permsets: sets } };
-    },
 
-    /**
-     * What people changed in Setup in this source-tracked org: SourceMember rows changed by the logins the pipeline
-     * gave people (Send me a login: <login>.admin@ / <login>.uat@ ... .pipeline; never the UI tests' persona.* users).
-     * Not the org's admin user (every pipeline deploy), nor the system users and the snapshot's own rows (live
-     * story #166: 327 rows, none by a person). Profiles never (permission sets carry access), nor what
-     * config/baseline.json excludes, nor sub-parts whose bundle is listed too. Deletions are not included. [{ type, name }].
-     */
-    setupChanges(alias, { exclude = [] } = {}) {
-      const id15 = (x) => String(x || "").slice(0, 15);   // ChangedBy holds 15-character ids
-      const people = new Set((sf(["data", "query", "-o", alias, "-q", "SELECT Id FROM User WHERE Username LIKE '%.pipeline' AND (NOT Username LIKE 'persona.%')"], { allowFail: true })?.records || []).map((u) => id15(u.Id)));
-      if (!people.size) return [];
-      const rows = (by) => sf(["data", "query", "-o", alias, "--use-tooling-api", "-q", `SELECT MemberType, MemberName, IsNameObsolete, ${by} FROM SourceMember`], { allowFail: true })?.records;
-      let by = "ChangedBy", list = rows(by);   // ChangedBy is API 60+; LastModifiedById otherwise
-      if (!list) { by = "LastModifiedById"; list = rows(by) || []; }
-      const seen = new Set();
-      return list.filter((r) => people.has(id15(r[by])) && !r.IsNameObsolete && !/^(LightningComponentResource|AuraDefinition)$/.test(r.MemberType)
-        && !excluded(r.MemberType, r.MemberName, ["Profile", ...exclude]))
-        .map((r) => ({ type: r.MemberType, name: r.MemberName })).filter((c) => !seen.has(`${c.type}:${c.name}`) && seen.add(`${c.type}:${c.name}`));
-    },
 
-    /** Retrieve those changes into force-app: the story owns them from now on (so they leave the baseline). */
-    retrieveChanges(alias, changes) {
-      if (changes.length) sf(["project", "retrieve", "start", "-o", alias, ...changes.flatMap((c) => ["-m", `${c.type}:${c.name}`]), "--ignore-conflicts"]);
-      return changes;
-    },
 
     /** Delete the target's org if it is alive. Returns true if one was deleted. */
     remove(target, opts) {
@@ -687,33 +323,8 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       return self.removeTagged(org.description) > 0;
     },
 
-    /** Delete every live org with this description (works when the alias was never set: a half-made CI org). */
-    removeTagged(description) {
-      let n = 0;
-      for (const r of active().filter((x) => x.Description === description)) {
-        if (deleteRecord(r.SignupUsername)) { n++; log(`deleted ${description} (${r.SignupUsername})`); }
-        else log(`could not delete ${description} (${r.SignupUsername}); the janitor will retry`);
-      }
-      if (!n) log(`no live org tagged ${description}`);
-      return n;
-    },
 
-    /** Find and delete orphans (see findOrphans). Returns what was deleted, with why. */
-    sweep(facts) {
-      const gone = [];
-      for (const o of findOrphans(active(), facts)) {
-        if (deleteRecord(o.username)) { gone.push(o); log(`deleted ${o.description}: ${o.why}`); }
-        else log(`could not delete ${o.description} (${o.why})`);
-      }
-      return gone;
-    },
 
-    limits() {
-      const raw = sf(["limits", "api", "display", "-o", DEVHUB], { allowFail: true });
-      const l = Array.isArray(raw) ? raw : [];
-      const pick = (n) => l.find((x) => x.name === n) || {};
-      return { active: pick("ActiveScratchOrgs"), daily: pick("DailyScratchOrgs") };   // unknown limits read as undefined, not 0
-    },
   };
   return self;
 }

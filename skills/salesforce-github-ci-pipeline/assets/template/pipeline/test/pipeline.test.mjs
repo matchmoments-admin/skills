@@ -2367,7 +2367,7 @@ test("Org Shape roles are rebuilt so they can be assigned; personas log in throu
   assert.match(login, /servlet\/servlet\.su\?oid=/);
   assert.match(login, /LICENSE_LIMIT_EXCEEDED/);
   assert.doesNotMatch(login, /"generate", "password"|"org", "create", "user"/, "no password, and no create user (JWT on Hyperforce refuses it)");
-  assert.match(readFileSync(new URL("../../pipeline/src/org.mjs", import.meta.url), "utf8"), /enableAdminLoginAsAnyUser>true/);
+  assert.match(readFileSync(new URL("../../pipeline/src/org/users.mjs", import.meta.url), "utf8"), /enableAdminLoginAsAnyUser>true/);
   assert.match(readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8"), /loginAs\(page, \{ role, permsets \}\)/);
 });
 
@@ -3429,7 +3429,7 @@ test("#237: a back-merge that changes nothing staging tests keeps the regression
   // the files of sprint 2026-w51's back-merges (#226 and after): pipeline work only
   const backmerge = ["pipeline/src/improve.mjs", "pipeline/src/journey.mjs", "pipeline/bin/pipe.mjs", ".github/workflows/improve.yml", ".github/workflows/ci.yml", "GLOSSARY.md", "docs/handbook.md", "pipeline/test/pipeline.test.mjs", ".claude/skills/x/SKILL.md"];
   assert.equal(gate.carries("no-staging-input", "a", "h", backmerge), true);
-  for (const f of ["force-app/main/default/classes/X.cls", "e2e/story-218.spec.ts", "data/seed/accounts.json", "config/scratch-dev.json", "pipeline/src/org.mjs", "pipeline/src/tests.mjs", ".github/actions/sf-auth/action.yml", ".github/workflows/staging-deploy.yml", "package-lock.json"])
+  for (const f of ["force-app/main/default/classes/X.cls", "e2e/story-218.spec.ts", "data/seed/accounts.json", "config/scratch-dev.json", "pipeline/src/org.mjs", "pipeline/src/org/data.mjs", "pipeline/src/tests.mjs", ".github/actions/sf-auth/action.yml", ".github/workflows/staging-deploy.yml", "package-lock.json"])
     assert.equal(gate.carries("no-staging-input", "a", "h", [...backmerge, f]), false, f);
   const git = (a) => (a[0] === "rev-list" ? "p1\np2" : a[0] === "rev-parse" ? "h" : a[0] === "diff" ? (a[1] === "p1" ? backmerge.join("\n") : "") : null);
   const host = { repo: "o/r", api: (m, p) => ({ check_runs: p.includes("/p1/") ? [{ conclusion: "success", started_at: "1" }] : [] }) };

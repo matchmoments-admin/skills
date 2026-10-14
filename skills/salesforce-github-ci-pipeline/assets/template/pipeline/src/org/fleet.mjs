@@ -1,0 +1,112 @@
+// The scratch-org fleet: which live orgs nothing needs (orphans), capacity, refusals, and deletion through the Dev Hub.
+// Part of Org provisioning (pipeline/src/org.mjs): orgRegistry composes these methods with the provisioning core.
+import { join } from "node:path";
+import { storyOf } from "../conventions.mjs";
+
+export const DEVHUB = "devhub";
+/**
+ * Which live scratch orgs nothing needs any more (pure). Orgs whose description the pipeline did not make are left alone.
+ *   ci-*                 a CI run's temporary org older than tempHours: its run failed before its cleanup, or died
+ *   issue-N / KEY-N      the story merged or closed (isStoryDone): a merged story's org that a late job rebuilt (E16)
+ *   staging-S, uat-S     sprint S is not the open sprint (shipped or abandoned)
+ */
+export function findOrphans(records, { now = new Date(), isStoryClosed = () => false, isStoryDone = isStoryClosed, openSprint = null, tempHours = 2 } = {}) {
+  const out = [];
+  for (const r of records) {
+    const d = r.Description || "";
+    const age = (now - new Date(r.CreatedDate || now)) / 3600e3;
+    let why = null;
+    if (/^ci-/.test(d) && age > tempHours) why = `CI org ${Math.round(age)} h old (its run did not clean up)`;
+    else if (/^issue-\d+$|^[A-Z][A-Z0-9]+-\d+$/.test(d) && isStoryDone(d)) why = "story merged or closed";
+    else if (/^(staging|uat)-(.+)$/.test(d) && d.replace(/^(staging|uat)-/, "") !== openSprint) why = "sprint no longer open";
+    if (why) out.push({ username: r.SignupUsername, description: d, why });
+  }
+  return out;
+}
+
+/** Is a Description one of this pipeline's orgs? (story, staging, UAT, CI temporary, snapshot source) */
+export const isPipelineOrg = (d) => /^(issue-\d+|[A-Z][A-Z0-9]+-\d+|staging-.+|uat-.+|ci-.+|snapshot-.+)$/.test(String(d || ""));
+
+/**
+ * Why a new org cannot be created now, or null. Names who holds the slots (another project's orgs share the Dev Hub's
+ * limit: story #193's /start failed on one), and keeps `reserve` slots free for staging, UAT and CI. Unknown limits
+ * (the call failed) do not block: creation then fails with Salesforce's own message. Pure.
+ */
+export function capacityProblem({ active = {}, daily = {} }, holders = [], reserve = 0) {
+  const who = () => {
+    const ours = holders.filter(isPipelineOrg), others = holders.filter((d) => !isPipelineOrg(d));
+    return ` In use: ${[...ours, ...others.map((d) => `${d || "(no description)"} (not this pipeline)`)].join(", ") || "unknown"}.`;
+  };
+  if (reserve && active.remaining <= reserve) return `Only ${active.remaining} scratch org slot(s) free and ${reserve} kept for staging, UAT and CI (ORG_RESERVE): merge or close a story first.${who()}`;
+  if (active.remaining === 0) return `No free scratch org slot (${active.max} active is the Dev Hub's limit). Merge or delete a story first, or run scratch-janitor.${who()}`;
+  if (daily.remaining === 0) return `The Dev Hub has created its ${daily.max} scratch orgs for today; the count resets at 00:00 UTC.`;
+  return null;
+}
+
+/** Salesforce refuses an org from a shape that a release has aged (E5): refresh the shape and try once more. */
+export const shapeOutdated = (message) => /shape.{0,40}(outdated|out of date|expired)|outdated.{0,40}shape/i.test(String(message || ""));
+
+/** A job for a PR never rebuilds the story org once that PR is no longer open (a late UI test rebuilt issue-193 after
+ *  its merge and took the slot UAT needed, E16). Jobs without a PR (start, build) always may: a reopened story gets its
+ *  org back. Pure: prState is the job's PR's state, or null. */
+export function createRefusal(org, prState = null) {
+  if (org?.kind !== "story" || !prState || prState === "OPEN") return null;
+  return `story ${org.key}'s PR is ${String(prState).toLowerCase()}: its org is not rebuilt (the job that wanted it is too late)`;
+}
+
+/** createRefusal() for a job that names its PR (--pr), its state read through the gh seam. */
+export const storyRefusal = (gh, pr) => (org) => (pr ? createRefusal(org, gh(["pr", "view", String(pr), "--json", "state"], { allowFail: true })?.state || null) : null);
+
+/** Is a story org left over from a merge? The branch's latest PR merged, none is open, and the org was made before that
+ *  merge (one made after belongs to a story reopened and started again). Pure. */
+export const mergedBefore = (prs = [], orgCreated) => {
+  if (prs.some((p) => p.state === "OPEN")) return false;
+  const merged = prs.filter((p) => p.state === "MERGED").map((p) => String(p.mergedAt || "")).sort().pop();
+  return Boolean(merged && orgCreated && String(orgCreated) < merged);
+};
+
+/** The live orgs whose story is done: closed in the tracker, or merged after the org was made (mergedBefore). records:
+ *  [{ Description, CreatedDate }]; gh reads the branch's PRs. For sweep(). */
+export async function doneStoryOrgs(records, { tracker, gh, log = () => {} }) {
+  const done = new Set();
+  for (const r of records) {
+    const d = r.Description || "", key = storyOf(d);
+    if (!key) continue;
+    try {
+      const prs = gh(["pr", "list", "--head", d, "--state", "all", "--limit", "20", "--json", "state,mergedAt"], { allowFail: true }) || [];
+      if (mergedBefore(prs, r.CreatedDate) || (await tracker.story(key)).state === "CLOSED") done.add(d);
+    } catch (e) { log(`skipped ${d}: ${e.message}`); }
+  }
+  return done;
+}
+
+/** The registry's fleet methods. ctx: orgRegistry's shared context (sf, log, env, ...). */
+export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord }) {
+  return {
+    /** Delete every live org with this description (works when the alias was never set: a half-made CI org). */
+    removeTagged(description) {
+      let n = 0;
+      for (const r of active().filter((x) => x.Description === description)) {
+        if (deleteRecord(r.SignupUsername)) { n++; log(`deleted ${description} (${r.SignupUsername})`); }
+        else log(`could not delete ${description} (${r.SignupUsername}); the janitor will retry`);
+      }
+      if (!n) log(`no live org tagged ${description}`);
+      return n;
+    },
+    /** Find and delete orphans (see findOrphans). Returns what was deleted, with why. */
+    sweep(facts) {
+      const gone = [];
+      for (const o of findOrphans(active(), facts)) {
+        if (deleteRecord(o.username)) { gone.push(o); log(`deleted ${o.description}: ${o.why}`); }
+        else log(`could not delete ${o.description} (${o.why})`);
+      }
+      return gone;
+    },
+    limits() {
+      const raw = sf(["limits", "api", "display", "-o", DEVHUB], { allowFail: true });
+      const l = Array.isArray(raw) ? raw : [];
+      const pick = (n) => l.find((x) => x.name === n) || {};
+      return { active: pick("ActiveScratchOrgs"), daily: pick("DailyScratchOrgs") };   // unknown limits read as undefined, not 0
+    },
+  };
+}
