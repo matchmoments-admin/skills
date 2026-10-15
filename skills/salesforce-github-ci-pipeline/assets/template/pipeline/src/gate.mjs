@@ -151,11 +151,16 @@ export function carriedFrom(rule, { head, passed = [], changedSince }) {
   return null;
 }
 /** The verdict a status context gives the head: { state: "success" | "failure" | "stale" | "missing" | ... }. */
-export function verdictFor(context, { statuses = [], head, diffsToHead = {} }) {
+export function verdictFor(context, { statuses = [], head, diffsToHead = {}, pr = null }) {
   const mine = statuses.filter((s) => s.context === context && TRUSTED_STATUS_CREATORS.includes(s.creator?.login) && s.trusted !== false)
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   if (!mine.length) return { state: "missing" };
-  const last = mine[mine.length - 1];
+  // the newest commit's result first, then the newest by time on it: a run on an older commit that finished late (a
+  // review of a superseded push) must not hide the one running on a newer commit (scenario fuzz, 15 Oct)
+  const order = [...(pr?.commits || []).map((c) => c.oid), head];
+  const rank = (sha) => order.lastIndexOf(sha);
+  const top = Math.max(...mine.map((s) => rank(s.sha)));
+  const last = top >= 0 ? mine.filter((s) => rank(s.sha) === top).at(-1) : mine[mine.length - 1];
   // still running, and only specs changed since (the AI UI test's own spec commit): running, not stale (the card said
   // "run it again" while the test ran, 14 Oct). The UI test only: UAT pending on an older commit is UAT owed on the
   // head (release 2027-w01: the journey read it as running, /uat-pass refused it, and nothing redeployed UAT)

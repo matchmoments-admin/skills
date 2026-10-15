@@ -358,7 +358,12 @@ is one CLI, so the Salesforce steps can run on Buildkite agents if a company alr
 
 - [`.github/workflows/`](../.github/workflows): one workflow per button; each header says what starts it.
 - [`pipeline/`](../pipeline): the gate, AI switches, org registry, tracker, Jev, metrics and story card, behind one CLI
-  (`pipeline/bin/pipe.mjs`). Tests: `npm run test:pipeline`.
+  (`pipeline/bin/pipe.mjs`). Tests: `npm run test:pipeline`. A change that crosses modules (a status, a card row, an
+  action, what starts next) gets a **scenario** first: `pipeline/test/scenarios.test.mjs` plays a journey on the
+  simulated code host (`sim.mjs`, an in-memory GitHub under the real `gather`, gate, journey, cards and actions) and
+  checks the invariants (`invariants.mjs`) after every step: the card agrees with Standing, a person is called only when
+  there is something for them, what the card offers the action accepts, and nothing is stuck. The fuzz tests replay
+  random steps from seeds (`FUZZ_SEEDS=1000` for a long run); a failure names its seed and steps.
 - `force-app/` the Salesforce source · [`config/`](../config) scratch org definitions (production's shape) ·
   [`devhub-setup/`](../devhub-setup) the CI connected app and Dev Hub settings · [`e2e/`](../e2e) UI specs.
 - [`CLAUDE.md`](../CLAUDE.md) conventions · [`REVIEW.md`](../REVIEW.md) review rubric · [`GLOSSARY.md`](../GLOSSARY.md) domain

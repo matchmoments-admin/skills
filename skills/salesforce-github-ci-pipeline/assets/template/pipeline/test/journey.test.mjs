@@ -93,6 +93,8 @@ test("round 1: a person's push re-runs the review and resets the fix rounds; the
   assert.match(rv, /github\.event\.action != 'synchronize' \|\| github\.event\.sender\.type != 'Bot'/);
   assert.match(rv, /start review --pr "\$\{\{ github\.event\.pull_request\.number \}\}" \$PUSH/, "a push passes before and after: the route sees what this push changed");
   assert.equal(start.decide("review", { ai: { review: true }, branch: "issue-1", pushed: ["e2e/story-1.spec.ts"] }).run, false, "a spec-only push: no review");
+  assert.match(start.decide("review", { ai: { review: true }, branch: "issue-1", review: { state: "pending" } }).why, /is running/, "a review running on this code: not a second one");
+  assert.equal(start.decide("review", { ai: { review: true }, branch: "issue-1", review: { state: "pending" }, explicit: true }).run, true, "unless a person asks");
   assert.match(start.decide("fix", { ai: { fix: true }, branch: "issue-1", labels: ["blocked"] }).why, /blocked: a person is on it/);
   assert.match(start.stopMessage(2), /\*\*What you can do:\*\* push a fix yourself/);
   const fx = readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8");
@@ -145,6 +147,11 @@ test("start decisions: a job that has nothing to do is decided before a runner s
   did.length = 0;
   await start.startJob("fix", 5, { host, gh, cards, ai: on });
   assert.deepEqual(did.find((x) => Array.isArray(x) && x[0] === "dispatch"), ["dispatch", "ai-fix.yml", { pr: 5 }]);
+  // a review that runs is pending on the head first, so the card and a second start see it running (scenario fuzz)
+  did.length = 0;
+  await start.startJob("review", 5, { host: { ...host, api: () => ({ files: [{ filename: "force-app/main/default/classes/A.cls" }] }) }, gh, cards, ai: on });
+  const order = did.filter(Array.isArray).map((x) => `${x[0]} ${x[0] === "status" ? `${x[2]} ${x[3]}` : x[1]}`);
+  assert.deepEqual(order, ["status pipeline/ai-review pending", "dispatch ai-review.yml"]);
   // follow-ups: the same for the gate and an emergency merge
   did.length = 0;
   const removed = [];

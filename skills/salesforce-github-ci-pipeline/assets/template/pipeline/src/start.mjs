@@ -103,6 +103,7 @@ export function decide(kind, f) {
     if (!ai.review) return { run: false, off: "AI_REVIEW", why: "AI review is off" };
     // a verdict that still stands on the head (a re-ready, a spec-only push) is not reviewed again unless a person asks
     if (!f.explicit && f.review && ["success", "failure"].includes(f.review.state)) return { run: false, why: `the AI review of this code still stands (${f.review.state === "success" ? "passed" : "asked for changes"} on ${String(f.review.sha || "").slice(0, 7)})` };
+    if (!f.explicit && f.review?.state === "pending") return { run: false, why: "the AI review of this code is running" };
     if (bk === "release" || bk === "backmerge") return { run: false, why: "release PRs and back-merges were reviewed story by story" };
     if (Array.isArray(f.pushed) && f.pushed.length && f.pushed.every((p) => p.startsWith("e2e/"))) return { run: false, why: "a spec-only push needs no review (the gate accepts e2e-only changes)" };
     if (Array.isArray(f.changed) && f.changed.length < 300 && !f.changed.some((p) => p.startsWith("force-app/") || p.startsWith("e2e/"))) {
@@ -177,6 +178,9 @@ export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, mode
   if (d.run) {
     // Claude's UI test is running on this head: the gate and the journey see it (no second writer), until its verdict
     if (kind === "ui-test" && mode === "ai") host.status(p.headRefOid, STATUS.ui, "pending", "Claude is writing and running the UI test");
+    // the review too: without it the card said "run it again" and offered a second review while one ran (scenario
+    // fuzz, 15 Oct); its verdict job always replaces it (pass, changes, or error when no verdict came)
+    if (kind === "review") host.status(p.headRefOid, STATUS.review, "pending", "Claude is reviewing this code");
     host.dispatch(WORKFLOW[kind], kind === "ui-test" ? { pr, mode } : { pr });
     return d;
   }

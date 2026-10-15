@@ -405,6 +405,17 @@ test("a spec-only push keeps the AI review but not the UI test (story #166: a we
   assert.equal(verdictFor(STATUS.ui, { ...ctx, head: "h1" }).state, "success");
 });
 
+test("a result on a newer commit wins over one an older commit's run posted later (scenario fuzz, 15 Oct)", async () => {
+  const { verdictFor, STATUS } = await import("../src/gate.mjs");
+  const by = { login: "github-actions[bot]" };
+  // the review of h1 finished after the review of h2 started: h2's running review stands on h3 (a spec push)
+  const ctx = { head: "h3", pr: { commits: [{ oid: "h1" }, { oid: "h2" }, { oid: "h3" }] }, diffsToHead: { h1: ["force-app/A.cls", "e2e/a.spec.ts"], h2: ["e2e/a.spec.ts"] }, statuses: [
+    { context: STATUS.review, state: "pending", sha: "h2", creator: by, created_at: "2" },
+    { context: STATUS.review, state: "failure", sha: "h1", creator: by, created_at: "3" }] };
+  assert.equal(verdictFor(STATUS.review, ctx).state, "pending");
+  assert.equal(verdictFor(STATUS.review, { ...ctx, pr: null }).state, "stale", "without the commit order: the newest by time, as before");
+});
+
 test("nudge reads the gate's own carry rule: a sign-off on an earlier commit counts only if specs alone changed since", () => {
   const io = (files) => ({
     gh: (a) => (a.includes("commits") ? { commits: [{ oid: "s1" }, { oid: "h" }] } : a[0] === "api" ? { status: "ahead", files: files.map((filename) => ({ filename })) } : { state: "OPEN", labels: [], headRefName: "issue-5", baseRefName: "release/w45", headRefOid: "h" }),
