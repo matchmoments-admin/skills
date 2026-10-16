@@ -144,14 +144,7 @@ test("spec wiring: the agents' prompts, the spec issue form and the boxes", () =
   assert.match(wf, /User stories" become the story's acceptance criteria/);
 });
 
-test("completion fixes: a ticked sign-off re-runs the gate later; UAT failure offers a retest; a spec card follows the spec; sprint names", () => {
-  const head = "h1";
-  const io = (statuses, reviews = []) => ({
-    gh: () => ({ state: "OPEN", labels: [], headRefName: "issue-5", baseRefName: "release/w45", headRefOid: head }),
-    ghPages: (p) => (p.includes("/reviews") ? reviews : statuses),
-  });
-  assert.equal(gate.nudge(5, io([{ context: "pipeline/sign-off", state: "success", creator: { login: "github-actions[bot]" } }])).action, "dispatch");
-  assert.equal(gate.nudge(5, io([{ context: "pipeline/sign-off", state: "success", creator: { login: "someone" } }])).action, "none");
+test("completion fixes: UAT failure offers a retest; a spec card follows the spec; sprint names", () => {
   const pr = { number: 110, state: "OPEN", headRefName: "release/w45", baseRefName: "main", headRefOid: "h" };
   const st = { sha: "h", context: gate.STATUS.uat, state: "failure", description: "totals wrong", created_at: "2026-10-06T10:00:00Z", creator: { login: "github-actions[bot]" } };
   const failedUat = releaseCard({ repoUrl: "https://github.com/o/r", pr, uat: true, facts: { checkRuns: [], statuses: [st], reviews: [] } });

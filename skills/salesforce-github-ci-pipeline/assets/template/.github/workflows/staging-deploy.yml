@@ -132,18 +132,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: main }
-      - name: Record the UI regression on this commit (the release gate needs it once per release)
-        # planned but not run (its Playwright setup failed, or the deploy before it): a failure, so nothing waits on it
-        if: needs.staging.outputs.ui == 'success' || needs.staging.outputs.ui == 'failure' || needs.staging.outputs.ui-planned == 'run'
+      # One step ends the stage (pipe finish, finish.mjs): the UI regression as pipeline/ui-regression on the commit
+      # tested (planned but not run, its setup or the deploy failing first, is a failure, so nothing waits on it); then,
+      # on the open release PR, the gate if it is approved, the release card, and what the journey owes (UAT when
+      # staging passed on its head and UAT does not have it; a superseded or skipped run changes nothing)
+      - name: The UI regression's verdict, then the gate, the card and what comes next
         run: |
-          if [ "${{ needs.staging.outputs.ui }}" = success ]; then S=success; D="every UI spec passed on the staging org"
-          elif [ "${{ needs.staging.outputs.ui }}" = failure ]; then S=failure; D="a UI spec failed on the staging org"
-          else S=failure; D="the UI regression could not run (its setup or the deploy failed): see the staging run"; fi
-          node pipeline/bin/pipe.mjs status set pipeline/ui-regression "$S" "$GITHUB_SHA" "$D"
-      - name: Ship now if the release PR is already approved
-        run: |
-          RPR=$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number // empty')
-          [ -z "$RPR" ] || node pipeline/bin/pipe.mjs gate nudge "$RPR"   # also refreshes the release card
-          # UAT_ENABLED: UAT when staging passed on the release PR's head and UAT does not have it yet (journey.mjs);
-          # a superseded or skipped run changes nothing, and the release PR opening later asks the same question
-          [ -z "$RPR" ] || node pipeline/bin/pipe.mjs next --after staging --pr "$RPR"
+          node pipeline/bin/pipe.mjs finish staging --branch "$REL" --sha "$GITHUB_SHA" --outcome "${{ needs.staging.outputs.ui }}" \
+            $([ "${{ needs.staging.outputs.ui-planned }}" = run ] && echo --planned)

@@ -146,11 +146,11 @@ test("#220: a warning in the log does not make a story's failure the pipeline's;
 test("#237: a back-merge that changes nothing staging tests keeps the regression an earlier release commit passed", () => {
   // the files of sprint 2026-w51's back-merges (#226 and after): pipeline work only
   const backmerge = ["pipeline/src/improve.mjs", "pipeline/src/journey.mjs", "pipeline/bin/pipe.mjs", ".github/workflows/improve.yml", ".github/workflows/ci.yml", "GLOSSARY.md", "docs/handbook.md", "pipeline/test/pipeline.test.mjs", ".claude/skills/x/SKILL.md"];
-  assert.equal(gate.carries("no-staging-input", "a", "h", backmerge), true);
+  assert.equal(gate.carries(gate.STATUS.uiRegression, "a", "h", backmerge), true);
   for (const f of ["force-app/main/default/classes/X.cls", "e2e/story-218.spec.ts", "data/seed/accounts.json", "config/scratch-dev.json", "pipeline/src/org.mjs", "pipeline/src/org/data.mjs", "pipeline/src/tests.mjs", ".github/actions/sf-auth/action.yml", ".github/workflows/staging-deploy.yml", "package-lock.json", "playwright.config.ts"]) {
-    assert.equal(gate.carries("no-staging-input", "a", "h", [...backmerge, f]), false, f);
+    assert.equal(gate.carries(gate.STATUS.uiRegression, "a", "h", [...backmerge, f]), false, f);
     // staging's Apex carries over a spec-only change (2027-w01 re-ran 149 tests for one spec line); never over the rest
-    assert.equal(gate.carries("no-apex-input", "a", "h", [...backmerge, f]), /^(e2e\/|playwright\.config\.ts$)/.test(f), f);
+    assert.equal(gate.carries("staging", "a", "h", [...backmerge, f]), /^(e2e\/|playwright\.config\.ts$)/.test(f), f);
   }
   const git = (a) => (a[0] === "rev-list" ? "p1\np2" : a[0] === "rev-parse" ? "h" : a[0] === "diff" ? (a[1] === "p1" ? backmerge.join("\n") : "") : null);
   // the live "Salesforce tests" check is what carries: it exists only where the tests really ran

@@ -259,6 +259,11 @@ is the story's own (its tests, its access check, a deploy error in its files, th
 story's card already says what to fix. Triage the ticket (Cause, Fix), then fix it in a maintenance PR that says
 `Closes #N`; the weekly metrics count tickets opened, fixed and still open.
 
+**Nothing stays stuck.** Every job ends with one step, `pipe finish <stage>`: its verdict, then the gate, the card and
+what comes next, always in that order. If GitHub drops the event that should start the next stage, the janitor's
+**reconcile** sweep (every 6 hours, or *Actions › scratch-janitor* by hand, or `pipe reconcile --pr N`) starts whatever is
+owed on every open PR that nothing is running for.
+
 Start from the **story card**: a ❌ row links to what failed. Every run is under
 [Actions](https://github.com/__OWNER__/__project__/actions); click the red job, then the red step.
 

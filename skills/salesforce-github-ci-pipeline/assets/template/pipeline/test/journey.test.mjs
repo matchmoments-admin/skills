@@ -45,7 +45,7 @@ test("Actions minutes: a job that has nothing to do never starts a runner (GitHu
   assert.match(ci, /needs\.static\.outputs\.org == 'true' \|\| \(github\.event_name == 'workflow_dispatch' &&\n\s+needs\.static\.outputs\.kind != 'release' && needs\.static\.outputs\.kind != 'backmerge'\)/, "a hand-started release or back-merge CI never deploys again");
   assert.match(ci, /Code analyzer \(PMD and ESLint\)\n\s+if: steps\.what\.outputs\.sf == 'true'/);
   assert.match(ci, /needs\.apex\.result == 'skipped'/, "the nudge runs when the org job was skipped");
-  assert.match(ci, /needs\.static\.outputs\.ui == 'false'/, "UI test not needed, posted by the nudge");
+  assert.match(ci, /UI: \$\{\{ needs\.static\.outputs\.ui \}\}[\s\S]*\[ "\$UI" = false \] && O=no-ui/, "UI test not needed, posted by the nudge's finish");
   assert.match(ci, /needs\.static\.outputs\.kind == 'story'/, "autofix filtered before a runner starts");
   assert.doesNotMatch(ci, /pull_request\.labels\.\*\.name, 'blocked'/, "blocked is read live: the payload is older than a person's push");
   // nothing reviewable: the routing job says so; the review and verdict jobs never start
@@ -165,24 +165,38 @@ test("start decisions: a job that has nothing to do is decided before a runner s
 });
 
 test("Standing's carry rules are one table: specs-only, exact head, and no-force-app for CI's Salesforce tests", () => {
-  assert.equal(gate.carries("specs", "a", "h", ["e2e/s.spec.ts"]), true);
-  assert.equal(gate.carries("specs", "a", "h", ["force-app/x"]), false);
-  assert.equal(gate.carries("exact", "a", "h", ["e2e/s.spec.ts"]), false, "the UI test and UAT need the exact head");
-  assert.equal(gate.carries("no-sf", "a", "h", ["e2e/s.spec.ts", "docs/x.md"]), true, "a spec-only push needs no deploy");
-  assert.equal(gate.carries("no-sf", "a", "h", ["force-app/main/default/flows/F.flow-meta.xml"]), false);
-  assert.equal(gate.carries("no-sf", "a", "h", null), false, "an unknown diff never carries");
-  assert.equal(gate.carries("no-sf", "a", "h", [".github/workflows/ci.yml"]), false, "a pass under the branch's own workflows is no pass (forgeable)");
+  const { STATUS: S } = gate;
+  // every result against every kind of change: one row each (gate.RESULTS); a missing input shows here, not live
+  const kinds = { spec: "e2e/s.spec.ts", code: "force-app/main/default/classes/X.cls", seed: "data/seed/plan.json", settings: "pipeline/src/settings.mjs", gate: "pipeline/src/gate.mjs", workflow: ".github/workflows/ci.yml", stagingWf: ".github/workflows/staging-deploy.yml", docs: "docs/x.md", playwright: "playwright.config.ts" };
+  const expected = {
+    [S.review]:       { spec: true,  code: false, seed: false, settings: false, gate: false, workflow: false, stagingWf: false, docs: false, playwright: false },
+    [S.signoff]:      { spec: true,  code: false, seed: false, settings: false, gate: false, workflow: false, stagingWf: false, docs: false, playwright: false },
+    [S.ui]:           { spec: false, code: false, seed: false, settings: false, gate: false, workflow: false, stagingWf: false, docs: false, playwright: false },
+    [S.uat]:          { spec: false, code: false, seed: false, settings: false, gate: false, workflow: false, stagingWf: false, docs: false, playwright: false },
+    [S.approval]:     { spec: false, code: false, seed: false, settings: false, gate: false, workflow: false, stagingWf: false, docs: false, playwright: false },
+    apex:             { spec: true,  code: false, seed: true,  settings: false, gate: false, workflow: false, stagingWf: false, docs: true,  playwright: true },
+    staging:          { spec: true,  code: false, seed: false, settings: false, gate: true,  workflow: true,  stagingWf: false, docs: true,  playwright: true },
+    [S.uiRegression]: { spec: false, code: false, seed: false, settings: false, gate: true,  workflow: true,  stagingWf: false, docs: true,  playwright: false },
+  };
+  for (const [result, row] of Object.entries(expected)) for (const [kind, carries] of Object.entries(row)) {
+    assert.equal(gate.carries(result, "a", "h", [kinds[kind]]), carries, `${result} over a ${kind} change`);
+  }
+  assert.deepEqual(Object.keys(gate.RESULTS).filter((r) => !(r in expected)), [gate.GATE_STATUS], "every result has a row in this table");
+  assert.equal(gate.carries("apex", "a", "h", null), false, "an unknown diff never carries");
+  assert.equal(gate.carries(S.ui, "a", "h", ["e2e/s.spec.ts"], { running: true }), true, "Claude's UI test still running over its own spec commit");
+  assert.equal(gate.carries(S.uat, "a", "h", ["e2e/s.spec.ts"], { running: true }), false, "UAT running on an older commit is UAT owed (2027-w01)");
+  assert.throws(() => gate.carries("specs", "a", "h", []), /unknown result/);
   const changed = { c3: ["e2e/s.spec.ts"], c2: ["e2e/s.spec.ts", "force-app/x"], c1: ["force-app/x"] };
-  assert.equal(gate.carriedFrom("no-sf", { head: "h", passed: ["c3", "c1"], changedSince: (s) => changed[s] }), "c3");
-  assert.equal(gate.carriedFrom("no-sf", { head: "h", passed: ["c2", "c1"], changedSince: (s) => changed[s] }), null);
+  assert.equal(gate.carriedFrom("apex", { head: "h", passed: ["c3", "c1"], changedSince: (s) => changed[s] }), "c3");
+  assert.equal(gate.carriedFrom("apex", { head: "h", passed: ["c2", "c1"], changedSince: (s) => changed[s] }), null);
   // CI's plan: no org job when the Salesforce tests carry (story #193 deployed five times, three for spec-only pushes)
   const p = start.ciPlan({ ref: "issue-4", base: "release/w1", files: ["force-app/x", "e2e/story-4.spec.ts"], carried: "c3" });
   assert.deepEqual([p.sf, p.org, p.carried], [true, false, "c3"]);
   // ciCarry reads the branch's commits and their checks through git and the host
   const git = (a) => (a[0] === "rev-list" ? "c3\nc2" : a[0] === "rev-parse" ? "h" : a[0] === "diff" ? (a[2] === "c3" ? "e2e/s.spec.ts" : "force-app/x") : null);
-  const host = { repo: "o/r", api: (m, path) => ({ check_runs: path.includes("/c3/") || path.includes("/c2/") ? [{ conclusion: "success", started_at: "1" }] : [] }) };
+  const host = { repo: "o/r", api: (m, path) => ({ check_runs: path.includes("/c3/") || path.includes("/c2/") ? [{ conclusion: "success", started_at: "1", status: "completed" }] : [] }) };
   assert.equal(start.ciCarry({ ref: "issue-4", base: "release/w1", git, host }), "c3");
-  const rerunFailed = { repo: "o/r", api: () => ({ check_runs: [{ conclusion: "success", started_at: "1" }, { conclusion: "failure", started_at: "2" }] }) };
+  const rerunFailed = { repo: "o/r", api: () => ({ check_runs: [{ conclusion: "success", started_at: "1", status: "completed" }, { conclusion: "failure", started_at: "2", status: "completed" }] }) };
   assert.equal(start.ciCarry({ ref: "issue-4", base: "release/w1", git, host: rerunFailed }), null, "the newest run on that commit is the truth");
   assert.equal(start.ciCarry({ ref: "release/2026-w1", base: "main", git, host }), null, "release PRs test in staging");
   const wf = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -236,7 +250,7 @@ test("the journey decides what starts next from Standing: after a review, after 
   assert.deepEqual(journey.nextSteps("staging", rel("passed", "missing"), { uat: false, pr: 1 }), []);
   assert.throws(() => journey.nextSteps("lunch", st_()), /unknown stage/);
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
-  assert.match(wf("ai-review"), /pipe.mjs next --after review --pr "\$PR"/);
+  assert.match(wf("ai-review"), /pipe.mjs finish review --pr "\$PR" --sha "\$HEAD" --outcome "\$V"/, "the review's finish asks the journey what is next");
   assert.doesNotMatch(wf("ai-review"), /gate ui-needed|label=ai:test/, "no chain decided in shell");
   assert.match(wf("release-cut"), /pipe.mjs next --after release-pr/);
   assert.doesNotMatch(wf("release-cut") + wf("staging-deploy"), /gh workflow run uat-deploy/, "UAT is started only by the journey");
@@ -294,7 +308,7 @@ test("#230: Claude's UI test starts only once CI's org job passed on the head; C
   assert.deepEqual(journey.nextSteps("ci", st_({ review: { state: "success" }, checks: { [names.CHECKS.apex]: { state: "failed" } } }), { ai }), []);
   assert.deepEqual(journey.nextSteps("ci", st_({ route: "release", review: { state: "success" } }), { ai }), []);
   const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
-  assert.match(ci.split(/\n  nudge:\n/)[1], /pipe\.mjs next --after ci --pr/);
+  assert.match(ci.split(/\n  nudge:\n/)[1], /pipe\.mjs finish ci --pr "\$PRN"/, "CI's finish asks the journey (after ci)");
 });
 
 test("the UI regression runs once per release (#273): Apex on every staging run, every UI spec once the release PR is open; UI_REGRESSION=every keeps the old way", () => {
@@ -324,11 +338,10 @@ test("the UI regression runs once per release (#273): Apex on every staging run,
   assert.match(wf, /id: uirun\n\s+if: steps\.fresh\.outputs\.ui == 'run'/);
   assert.match(wf, /ui: \$\{\{ steps\.uirun\.outcome \}\}/);
   const nudge = wf.slice(wf.indexOf("  nudge:"));
-  assert.match(nudge, /status set pipeline\/ui-regression "\$S" "\$GITHUB_SHA"/);
-  assert.ok(nudge.indexOf("pipeline/ui-regression") < nudge.indexOf("next --after staging"), "recorded before the journey asks what is owed");
+  assert.match(nudge, /pipe\.mjs finish staging --branch "\$REL" --sha "\$GITHUB_SHA" --outcome "\$\{\{ needs\.staging\.outputs\.ui \}\}"/, "one finish: the verdict before the journey asks what is owed (finish.mjs's order)");
 });
 
-test("the staging plan reads the gate's own Standing for the UI regression, so plan, journey and gate agree (code review, 14 Oct)", () => {
+test("the staging plan reads the gate's own Standing for the UI regression, so plan, journey and gate agree (code review, 14 Oct)", async () => {
   const ui = (state, extra = {}) => ({ sha: "h", context: gate.STATUS.uiRegression, state, created_at: "t", creator: { login: "github-actions[bot]" }, ...extra });
   const facts = (statuses, headRefOid = "h") => ({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid }, checkRuns: [], statuses, reviews: [] });
   const plan = (f, head = "h") => start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? head : a[0] === "rev-list" ? "" : ""), host: { repo: "o/r", prFacts: () => f, api: () => ({ check_runs: [] }) },
@@ -344,7 +357,27 @@ test("the staging plan reads the gate's own Standing for the UI regression, so p
   const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   assert.match(wf, /issues: read/);
   assert.match(wf, /if: always\(\) && steps\.current\.outputs\.superseded != 'true' && steps\.fresh\.outputs\.ui != 'run'/);
-  assert.match(wf, /needs\.staging\.outputs\.ui-planned == 'run'/);
-  assert.match(wf, /the UI regression could not run/);
+  assert.match(wf, /needs\.staging\.outputs\.ui-planned \}\}" = run \] && echo --planned/);
+  const { verdictOf } = await import("../src/finish.mjs");
+  assert.match(verdictOf("staging", { outcome: "", planned: true }).description, /the UI regression could not run/);
+  assert.equal(verdictOf("staging", { outcome: "" }), null, "not planned, not run: nothing to record");
   assert.equal(gate.STAGING_INPUTS.test("pipeline/src/settings.mjs"), true, "the seed and baseline defaults change what staging builds");
+});
+
+test("finish: each stage's verdict from its outcome, in one table (it was bash in five workflows)", async () => {
+  const { verdictOf } = await import("../src/finish.mjs");
+  const v = (stage, f) => { const r = verdictOf(stage, f); return r && `${r.state}: ${r.description}`; };
+  assert.equal(v("review", { outcome: "pass" }), "success: AI review passed");
+  assert.equal(v("review", { outcome: "changes" }), "failure: AI review asks for changes");
+  assert.equal(v("review", { outcome: "not-needed", detail: "low risk" }), "success: not needed: low risk");
+  assert.equal(v("review", { outcome: "" }), "error: the review posted no verdict: tick Run the AI review again");
+  assert.equal(v("ui-test", { hasSpec: false, story: "12" }), "failure: no spec e2e/story-12.spec.ts committed");
+  assert.equal(v("ui-test", { outcome: "success" }), "success: UI test passed");
+  assert.equal(v("ui-test", { outcome: "failure", kind: "flake" }), "failure: the spec failed (Jev guesses: flake)");
+  assert.equal(v("ui-test", { outcome: "failure", kind: "unknown" }), "failure: the spec failed");
+  assert.equal(v("ci", { outcome: "no-ui" }), "success: not needed: no UI-facing changes");
+  assert.equal(v("ci", { outcome: "" }), null);
+  assert.equal(v("staging", { outcome: "failure" }), "failure: a UI spec failed on the staging org");
+  assert.equal(v("uat", { outcome: "deployed", detail: "sandbox" }), "pending: In UAT (sandbox): test it, then tick UAT passed on the release card");
+  assert.throws(() => verdictOf("deploy", {}), /unknown stage/);
 });

@@ -162,7 +162,8 @@ test("round 1: a weak UI spec fails; evidence never boxes the page header; close
   assert.match(readFileSync(new URL("../../e2e/support/evidence.ts", import.meta.url), "utf8"), /its locator points into the page header/);
   const ui = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
   assert.match(ui, /pipe\.mjs ui spec-check --file/);
-  assert.match(ui, /the spec passed but checks too little/);
+  assert.match(ui, /finish ui-test [^\n]*--weak "\$WEAK"/, "a weak spec reaches the verdict");
+  assert.match((await import("../src/finish.mjs")).verdictOf("ui-test", { outcome: "success", weak: "no assertion" }).description, /the spec passed but checks too little: no assertion/);
   const api = (m, path) => path.endsWith("/git/ref/heads/evidence") ? { object: { sha: "h" } } : path.includes("/git/commits/") ? { tree: { sha: "t" } }
     : { tree: [{ type: "blob", path: "story-143/abc/01-a.webp" }, { type: "blob", path: "story-150/def/01-b.webp" }, { type: "blob", path: "README.md" }] };
   assert.deepEqual(evidence.storiesOnBranch({ api, repo: "o/r" }), ["143", "150"]);

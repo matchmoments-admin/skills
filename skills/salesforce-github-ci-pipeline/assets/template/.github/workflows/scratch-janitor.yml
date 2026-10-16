@@ -2,18 +2,20 @@ name: scratch-janitor
 # Every 6 hours: delete orphan scratch orgs (CI orgs whose run died, closed stories, staging and UAT of sprints no longer
 # open) through the Dev Hub, and report the allocation; squash the UI evidence branch to open stories. Also the
 # release watchdog: Salesforce changes on main that never shipped (a lost or failed release dispatch) start a release,
-# unless production was rolled back. Run by hand any time.
+# unless production was rolled back. And the reconcile sweep: on every open PR nothing is running for, whatever is owed
+# (a gate re-run, Claude's UI test, the UI regression, UAT) is started, so a dropped workflow_run costs one tick, not a
+# stalled story (GitHub lost them for half an hour on 13 Oct). Run by hand any time.
 on:
   schedule:
-    - cron: "17 */12 * * *"   # twice a day: an orphan must not hold one of the Dev Hub's active slots for long
+    - cron: "17 */6 * * *"   # every 6 hours: an orphan must not hold one of the Dev Hub's slots long, and a stalled PR waits one tick
   workflow_dispatch:
 permissions:
   contents: write       # the event log (orgs deleted); which sprint is open; main and tags for the watchdog
   issues: write         # which stories are closed; an open "Production rolled back" issue; rewrite closed stories' evidence comments
   actions: write        # the watchdog starts a release
-  pull-requests: read   # a freed slot: is a release PR waiting for UAT (journey.mjs)
+  pull-requests: write  # a freed slot: is a release PR waiting for UAT (journey.mjs); the sweep's labels and cards
   checks: read
-  statuses: read
+  statuses: write       # the sweep: a UI test it starts is pending on the head first (start.startJob)
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
@@ -39,6 +41,9 @@ jobs:
           node pipeline/bin/pipe.mjs org limits
       - name: Release watchdog (main's Salesforce changes that never shipped)
         run: node pipeline/bin/pipe.mjs ship watchdog
+      - name: Reconcile (start what is owed on every idle open PR)
+        continue-on-error: true
+        run: node pipeline/bin/pipe.mjs reconcile
       - name: UI evidence of closed stories (the evidence branch, squashed to open stories only; runs even with UI_EVIDENCE off)
         continue-on-error: true
         run: node pipeline/bin/pipe.mjs evidence squash

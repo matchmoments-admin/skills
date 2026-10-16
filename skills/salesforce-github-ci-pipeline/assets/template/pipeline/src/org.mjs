@@ -5,7 +5,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { orgFor } from "./conventions.mjs";
-import { PIPELINE_ROOT } from "./io.mjs";
+import { PIPELINE_ROOT, sfFailure } from "./io.mjs";
 import { baselineId as idOf, composeProject, DIR as BASELINE_DIR } from "./baseline.mjs";
 import { DEVHUB, fleetMethods, shapeOutdated, capacityProblem } from "./org/fleet.mjs";
 import { dataMethods } from "./org/data.mjs";
@@ -14,7 +14,6 @@ import { snapshotMethods } from "./org/snapshot.mjs";
 import { setupChangesMethods } from "./org/setup-changes.mjs";
 // the helpers that moved to org/, still importable from here
 /** A Salesforce login or network failure: worth one more try, and no fault of a snapshot. */
-export const SF_TRANSIENT = /JwtAuthError|Error authenticating|ECONNRESET|ETIMEDOUT|socket hang up|HTTP 50[234]|Service Unavailable/i;
 export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB } from "./org/fleet.mjs";
 export { expandSeed, seedReplaceApex, VOLUME_MARKER, volumeApex, foldSeeds } from "./org/data.mjs";
 export { roleRebuild, personaOf, permissionSets } from "./org/users.mjs";
@@ -192,23 +191,23 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         const def = join(tmpdir(), `snapshot-${process.pid}.json`);
         writeFileSync(def, JSON.stringify({ orgName: `Lifecycle ${org.description}`, snapshot }));
         log(`creating ${org.alias} (${org.description}) from snapshot ${snapshot}, ${org.days} days`);
-        let why = "";
+        let why = "", kind = "real";
         // a login or network hiccup is not the snapshot's fault: once more from it, and never refused for it (sprint
         // 2027-w01's staging got a JWT error page, refused a good snapshot, and story #293 fell back to an old one)
         for (let attempt = 1; attempt <= 2; attempt++) {
-          try { sf([...base, "--definition-file", def, "--wait", "45"]); return { fromSnapshot: true, snapshot, baseline: self.snapshotBaseline(snapshot) }; } catch (e) { why = String(e.message).split("\n").slice(-2).join(" ").slice(0, 300); }
+          try { sf([...base, "--definition-file", def, "--wait", "45"]); return { fromSnapshot: true, snapshot, baseline: self.snapshotBaseline(snapshot) }; } catch (e) { why = String(e.message).split("\n").slice(-2).join(" ").slice(0, 300); kind = e.kind || sfFailure(e.message); }
           self.removeTagged(org.description);   // a half-made attempt must not hold a slot
-          if (!SF_TRANSIENT.test(why)) break;
+          if (kind !== "transient") break;
           if (attempt === 1) { log(`::warning::snapshot ${snapshot}: ${why.slice(0, 120)}... (a login or network error): trying once more`); sleep(30_000); }
         }
-        const transient = SF_TRANSIENT.test(why);
+        const transient = kind === "transient";
         log(`::warning::snapshot ${snapshot} could not be used (${why || "no reason given"}): creating ${org.alias} from production's shape instead`);
         record("snapshot", { action: "fallback", name: snapshot, org: org.description, why, transient });
         if (!transient) refuseSnapshot(snapshot, why);   // the next org goes straight to shape until a new snapshot is built
       }
       log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
       try { sf([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]); } catch (e) {
-        if (!shapeOutdated(e.message)) throw e;
+        if ((e.kind || sfFailure(e.message)) !== "shape") throw e;
         log(`::warning::production's org shape is outdated: refreshing it, then creating ${org.alias} once more`);
         record("shape", { action: "refresh", org: org.description });
         self.removeTagged(org.description);   // a half-made attempt must not hold a slot

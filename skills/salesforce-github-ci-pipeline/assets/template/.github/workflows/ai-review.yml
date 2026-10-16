@@ -186,32 +186,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, fetch-depth: 0 }
-      - name: Verdict to a commit status (and a label people can read)
+      # One step ends the stage (pipe finish, finish.mjs): the verdict as the commit status pipeline/ai-review on the
+      # commit reviewed (and the label people read), the gate if a person already approved, the card, then what the
+      # journey owes (AI_AUTO_CHAIN: changes -> a fix, its start decision capping the rounds; a pass on a UI-facing change
+      # -> Claude's UI test, unless one passed or runs on this commit). AI_TRIAGE: before a chained fix, Jev reads the
+      # review; findings it is sure are minor or disputed get a comment offering /review-ok instead of a Sonnet round.
+      - name: The verdict, then the gate, the card and what comes next
         id: verdict
-        run: |
-          gh pr edit "$PR" --remove-label review:pass --remove-label review:changes --remove-label ai:review 2>/dev/null || true
-          if [ -n "$NOT_NEEDED" ]; then
-            node pipeline/bin/pipe.mjs status set pipeline/ai-review success "$HEAD" "not needed: $NOT_NEEDED" --pr "$PR"; echo "verdict=not-needed" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          V=$(node pipeline/bin/pipe.mjs verdict review "$PR" --since "${{ needs.review.outputs.since }}")
-          echo "verdict=$V" >> "$GITHUB_OUTPUT"
-          case "$V" in
-            pass)    node pipeline/bin/pipe.mjs status set pipeline/ai-review success "$HEAD" "AI review passed" --pr "$PR"; gh pr edit "$PR" --add-label review:pass ;;
-            changes) node pipeline/bin/pipe.mjs status set pipeline/ai-review failure "$HEAD" "AI review asks for changes" --pr "$PR"; gh pr edit "$PR" --add-label review:changes ;;
-            *)       node pipeline/bin/pipe.mjs status set pipeline/ai-review error "$HEAD" "the review posted no verdict: tick Run the AI review again" --pr "$PR"; echo "::warning::no verdict" ;;
-          esac
-      - name: Merge now if a person already approved
         env:
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
-        run: node pipeline/bin/pipe.mjs gate nudge "$PR"
-      # Auto-chain (AI_AUTO_CHAIN=true): what the journey owes after a review (pipeline/src/journey.mjs), only into
-      # steps whose own flag is on: changes -> a fix (its start decision caps the rounds); a pass on a UI-facing change
-      # -> Claude's UI test, unless one already passed or is running on this exact commit.
-      # AI_TRIAGE: before a chained fix, Jev reads the review; findings it is sure are minor or disputed get a comment
-      # offering /review-ok instead of a Sonnet fix round (start.fixGate). A person's tick or label always runs it.
-      - name: What comes next
-        if: vars.AI_AUTO_CHAIN == 'true'
-        env:
           TYPESAFE_API_KEY: ${{ vars.AI_TRIAGE == 'true' && secrets.TYPESAFE_API_KEY || '' }}
-        run: node pipeline/bin/pipe.mjs next --after review --pr "$PR"
+        run: |
+          if [ -n "$NOT_NEEDED" ]; then V=not-needed; else V=$(node pipeline/bin/pipe.mjs verdict review "$PR" --since "${{ needs.review.outputs.since }}"); fi
+          echo "verdict=$V" >> "$GITHUB_OUTPUT"
+          case "$V" in pass|changes|not-needed) ;; *) echo "::warning::no verdict" ;; esac
+          node pipeline/bin/pipe.mjs finish review --pr "$PR" --sha "$HEAD" --outcome "$V" --detail "$NOT_NEEDED"

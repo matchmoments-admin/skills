@@ -4,6 +4,7 @@
 // the story's to fix and opens nothing; anything else is the pipeline's, including a step this table does not know:
 // a wrong ticket costs one triage, a missed one repeats in every run. Repeats update one ticket (by signature).
 import { createHash } from "node:crypto";
+import { sfFailure } from "./io.mjs";   // the one table of Salesforce and network failure kinds
 
 export const LABEL = "pipeline-improvement";
 export const MARK = "<!-- improve:";
@@ -28,7 +29,6 @@ const STORY_STEPS = [
 const PIPELINE_ALWAYS = /fatal signup error|Unknown command|SyntaxError|TypeError|ReferenceError|Cannot find module|Resource not accessible|INVALID_SESSION_ID|ECONNRESET|ETIMEDOUT|socket hang up|HTTP (404|5\d\d)|^\s*at .+\.m?js:\d+/im;
 /** Not a fault at all: the pipeline refusing or waiting on purpose (a full Dev Hub, a command used at the wrong time). */
 const REFUSAL = /No free scratch org slot|scratch org slot\(s\) free|has created its \d+ scratch orgs for today|No open sprint|is still open\. Ship it first|not green yet|Start the story first|not a PR number|bad input|PR #\d+ is not open/i;
-const TRANSIENT = /fatal signup error|ECONNRESET|ETIMEDOUT|socket hang up|HTTP 50[234]|Service Unavailable/i;
 
 /** Whose failure is it: "story" (no ticket), "pipeline" (a ticket) or "ignore". */
 export function classify({ conclusion = "failure", step = "", logTail = "" }) {
@@ -83,7 +83,7 @@ export function ticket(fault, existing = null) {
   }
   const error = scrub(fault.error).slice(0, 300);
   const tail = scrub(fault.logTail).split("\n").slice(-30).join("\n").replace(/```/g, "'''");
-  const labels = [LABEL, "needs-triage", ...(TRANSIENT.test(fault.logTail) ? ["transient"] : [])];
+  const labels = [LABEL, "needs-triage", ...(String(fault.logTail || "").split("\n").some((l) => sfFailure(l) === "transient") ? ["transient"] : [])];
   const body = [`${MARK}${sig} -->`, "### What happened", "", `${span(fault.step)} failed: ${error ? span(error) : "(no error line)"}`, "",
     "```", tail, "```", "", "### Where", "", ...where, "", "### Seen", "", `**Seen:** 1 time, last ${fault.runUrl}`, "",
     "### Cause", "", "_Triage: why the pipeline failed (not the story)._", "", "### Fix", "",

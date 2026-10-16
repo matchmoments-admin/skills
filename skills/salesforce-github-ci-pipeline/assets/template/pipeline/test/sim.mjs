@@ -75,6 +75,8 @@ export function world({ start = Date.parse("2026-10-14T00:00:00Z"), aiReview = f
     if ((m = p.match(/^actions\/runs\/(\d+)$/))) return s.runs[m[1]] || null;
     if ((m = p.match(/^collaborators\/([^/]+)\/permission$/))) return { permission: m[1].startsWith("outsider") ? "read" : "write" };
     if (p === "activity") return [];
+    // the runs going now (reconcile skips a PR with one): what a scenario has in flight, as GitHub lists them
+    if (p === "actions/runs") return { workflow_runs: /status=in_progress/.test(path) ? s.inflight.map((r) => ({ head_branch: r.ref, status: "in_progress", display_title: r.inputs?.pr ? `${r.workflow.replace(".yml", "")} PR #${r.inputs.pr}` : r.workflow.replace(".yml", "") })) : [] };
     if (p === "git/matching-refs/heads/release/") return Object.keys(s.branches).filter((b) => b.startsWith("release/")).map((b) => ({ ref: `refs/heads/${b}` }));
     if ((m = p.match(/^commits\/([^/]+)\/pulls$/))) return Object.values(s.prs).filter((x) => x.mergedHead === m[1] || tip(x.head) === m[1]).map((x) => ({ number: x.number }));
     if ((m = p.match(/^branches\/(.+)$/))) return s.branches[decodeURIComponent(m[1])] ? { name: m[1] } : { status: 404 };
@@ -98,7 +100,7 @@ export function world({ start = Date.parse("2026-10-14T00:00:00Z"), aiReview = f
       if (a === "pr" && b === "view") { const v = prView(args[2]); return args.includes("commits") && args.at(-1) === "commits" ? { commits: v.commits } : v; }
       if (a === "pr" && b === "list") {
         const head = args[args.indexOf("--head") + 1];
-        return Object.values(s.prs).filter((x) => (!args.includes("--head") || x.head === head) && (!args.includes("--state") || ["all", x.state.toLowerCase()].includes(args[args.indexOf("--state") + 1]))).map(prView);
+        return Object.values(s.prs).filter((x) => (!args.includes("--head") || x.head === head) && (!args.includes("--state") || ["all", x.state.toLowerCase()].includes(args[args.indexOf("--state") + 1]))).map((x) => prView(x.number));
       }
       if (a === "issue" && b === "view") return s.issues[args[2]] ? { body: s.issues[args[2]].body, state: s.issues[args[2]].state, title: s.issues[args[2]].title } : null;
       if (a === "issue" && b === "list") return [];

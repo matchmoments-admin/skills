@@ -7,6 +7,7 @@ import * as capacity from "../../src/capacity.mjs";
 import * as sample from "../../src/sample.mjs";
 import { personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered, foldSeeds } from "../../src/org.mjs";
 import { lane, jobId, wakeAll } from "../../src/lane.mjs";
+import { sfFailure } from "../../src/io.mjs";
 
 export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record, freed }) {
   function orgLane(target, { card = true } = {}) {
@@ -21,7 +22,7 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
   "org ready": () => {   // Org provisioning: the target's org, holding the code in the working directory (org.mjs ready)
     let o;
     try { o = orgs().ready(arg(0), { hotfix: has("hotfix"), commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), manifest: flag("manifest"), refusal: storyRefusal(io.gh, flag("pr")) }); }
-    catch (e) { if (/scratch org slot|ORG_RESERVE/.test(e.message)) output({ waiting: true }); throw e; }   // no slot: the story waits in line
+    catch (e) { if ((e.kind || sfFailure(e.message)) === "slots") output({ waiting: true }); throw e; }   // no slot: the story waits in line
     if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
     output({ alias: o.alias, created: o.created }); return say(o.alias);
   },

@@ -318,7 +318,10 @@ test("seed: dates never go stale; loaded once per org (markers); a story's own d
   assert.ok(real.every((r) => /^\$\{(THIS|NEXT|LAST)_YEAR\}-\d\d-\d\d$/.test(r.CloseDate)), "seed dates are tokens");
   assert.ok(readFileSync(new URL("../../data/seed/Account.json", import.meta.url), "utf8").includes("${SEED_MARKER}"));
   const plan = JSON.parse(readFileSync(new URL("../../data/seed/plan.json", import.meta.url), "utf8"));
-  assert.deepEqual(plan.map((p) => p.sobject), ["Account", "Contact", "Opportunity", "Case", "Lead"]);
+  // the baseline loads parents first; shipped stories' seeds are folded in after it (seed-fold), so the plan grows
+  assert.deepEqual(plan.slice(0, 5).map((p) => p.sobject), ["Account", "Contact", "Opportunity", "Case", "Lead"]);
+  const { existsSync } = await import("node:fs");
+  for (const f of plan.flatMap((p) => p.files)) assert.ok(existsSync(new URL(`../../data/seed/${f}`, import.meta.url)), `plan file ${f} exists`);
 
   const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -683,4 +686,18 @@ test("a login error from a snapshot is tried once more and never refuses it; a r
   assert.equal(twice.events.find(([k]) => k === "snapshot")[1].transient, true);
   const real = run(["SnapshotNotActive: The snapshot is not active"]);
   assert.deepEqual([real.creates, real.refused], [1, ["LCB2610140537"]], "a snapshot error: no second try, refused");
+});
+
+test("one table says what kind of Salesforce failure an error is; every caller branches on the kind", async () => {
+  const { sfFailure } = await import("../src/io.mjs");
+  assert.equal(sfFailure("ERROR running org create: JwtAuthError: Error authenticating with JWT"), "transient");
+  assert.equal(sfFailure("UNABLE_TO_LOCK_ROW: unable to obtain exclusive access"), "transient");
+  assert.equal(sfFailure("LICENSE_LIMIT_EXCEEDED: License Limit Exceeded"), "licence");
+  assert.equal(sfFailure("No free scratch org slot (3 active is the Dev Hub's limit)"), "slots");
+  assert.equal(sfFailure("REQUEST_LIMIT_EXCEEDED: TotalRequests Limit exceeded"), "limit");
+  assert.equal(sfFailure("ERROR: The org shape version is outdated. Recreate the org shape."), "shape");
+  assert.equal(sfFailure("Deploy failed: Field Tier__c does not exist"), "real");
+  for (const f of ["org.mjs", "improve.mjs", "org/users.mjs", "org/fleet.mjs"]) {
+    assert.doesNotMatch(readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8"), /JwtAuthError|LICENSE_LIMIT_EXCEEDED|shape\.\{0,40\}|HTTP 50\[234\]/, `${f} keeps no failure-kind regex of its own: io.SF_FAILURES`);
+  }
 });

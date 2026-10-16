@@ -98,7 +98,8 @@ test("shipping wiring: the gate passes the SHA and the validated tree; nothing q
   assert.match(wf("release"), /closeout run --tag "\$TAG" --sha "\$SHA"/);
   assert.match(wf("merged"), /--sha "\$MERGED_SHA"/);
   assert.match(wf("scratch-janitor"), /ship watchdog/);
-  assert.match(readFileSync(new URL("../src/actions.mjs", import.meta.url), "utf8"), /startsWith\("In UAT"\)/);
+  assert.match(readFileSync(new URL("../src/actions.mjs", import.meta.url), "utf8"), /standing\(host\.prFacts\(pr\.number\)\)\.uat/, "in UAT: Standing's reading, the card's too");
+  assert.match(wf("uat-deploy"), /pipe\.mjs gate standing --pr "\$PR" --result uat/, "is UAT already on this commit: Standing, not the statuses");
   assert.match(wf("commands"), /pipe.mjs act /);
 });
 
@@ -261,7 +262,7 @@ test("review round 3: a spec revision keeps the spec and its story link; screens
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
   assert.match(wf("ui-test"), /D=\$\(find art -type d -name evidence/);
   assert.match(wf("commands"), /group: card-\$\{\{ github\.event\.issue\.number \}\}/);
-  assert.match(wf("ai-review"), /posted no verdict: tick Run the AI review again" --pr "\$PR"/);
+  assert.match(wf("ai-review"), /case "\$V" in pass\|changes\|not-needed\) ;; \*\) echo "::warning::no verdict"/, "no verdict: finish posts it as an error");
   // every job that waits in an org lane can see whether the holder's run ended (or a dead holder blocks until the TTL)
   for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((x) => x.endsWith(".yml"))) {
     const y = wf(f.replace(/\.yml$/, ""));
@@ -345,4 +346,19 @@ test("#227: CI's rule checks run main's pipeline code, so a rule fixed on main r
   for (const cmd of ["access check", "tests flow-gaps"]) assert.match(ci, new RegExp(`node \\.pipeline/pipeline/bin/pipe\\.mjs ${cmd}`), cmd);
   const statik = ci.split(/\n  apex:\n/)[0];
   assert.ok(statik.indexOf("Trusted pipeline code (main)") < statik.indexOf(".pipeline/pipeline/bin/pipe.mjs access check"), "main's code is checked out first");
+});
+
+test("Standing is the only reader of results: no other module or workflow reads the pipeline's statuses", () => {
+  // a fifth reader with its own rule is how the UAT deadlock happened (actions.inUat, uat-deploy's jq, close-out and
+  // nudge each read pipeline/* statuses their own way; the 15 Oct review). Writers (host.status, `pipe status set`) stay.
+  const dir = new URL("../src/", import.meta.url);
+  const srcs = [...readdirSync(dir).filter((f) => f.endsWith(".mjs")).map((f) => `src/${f}`), ...readdirSync(new URL("org/", dir)).map((f) => `src/org/${f}`), "bin/pipe.mjs", ...readdirSync(new URL("../bin/commands/", import.meta.url)).map((f) => `bin/commands/${f}`)];
+  for (const f of srcs.filter((x) => x !== "src/gate.mjs" && x !== "src/github.mjs")) {
+    const s = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+    assert.doesNotMatch(s, /\/statuses(\?|`)/, `${f} reads commit statuses: ask gate.standing (or gate.statusOn for one exact commit)`);
+  }
+  for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((x) => x.endsWith(".yml"))) {
+    const runs = readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8").split("\n").filter((l) => !/^\s*#/.test(l));
+    assert.ok(!runs.some((l) => /\/statuses/.test(l)), `${f} reads commit statuses: use pipe gate standing`);
+  }
 });

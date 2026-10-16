@@ -1,7 +1,7 @@
 // Close-out after a production release (see GLOSSARY.md). plan() is pure; gather() reads GitHub and git;
 // apply() acts through the tracker and the org registry.
 import { storyOf, sprintOf, releaseBranch, setting } from "./conventions.mjs";
-import { approverOf, gather as gateGather, standing, readApprovalRecord, TRUSTED_STATUS_CREATORS } from "./gate.mjs";
+import { approverOf, gather as gateGather, standing, readApprovalRecord, statusOn, STATUS } from "./gate.mjs";
 
 /**
  * Inputs:
@@ -124,7 +124,6 @@ const hoursBetween = (a, b) => (a && b ? Math.round(((new Date(b) - new Date(a))
 export function gatherDelivery(key, io, { tag, sprint = null, now = new Date(), repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY }) {
   const { gh } = io;
   const api = (path) => gh(["api", path], { allowFail: true });
-  const latest = (sts, context) => sts.filter((s) => s.context === context).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0] || null;
   const issue = gh(["issue", "view", String(key), "--json", "title,body,createdAt"], { allowFail: true }) || {};
   const pr = (gh(["pr", "list", "--state", "merged", "--search", `head:issue-${key}`, "--limit", "20", "--json", "number,headRefName,headRefOid,createdAt,mergedAt"], { allowFail: true }) || [])
     .filter((x) => storyOf(x.headRefName) === String(key)).sort((a, b) => String(b.mergedAt).localeCompare(String(a.mergedAt)))[0];
@@ -143,7 +142,7 @@ export function gatherDelivery(key, io, { tag, sprint = null, now = new Date(), 
   const ui = ["missing", "stale"].includes(st.ui.state) ? null : st.ui;
   // the release (or, for a hotfix, the PR itself): UAT sign-off and the production validation's deploy id
   const rel = sprint ? (gh(["pr", "list", "--head", releaseBranch(sprint), "--base", "main", "--state", "merged", "--json", "number,headRefOid,mergedAt"], { allowFail: true }) || [])[0] : { headRefOid: pr.headRefOid, mergedAt: pr.mergedAt };
-  const uat = rel ? latest((api(`repos/${repo}/commits/${rel.headRefOid}/statuses?per_page=100`) || []).filter((s) => TRUSTED_STATUS_CREATORS.includes(s.creator?.login)), "pipeline/uat") : null;
+  const uat = rel ? statusOn(io.ghPages, repo, rel.headRefOid, STATUS.uat) : null;   // UAT's sign-off is for the exact commit shipped
   const validation = rel ? (api(`repos/${repo}/commits/${rel.headRefOid}/check-runs?per_page=100`)?.check_runs || []).filter((c) => c.name === "Production validation" && c.conclusion === "success")
     .map((c) => String(c.output?.summary || "").match(/`(0Af[A-Za-z0-9]+)`/)?.[1]).find(Boolean) : null;
   return {
@@ -151,7 +150,7 @@ export function gatherDelivery(key, io, { tag, sprint = null, now = new Date(), 
     approver: approverOf(issue.body), lastPusher: facts.lastPusher, approved,
     review: review ? { state: review.state, overruledBy: overruled?.[1] || null, reason, text: review.description || "" } : null,
     ui: ui ? { state: ui.state, url: ui.url || null } : null,
-    uat: uat?.state === "success" ? String(uat.description || "").match(/@([A-Za-z0-9-]+)/)?.[1] || "signed off" : null,
+    uat: uat?.state === "success" ? uat.who || "signed off" : null,
     validation,
     timeline: { storyOpened: issue.createdAt || null, prOpened: pr.createdAt, approved: approved?.at || null, merged: pr.mergedAt, released: rel?.mergedAt || null, closedOut: new Date(now).toISOString() },
   };

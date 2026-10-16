@@ -3,8 +3,8 @@
 // passed on that commit; UAT waited for a staging run that had finished before the release PR existed). Now each
 // stage's job ends with `pipe next --after <stage>`, and this module decides from the head's Standing. Pure:
 // nextSteps() takes Standing and settings and returns what to start; `pipe next` gathers and acts.
-import { STATUS, standing } from "./gate.mjs";
-import { CHECKS, uiNeeded } from "./conventions.mjs";
+import { STATUS, standing, phaseOf, requiredVerdicts } from "./gate.mjs";
+import { CHECKS, uiNeeded, storyOf, sprintOf } from "./conventions.mjs";
 
 /** The stages, in order. Story PRs: into the sprint's release branch; the release PR: into main, then production. */
 export const STAGES = {
@@ -13,7 +13,7 @@ export const STAGES = {
 };
 
 // A result that still needs its stage: none on the head, or one an earlier commit had that no longer carries.
-const owed = (v) => !v || ["missing", "stale"].includes(v.state);
+const owed = (v) => phaseOf(v) === "owed";
 // CI's org job on the head: passed, or skipped because nothing needed an org (a carried result counts as passed)
 const ciPassed = (st) => st.checks?.[CHECKS.apex]?.state === "passed";
 // The head is the AI UI test's own spec commit: the run that pushed it is still going and reports on that commit. Its
@@ -21,11 +21,16 @@ const ciPassed = (st) => st.checks?.[CHECKS.apex]?.state === "passed";
 const specPush = (st) => /^test\(e2e\): story [\w-]+$/.test(st.ctx?.pr?.commits?.at(-1)?.messageHeadline || "");
 
 /**
- * What starts after `after` finished (review | ci | staging | release-pr | org-freed), given the head's Standing (st, from
+ * What starts after `after` finished (review | ci | staging | release-pr | org-freed | any), given the head's Standing (st, from
  * gate.standing) and settings: { ai: { fix, uiTest, autoChain }, uat, uiNeeded }. Returns
  * [{ start: "fix" | "ui-test", mode? } | { dispatch: workflow, inputs }] with a why on each; [] when nothing is owed.
  */
 export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr = null } = {}) {
+  // any: whatever is owed now, whichever stage finished last (the reconcile sweep: a dropped event costs one tick)
+  if (after === "any") {
+    const seen = new Set();
+    return ["review", "ci", "staging"].flatMap((a) => nextSteps(a, st, { ai, uat, uiNeeded, pr })).filter((s) => !seen.has(s.start || s.dispatch) && seen.add(s.start || s.dispatch));
+  }
   const out = [];
   if (after === "review") {
     if (!ai.autoChain || !["feature", "hotfix"].includes(st.route)) return out;
@@ -56,7 +61,7 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
     else if (after === "release-pr" && owed(st.uat)) out.push({ dispatch: "uat-deploy.yml", inputs: { pr: String(pr), warm: "true" }, why: "UAT's org is built while staging runs" });
     return out;
   }
-  throw new Error(`journey: unknown stage "${after}" (review, ci, staging, release-pr or org-freed)`);
+  throw new Error(`journey: unknown stage "${after}" (review, ci, staging, release-pr, org-freed or any)`);
 }
 
 /**
@@ -97,6 +102,31 @@ function startWaiting({ host, gh, log = () => {} }) {
   host.repoDispatch("jira-start", { key: String(w.number), labels: (w.labels || []).map((l) => l.name).filter((l) => l !== "waiting:org").join(",") });
   log(`next after org-freed: started story #${w.number} (it was waiting for a scratch-org slot)`);
   return { steps: [{ dispatch: "issue-start", why: `story #${w.number} waited for a slot` }], said: `started story #${w.number}, which was waiting for a scratch-org slot` };
+}
+
+/**
+ * Who the change needs now, from Standing (never from how a card lays out its rows: the release mentioned its approvers
+ * as its PR opened, half an hour before staging and UAT). A release in UAT: its testers. Then, once every result before
+ * approval passed and nothing failed: the story's approver (or APPROVERS), or a release's approvers. null: nobody.
+ * facts: gate.gather(); decision: gate.evaluate(); testers: UAT_TESTERS logins. Returns { who, what } | null. Pure.
+ */
+export function needs(st, facts, { decision = null, testers = [], prUrl = "", key = null } = {}) {
+  const pr = facts.pr;
+  if (pr.state !== "OPEN" || decision?.other?.length) return null;
+  const passed = (v) => phaseOf(v) === "passed";
+  const checks = Object.values(st.checks || {});
+  if (checks.some((c) => c.state === "failed")) return null;
+  if (st.route === "release") {
+    const sprint = sprintOf(pr.headRefName) || pr.headRefName;
+    if (facts.uat && phaseOf(st.uat) === "running") return { who: testers, what: `release ${sprint} is in UAT: test it, then tick **UAT passed** on ${prUrl}` };
+    const before = [...checks.map((c) => c.state === "passed"), passed(st.uiRegression), ...(facts.uat ? [passed(st.uat)] : [])];
+    return !st.approval.ok && before.every(Boolean) ? { who: facts.approvers || [], what: `release ${sprint} is ready for your approval: ${prUrl}/files` } : null;
+  }
+  key ||= storyOf(pr.headRefName);
+  const verdicts = requiredVerdicts(facts, key).filter((v) => v.required).map((v) => (v.context === STATUS.review ? st.review : st.ui));
+  const failed = [st.review, st.ui].some((v) => phaseOf(v) === "failed");
+  if (st.approval.ok || failed || !checks.every((c) => c.state === "passed") || !verdicts.every(passed)) return null;
+  return { who: facts.storyApprover ? [facts.storyApprover] : facts.approvers || [], what: `story #${key} is ready for your approval: ${prUrl}/files` };
 }
 
 /** The verdict contexts each stage owns (what the card and the gate read for it). */

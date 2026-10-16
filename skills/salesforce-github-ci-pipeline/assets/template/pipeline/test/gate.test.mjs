@@ -158,15 +158,6 @@ test("checks are matched by exact name and only the latest run counts", () => {
   assert.deepEqual(gate.evaluate(failedThenFixed).reasons, []);
 });
 
-test("nudge: re-runs the gate on any human approval, ready, or a back-merge; otherwise waits", () => {
-  const io2 = (pr, reviews = []) => ({ gh: () => ({ state: "OPEN", labels: [], headRefName: "issue-1", baseRefName: "release/w", ...pr }), ghPages: () => reviews });
-  assert.equal(gate.nudge(1, io2({}, [{ user: { type: "User" }, state: "APPROVED" }])).action, "dispatch");
-  assert.equal(gate.nudge(1, io2({ labels: [{ name: "ready" }] })).action, "dispatch");
-  assert.equal(gate.nudge(1, io2({ headRefName: "backmerge-1" })).action, "dispatch");
-  assert.equal(gate.nudge(1, io2({}, [{ user: { type: "Bot" }, state: "APPROVED" }])).action, "none");
-  assert.equal(gate.nudge(1, io2({ state: "MERGED" })).action, "none");
-});
-
 test("pipeline paths are guarded and UI-facing changes are recognised", () => {
   assert.deepEqual(names.touchesPipeline(["pipeline/src/gate.mjs", "force-app/x", "e2e/a.spec.ts", ".github/workflows/ci.yml"]), ["pipeline/src/gate.mjs", ".github/workflows/ci.yml"]);
   assert.equal(names.uiFacing(["force-app/main/default/classes/AccountSelector.cls"]).length, 0);
@@ -259,7 +250,7 @@ test("correctness wiring: story PR base from the story, UAT never reset by a red
   assert.doesNotMatch(wf("story-pr"), /merge-base --is-ancestor/);
   assert.match(wf("uat-deploy"), /UAT already has/);
   assert.match(wf("staging-deploy"), /superseded by/);
-  assert.match(wf("staging-deploy"), /pipe.mjs next --after staging --pr "\$RPR"/, "UAT only when the journey owes it: staging passed on the head, UAT lacks it");
+  assert.match(wf("staging-deploy"), /pipe.mjs finish staging --branch "\$REL"/, "UAT only when the journey owes it: staging passed on the head, UAT lacks it (finish asks it)");
   assert.deepEqual(gate.gateStatus({ mergeable: true, validate: true, reasons: [] }), { state: "pending", description: "Ready: validating against production before merging" });
   assert.doesNotMatch(wf("gate"), /STATE=pending/, "the decision's status is mapped in one place (gateStatus)");
   assert.match(wf("gate"), /status set pipeline\/gate failure "\$HEAD_SHA" "Production rejected it/);
@@ -345,18 +336,6 @@ test("who pushed last: GitHub's push record counts, so a commit email not linked
   assert.match(gate.approvalProblem({ approvers: ["alex-admin"], lastPusher: gate.lastPusherOf(commits, pushes) }, "alex-admin"), /pushed the latest change/);
 });
 
-test("nudge: a sign-off on an earlier commit re-runs the gate only if nothing but specs changed since (no billed gate run per check)", () => {
-  process.env.GH_REPO = "o/r";
-  const BOTSTATUS = [{ context: gate.STATUS.signoff, state: "success", creator: { login: "github-actions[bot]" } }];
-  const io = (files) => ({
-    gh: (a) => (a[0] === "pr" && a.includes("state,labels,headRefName,baseRefName,headRefOid") ? { state: "OPEN", labels: [], headRefName: "issue-1", baseRefName: "release/w", headRefOid: "h2" }
-      : a[0] === "pr" ? { commits: [{ oid: "h1" }, { oid: "h2" }] } : a[0] === "api" ? { status: "ahead", files: files.map((filename) => ({ filename })) } : null),
-    ghPages: (path) => (path.includes("/reviews") ? [] : path.includes("/commits/h1/") ? BOTSTATUS : []),
-  });
-  assert.equal(gate.nudge(1, io(["e2e/story-1.spec.ts"])).action, "dispatch", "spec-only since the sign-off");
-  assert.equal(gate.nudge(1, io(["force-app/a.cls"])).action, "none", "code changed since: the sign-off no longer covers it");
-});
-
 test("Standing: one place decides what still counts on the head, and the gate, the card and the board read it", () => {
   const f = withVerdicts(fixture(23));
   const head = f.pr.headRefOid;
@@ -416,21 +395,12 @@ test("a result on a newer commit wins over one an older commit's run posted late
   assert.equal(verdictFor(STATUS.review, { ...ctx, pr: null }).state, "stale", "without the commit order: the newest by time, as before");
 });
 
-test("nudge reads the gate's own carry rule: a sign-off on an earlier commit counts only if specs alone changed since", () => {
-  const io = (files) => ({
-    gh: (a) => (a.includes("commits") ? { commits: [{ oid: "s1" }, { oid: "h" }] } : a[0] === "api" ? { status: "ahead", files: files.map((filename) => ({ filename })) } : { state: "OPEN", labels: [], headRefName: "issue-5", baseRefName: "release/w45", headRefOid: "h" }),
-    ghPages: (p) => (p.includes("/reviews") ? [] : p.includes("/s1/") ? [{ context: "pipeline/sign-off", state: "success", created_at: "t", creator: { login: "github-actions[bot]" } }] : []),
-  });
-  assert.equal(gate.nudge(5, io(["e2e/story-5.spec.ts"])).action, "dispatch");
-  assert.equal(gate.nudge(5, io(["force-app/x"])).action, "none");
-});
-
 test("the gate records the approval it accepted on the head as it merges; close-out reads that record (E17)", () => {
   const a = { ok: true, who: [{ login: "alice", how: "ticked Sign off", at: "2026-10-12T09:56:30Z" }] };
   assert.equal(gate.approvalRecord(a), "@alice (ticked Sign off, 2026-10-12T09:56Z)");
   assert.deepEqual(gate.readApprovalRecord(gate.approvalRecord(a)), { by: "alice", how: "ticked Sign off", at: "2026-10-12T09:56:00Z" });
   assert.equal(gate.readApprovalRecord("no approval needed (route)"), null);
-  assert.equal(gate.CARRY[gate.STATUS.approval], "exact", "a record is for the exact commit merged");
+  assert.equal(gate.RESULTS[gate.STATUS.approval].inputs, "exact", "a record is for the exact commit merged");
   const wf = readFileSync(new URL("../../.github/workflows/gate.yml", import.meta.url), "utf8");
   assert.ok(wf.indexOf("status set pipeline/approval success") > wf.indexOf("name: Merge (only the head"), "recorded after the merge, never before production validation");
 });
@@ -452,4 +422,34 @@ test("the verdicts that unlock a merge count only from a run of main's (or a rel
   assert.equal(d.blocking, "failure");
   assert.match(d.reasons.join(" "), /cannot change pipeline code \(\.github\/workflows\/evil\.yml\)/);
   assert.match(readFileSync(new URL("../../.github/workflows/gate.yml", import.meta.url), "utf8"), /^  pull_request_target:/m, "never a PR's own gate.yml");
+});
+
+test("nudge reads Standing: a sign-off that still covers the head, an approval (or one that does not count, so the gate says why), a back-merge", async () => {
+  const { world } = await import("./sim.mjs");
+  process.env.APPROVERS = "boss";
+  const nudge = (w, n) => gate.nudge(w.host().prFacts(n)).action;
+  const w = world();
+  w.branch("release/w45");
+  w.story("5", { approver: "boss" });
+  const h1 = w.commit("issue-5", ["force-app/main/default/classes/A.cls"], { by: "dev", from: "release/w45" });
+  w.pr(5, { head: "issue-5", base: "release/w45" });
+  assert.equal(nudge(w, 5), "none", "nobody has acted");
+  w.acting({ event: "issue_comment", branch: "main" });
+  w.status(h1, gate.STATUS.signoff, "success", "Signed off by @boss", { runId: w.state.actingRun });
+  assert.equal(nudge(w, 5), "dispatch");
+  w.commit("issue-5", ["e2e/story-5.spec.ts"], { by: "claude" });
+  assert.equal(nudge(w, 5), "dispatch", "spec-only since the sign-off: it still covers the head");
+  w.commit("issue-5", ["force-app/main/default/classes/A.cls"], { by: "dev" });
+  assert.equal(nudge(w, 5), "none", "code changed since: the sign-off no longer covers it (no billed gate run per check)");
+  const forged = w.fork();
+  forged.status(forged.tip("issue-5"), gate.STATUS.signoff, "success", "Signed off by @boss", { runId: forged.run({ event: "pull_request", branch: "issue-5" }) });
+  assert.equal(nudge(forged, 5), "none", "a sign-off from the branch's own workflow is not trusted");
+  w.approve(5, "dev");
+  assert.equal(nudge(w, 5), "dispatch", "an approval that does not count still re-runs the gate, which says why");
+  const merged = w.fork(); merged.merge(5);
+  assert.equal(nudge(merged, 5), "none");
+  w.commit("backmerge-1", [".github/workflows/x.yml"], { by: "github-actions", from: "main" });
+  w.pr(6, { head: "backmerge-1", base: "release/w45", author: "github-actions" });
+  assert.equal(nudge(w, 6), "dispatch", "a back-merge needs no one");
+  delete process.env.APPROVERS;
 });

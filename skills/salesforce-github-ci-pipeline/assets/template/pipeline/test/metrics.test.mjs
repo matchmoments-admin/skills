@@ -258,3 +258,18 @@ test("delivery record (enterprise D): the shipped story's trail, read from GitHu
   assert.equal(cards.length, 1);
   assert.equal(cards[0][1], DELIVERY_MARK);
 });
+
+test("every event a module records is a known kind, and no payload sets the envelope's own fields (shape was never logged; Jev's run was overwritten)", async () => {
+  const { isKind, RESERVED, event } = await import("../src/events.mjs");
+  const { readdirSync } = await import("node:fs");
+  const dir = new URL("../src/", import.meta.url);
+  const files = [...readdirSync(dir).filter((f) => f.endsWith(".mjs")).map((f) => new URL(f, dir)), ...readdirSync(new URL("org/", dir)).map((f) => new URL(`org/${f}`, dir)),
+    new URL("../bin/pipe.mjs", import.meta.url), ...readdirSync(new URL("../bin/commands/", import.meta.url)).map((f) => new URL(`../bin/commands/${f}`, import.meta.url))];
+  const calls = files.flatMap((u) => [...readFileSync(u, "utf8").matchAll(/\brecord\??\.?\(?\s*"([a-z]+)",\s*\{([^}]*)\}/g)].map((m) => ({ file: u.pathname.split("/pipeline/")[1], kind: m[1], keys: [...m[2].matchAll(/(?:^|,)\s*([a-zA-Z]+)\s*(?::|,|$)/g)].map((k) => k[1]) })));
+  assert.ok(calls.length > 20, `found the record() calls (${calls.length})`);
+  for (const c of calls) {
+    assert.ok(isKind(c.kind), `${c.file}: record("${c.kind}") is not a known kind (events.mjs KINDS)`);
+    assert.deepEqual(c.keys.filter((k) => RESERVED.includes(k)), [], `${c.file}: record("${c.kind}") sets an envelope field`);
+  }
+  assert.throws(() => event("jev", { run: true }), /envelope's own field/);
+});

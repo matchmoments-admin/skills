@@ -317,25 +317,25 @@ jobs:
           gh api -H "Accept: application/vnd.github.raw" "repos/$GH_REPO/contents/e2e/story-$KEY.spec.ts?ref=$HEAD_SHA" > "$RUNNER_TEMP/spec.ts"
           node pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story-check.md" >/dev/null 2>&1 || true
           node pipeline/bin/pipe.mjs ui spec-check --file "$RUNNER_TEMP/spec.ts" --story "$RUNNER_TEMP/story-check.md"
-      - name: Verdict to a commit status (and a label people can read)
+      # One step ends the stage (pipe finish, finish.mjs): the verdict as pipeline/ui-test on the commit tested (no spec,
+      # a spec that checks too little, a pass with its evidence, a failure with Jev's guess), the label people read, the
+      # gate if a person already approved, then the card. What it means for people is said in a comment first.
+      - name: The verdict, then the gate and the card
         env:
           KIND: ${{ steps.triage.outputs.kind }}
           WHY: ${{ steps.triage.outputs.why }}
           WEAK: ${{ steps.speccheck.outputs.problems }}
           EVIDENCE_URL: ${{ steps.evidence.outputs.url }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: |
-          gh pr edit "$PR" --remove-label ui:pass --remove-label ui:fail --remove-label test --remove-label ai:test 2>/dev/null || true
-          if [ "$HAS_SPEC" != "true" ]; then
-            node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "no spec e2e/story-$KEY.spec.ts committed"; gh pr edit "$PR" --add-label ui:fail
-          elif [ "$OUTCOME" = "success" ] && [ -n "$WEAK" ]; then
-            node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "the spec passed but checks too little: ${WEAK}"; gh pr edit "$PR" --add-label ui:fail
+          if [ "$HAS_SPEC" = "true" ] && [ "$OUTCOME" = "success" ] && [ -n "$WEAK" ]; then
             gh pr comment "$PR" --body "UI test: the spec passed, but $WEAK. Tick **Have Claude write and run the UI test** to rewrite it, or fix e2e/story-$KEY.spec.ts and tick **Run the committed UI test**."
-          elif [ "$OUTCOME" = "success" ]; then
-            node pipeline/bin/pipe.mjs status set pipeline/ui-test success "$HEAD_SHA" "UI test passed" ${EVIDENCE_URL:+--url "$EVIDENCE_URL"}; gh pr edit "$PR" --add-label ui:pass
-          else
-            node pipeline/bin/pipe.mjs status set pipeline/ui-test failure "$HEAD_SHA" "the spec failed${KIND:+ (Jev guesses: $KIND)}"; gh pr edit "$PR" --add-label ui:fail
-            if [ -n "$KIND" ] && [ "$KIND" != "unknown" ]; then gh pr comment "$PR" --body "UI test failed. Jev's guess: **$KIND** ($WHY). It is a guess: check the report (screenshot and error context) before acting on it."; fi
+          elif [ "$HAS_SPEC" = "true" ] && [ "$OUTCOME" != "success" ] && [ -n "$KIND" ] && [ "$KIND" != "unknown" ]; then
+            gh pr comment "$PR" --body "UI test failed. Jev's guess: **$KIND** ($WHY). It is a guess: check the report (screenshot and error context) before acting on it."
           fi
+          node pipeline/bin/pipe.mjs finish ui-test --pr "$PR" --sha "$HEAD_SHA" --story "$KEY" --outcome "$OUTCOME" --weak "$WEAK" --kind "$KIND" \
+            $([ "$HAS_SPEC" = "true" ] || echo --no-spec) ${EVIDENCE_URL:+--url "$EVIDENCE_URL"}
       - name: A likely flake gets one re-run
         id: retry
         if: steps.triage.outputs.kind == 'flake'
@@ -356,8 +356,3 @@ jobs:
       - name: CI on the spec commit (only needed without the App)
         if: needs.write.result == 'success' && needs.write.outputs.is-app != 'true'
         run: gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
-      - name: Merge now if a person already approved
-        env:
-          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
-          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
-        run: node pipeline/bin/pipe.mjs gate nudge "$PR"

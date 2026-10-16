@@ -9,7 +9,7 @@
 // AI is optional (facts.ai, from the AI_* repo variables). Required verdicts: the AI review only when AI_REVIEW is on;
 // the UI test when the change is UI-facing and either AI_UI_TEST is on or the PR commits its story spec. A failed
 // verdict on the code always blocks, whatever the flags. With every flag off, CI plus a person's approval is the gate.
-import { CHECKS, storyOf, sprintOf, uiNeeded, storySpec, isPipelineAuthor, isHumanAuthor, setting, touchesPipeline } from "./conventions.mjs";
+import { CHECKS, LIVE_TESTS_CHECK, storyOf, sprintOf, uiNeeded, storySpec, isPipelineAuthor, isHumanAuthor, setting, touchesPipeline } from "./conventions.mjs";
 
 // signoff: a person's sign-off on a story PR into the sprint (a ticked box or /ship), recorded by an agent-free job.
 // approval: the gate's record of the approval it accepted, posted when it decides to merge (close-out reads it, so a
@@ -116,59 +116,79 @@ export function checkState(conclusion) {
 export const checkPassed = (conclusion) => checkState(conclusion) === "passed";
 
 /**
- * Does a result on an earlier commit still count on the head? One rule per result (see GLOSSARY.md: Standing):
- *   specs    a review or sign-off: only specs (e2e/) changed since
- *   exact    the UI test (the spec IS that test), UAT (a person signed off that code), the gate's approval record
- *   no-sf    CI's Salesforce tests: nothing under force-app changed since (a spec-only push needs no deploy), and no
- *            pipeline file either: a commit whose workflows were the branch's own could have faked that pass
- * files: what changed from that commit to the head (null if unknown, which never carries). Pure.
+ * Each result and what it depends on (see GLOSSARY.md: Standing). A result on an earlier commit still counts on the
+ * head when no file changed since is one of its inputs; "exact" results count only on the commit they judged.
+ *   inputs   (file) => does this file change what the result proved? or "exact"
+ *   running  the inputs a result still being produced (pending) carries over, when not its own: the AI UI test's own
+ *            spec push keeps it running (the card said "run it again" while it ran, 14 Oct); UAT pending on an
+ *            older commit is UAT owed on the head (release 2027-w01: the journey read it as running, /uat-pass refused)
+ *   proof    a check-run result: the check that exists only where its tests really ran (start.carriedFrom reads it)
+ * A file list that is unknown (null: a diverged history, a failed diff) never carries.
  */
-export const CARRY = { [STATUS.review]: "specs", [STATUS.signoff]: "specs", [STATUS.ui]: "exact", [STATUS.uat]: "exact", [STATUS.approval]: "exact", apex: "no-sf", staging: "no-apex-input", [STATUS.uiRegression]: "no-staging-input" };
+const spec = (f) => f.startsWith("e2e/");
 /** What the staging regression tests: Salesforce source, specs, seed and org config, and the code that builds and runs
  *  staging. A release-branch commit that changes none of these (a back-merge of other pipeline work) keeps the
  *  regression an earlier commit passed (#237). */
 export const STAGING_INPUTS = /^(force-app\/|e2e\/|data\/|config\/|baseline\/|sfdx-project\.json$|package(-lock)?\.json$|playwright\.config\.ts$|\.github\/actions\/|\.github\/workflows\/staging-deploy\.yml$|pipeline\/src\/(org|tests|evidence|baseline|io|settings|conventions|harness)\.mjs$|pipeline\/src\/org\/)/;   // settings: the seed and baseline defaults; harness: main's copy over the specs
 const UI_ONLY = /^(e2e\/|playwright\.config\.ts$)/;
-export function carries(rule, sha, head, files) {
-  if (sha === head) return true;
-  if (rule === "exact" || !Array.isArray(files)) return false;
-  if (rule === "no-staging-input") return !files.some((f) => STAGING_INPUTS.test(f));
+export const RESULTS = {
+  // a review or a sign-off: the code, not its specs (a spec-only push keeps them)
+  [STATUS.review]: { inputs: (f) => !spec(f) },
+  [STATUS.signoff]: { inputs: (f) => !spec(f) },
+  // the UI test: the spec IS that test, so a changed spec has not passed yet (story #166: a weakened spec rode on an
+  // earlier pass); while it runs, its own spec commit keeps it running
+  [STATUS.ui]: { inputs: "exact", running: (f) => !spec(f) },
+  // UAT (a person signed off that code) and the gate's approval record (for the exact commit merged)
+  [STATUS.uat]: { inputs: "exact" },
+  [STATUS.approval]: { inputs: "exact" },
+  [GATE_STATUS]: { inputs: "exact" },
+  // CI's Salesforce tests: nothing under force-app changed, and no pipeline file (a commit whose workflows were the
+  // branch's own could have faked that pass)
+  apex: { inputs: (f) => f.startsWith("force-app/") || touchesPipeline([f]).length > 0, proof: CHECKS.apex },
   // staging's Apex and Flow run: specs are the UI regression's input, not theirs (release 2027-w01 re-ran 149 Apex
-  // tests for a one-line spec fix)
-  if (rule === "no-apex-input") return !files.some((f) => STAGING_INPUTS.test(f) && !UI_ONLY.test(f));
-  return rule === "no-sf" ? !files.some((f) => f.startsWith("force-app/")) && !touchesPipeline(files).length : files.every((f) => f.startsWith("e2e/"));
+  // tests for a one-line spec fix); proven only where the tests really ran (a superseded or UI-only run has no check)
+  staging: { inputs: (f) => STAGING_INPUTS.test(f) && !UI_ONLY.test(f), proof: LIVE_TESTS_CHECK },
+  [STATUS.uiRegression]: { inputs: (f) => STAGING_INPUTS.test(f) },
+};
+/** Does `result` on commit `sha` still count on `head`, given the files changed between them? running: it is still
+ *  being produced (pending). Pure. */
+export function carries(result, sha, head, files, { running = false } = {}) {
+  const row = RESULTS[result];
+  if (!row) throw new Error(`carries: unknown result "${result}"`);
+  if (sha === head) return true;
+  const inputs = (running && row.running) || row.inputs;
+  if (inputs === "exact" || !Array.isArray(files)) return false;
+  return !files.some(inputs);
 }
-/** True if every file changed between a commit and the head is under e2e/ (the UI tester's spec). */
-const onlySpecsSince = (sha, head, diffsToHead) => carries("specs", sha, head, diffsToHead[sha]);
+/** True if every file changed between a commit and the head is under e2e/ (an approval's rule: the review's). */
+const onlySpecsSince = (sha, head, diffsToHead) => carries(STATUS.review, sha, head, diffsToHead[sha]);
 
 /**
- * The newest earlier commit whose result still carries to the head (CI's Salesforce tests, rule no-sf), or null.
- * passed: commits (newest first, the head excluded) on which that check succeeded; changedSince(sha): files from it
- * to the head, or null. Pure apart from changedSince.
+ * The newest earlier commit whose result still carries to the head (CI's or staging's Salesforce tests), or null.
+ * passed: commits (newest first) on which the result's proof succeeded; changedSince(sha): files from it to the head,
+ * or null. Pure apart from changedSince.
  */
-export function carriedFrom(rule, { head, passed = [], changedSince }) {
-  for (const sha of passed) if (carries(rule, sha, head, changedSince(sha))) return sha;
+export function carriedFrom(result, { head, passed = [], changedSince }) {
+  for (const sha of passed) if (carries(result, sha, head, changedSince(sha))) return sha;
   return null;
 }
+/** A result's phase for the journey and the cards: owed (none, or one that no longer counts), running, passed, failed. */
+export const phaseOf = (v) => (!v || ["missing", "stale"].includes(v.state) ? "owed" : v.state === "pending" ? "running" : v.state === "success" ? "passed" : "failed");
 /** The verdict a status context gives the head: { state: "success" | "failure" | "stale" | "missing" | ... }. */
 export function verdictFor(context, { statuses = [], head, diffsToHead = {}, pr = null }) {
   const mine = statuses.filter((s) => s.context === context && TRUSTED_STATUS_CREATORS.includes(s.creator?.login) && s.trusted !== false)
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-  if (!mine.length) return { state: "missing" };
+  if (!mine.length) return { state: "missing", phase: "owed" };
   // the newest commit's result first, then the newest by time on it: a run on an older commit that finished late (a
   // review of a superseded push) must not hide the one running on a newer commit (scenario fuzz, 15 Oct)
   const order = [...(pr?.commits || []).map((c) => c.oid), head];
   const rank = (sha) => order.lastIndexOf(sha);
   const top = Math.max(...mine.map((s) => rank(s.sha)));
   const last = top >= 0 ? mine.filter((s) => rank(s.sha) === top).at(-1) : mine[mine.length - 1];
-  // still running, and only specs changed since (the AI UI test's own spec commit): running, not stale (the card said
-  // "run it again" while the test ran, 14 Oct). The UI test only: UAT pending on an older commit is UAT owed on the
-  // head (release 2027-w01: the journey read it as running, /uat-pass refused it, and nothing redeployed UAT)
-  if (last.state === "pending" && context === STATUS.ui && carries("specs", last.sha, head, diffsToHead[last.sha])) return { state: "pending", description: last.description || "", url: last.url || null, sha: last.sha, at: last.created_at || null };
-  // A spec-only push keeps a review or sign-off, but not the UI test: the spec IS that test, so a changed spec has
-  // not passed yet (story #166: a weakened spec rode on the earlier pass). Nor UAT: a person signed off that code.
-  if (!carries(CARRY[context] || "specs", last.sha, head, diffsToHead[last.sha])) return { state: "stale", sha: last.sha };
-  return { state: last.state, description: last.description || "", url: last.url || null, sha: last.sha, at: last.created_at || null };
+  if (!carries(context, last.sha, head, diffsToHead[last.sha], { running: last.state === "pending" })) return { state: "stale", phase: "owed", sha: last.sha };
+  // who acted, once: the sign-off's or UAT's signer, the person who overruled a review ("... by @login")
+  const who = String(last.description || "").match(/@([A-Za-z0-9-]+)/)?.[1] || null;
+  return { state: last.state, phase: phaseOf(last), description: last.description || "", url: last.url || null, sha: last.sha, at: last.created_at || null, who };
 }
 
 /** The approving reviews that cover the code as it is now: latest decisive review per human, on the head (or e2e-only since). */
@@ -227,7 +247,7 @@ export function approval(ctx, { signOff = false } = {}) {
   const seen = approvingReviews(ctx).map((r) => ({ login: r.user.login, at: r.submitted_at, how: "approved the pull request" }));
   if (signOff) {
     const s = verdictFor(STATUS.signoff, ctx);
-    if (s.state === "success") seen.push({ login: String(s.description || "").match(/@([A-Za-z0-9-]+)/)?.[1] || "", at: s.at, how: "ticked Sign off" });
+    if (s.state === "success") seen.push({ login: s.who || "", at: s.at, how: "ticked Sign off" });
     seen.push(...readyEvents(ctx).map(([at, login, how]) => ({ login, at, how })));
   }
   const who = [], refused = [];
@@ -280,7 +300,7 @@ export function standing(facts) {
   return {
     route: r, rules, ctx,
     review: verdictFor(STATUS.review, ctx), ui: verdictFor(STATUS.ui, ctx), signoff: verdictFor(STATUS.signoff, ctx), uat: verdictFor(STATUS.uat, ctx), uiRegression: verdictFor(STATUS.uiRegression, ctx),
-    record: verdictFor(STATUS.approval, ctx),
+    record: verdictFor(STATUS.approval, ctx), gate: verdictFor(GATE_STATUS, ctx),
     approval: kind === "none" ? { ok: true, by: [], who: [], refused: [], none: true } : approval(ctx, { signOff: kind === "sign-off" }),
     checks: Object.fromEntries((rules?.checks || [CHECKS.static, CHECKS.apex]).map((n) => { const c = latestCheck(checkRuns, n); return [n, { conclusion: c, state: checkState(c) }]; })),
   };
@@ -398,7 +418,7 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
   const statuses = [];
   for (const c of pr.commits || []) {
     for (const s of ghPages(`repos/${repo}/commits/${c.oid}/statuses?per_page=100`)) {
-      if (Object.values(STATUS).includes(s.context)) statuses.push({ sha: c.oid, context: s.context, state: s.state, description: s.description, url: s.target_url, created_at: s.created_at, creator: { login: s.creator?.login } });
+      if ([...Object.values(STATUS), GATE_STATUS].includes(s.context)) statuses.push({ sha: c.oid, context: s.context, state: s.state, description: s.description, url: s.target_url, created_at: s.created_at, creator: { login: s.creator?.login } });
     }
   }
   // provenance of the verdicts that unlock a merge with nobody looking: the run that posted them (trustedRun)
@@ -441,30 +461,24 @@ export function gather(prNumber, { gh, ghPages }, { openReleaseBranch = null, ai
     approvers, storyApprover: approverOf(body), lastPusher: lastPusherOf(pr.commits, Array.isArray(pushes) ? pushes : []) };
 }
 
-/** Re-run the gate when a person has signed off (or the PR needs no sign-off), so it merges when its last input lands.
- *  The gate itself decides whether that sign-off still covers the code. */
-export function nudge(prNumber, { gh, ghPages }) {
-  const repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY;
-  const pr = gh(["pr", "view", String(prNumber), "--json", "state,labels,headRefName,baseRefName,headRefOid"]);
+/** Re-run the gate when a person has acted (or the PR needs no one), so it merges when its last input lands: an
+ *  approval that counts under the route's rule (a review, a ticked Sign off, /ship, `ready`), or one that does not,
+ *  so the gate says why. Standing decides, as for the gate itself: the trusted sign-off, its carry, nobody approving
+ *  their own push (it used to read the statuses itself and took any approving review). Pure: facts from gather(). */
+export function nudge(facts) {
+  const pr = facts.pr;
   if (pr.state !== "OPEN") return { action: "none", why: "PR is not open" };
-  if (route(pr) === "backmerge" || pr.labels.some((l) => l.name === "ready")) return { action: "dispatch" };
-  const approved = ghPages(`repos/${repo}/pulls/${prNumber}/reviews?per_page=100`).some((r) => r.user?.type === "User" && r.state === "APPROVED");
-  if (approved) return { action: "dispatch" };
-  // a ticked Sign off (or /ship): the trusted pipeline/sign-off status on any of its last 20 commits, if it still
-  // carries to the head (verdictFor's rule, the gate's own): a sign-off that no longer covers the head would start a
-  // gate run, a billed minute, on every check and verdict until someone signs off again
-  const listed = (gh(["pr", "view", String(prNumber), "--json", "commits"])?.commits || []).map((c) => c.oid).reverse().slice(0, 20);
-  const shas = listed.length ? listed : [pr.headRefOid];
-  const statuses = shas.flatMap((sha) => ghPages(`repos/${repo}/commits/${sha}/statuses?per_page=100`)
-    .filter((s) => s.context === STATUS.signoff).map((s) => ({ sha, context: s.context, state: s.state, created_at: s.created_at, creator: { login: s.creator?.login } })));
-  const last = statuses.filter((s) => TRUSTED_STATUS_CREATORS.includes(s.creator.login)).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).pop();
-  const diffsToHead = {};
-  if (last && last.sha !== pr.headRefOid) {
-    const cmp = gh(["api", `repos/${repo}/compare/${last.sha}...${pr.headRefOid}`], { allowFail: true });
-    diffsToHead[last.sha] = cmp && cmp.status !== "diverged" ? (cmp.files || []).map((f) => f.filename) : null;
-  }
-  const signedOff = verdictFor(STATUS.signoff, { statuses, head: pr.headRefOid, diffsToHead }).state === "success";
-  return signedOff ? { action: "dispatch" } : { action: "none", why: "not signed off yet" };
+  if (route(pr) === "backmerge") return { action: "dispatch" };
+  const a = standing(facts).approval;
+  return a.ok || a.refused.length ? { action: "dispatch" } : { action: "none", why: "not signed off yet" };
+}
+
+/** The newest trusted status of `context` on exactly `sha`, read the way Standing reads an exact result: close-out's
+ *  UAT signer on the merged release head, regate's gate success. ghPages: the io seam. */
+export function statusOn(ghPages, repo, sha, context) {
+  const statuses = ghPages(`repos/${repo}/commits/${sha}/statuses?per_page=100`).filter((s) => s.context === context)
+    .map((s) => ({ sha, context: s.context, state: s.state, description: s.description, url: s.target_url, created_at: s.created_at, creator: { login: s.creator?.login } }));
+  return verdictFor(context, { statuses, head: sha });
 }
 
 /** The stories a story's body says block it ("Blocked by #12, #14"). Pure. */

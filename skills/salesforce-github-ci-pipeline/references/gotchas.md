@@ -293,8 +293,28 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **A queued ship vanished**: GitHub keeps one pending run per concurrency group and cancels the older one. → After
   each ship, `pipe ship renudge` re-runs the gate for the other approved PRs; `pipe ship watchdog` (janitor) catches a
   lost release.
-- **`/uat-pass` signed the release PR's head even when UAT still ran an older commit.** → It signs only a commit with
-  uat-deploy's "In UAT" status.
+- **`/uat-pass` signed the release PR's head even when UAT still ran an older commit.** → It signs only when Standing
+  reads UAT running on the head, the card's own reading.
+- **Four modules read the pipeline's statuses, each its own way** (the UAT deadlock: the card said "in UAT", `/uat-pass`
+  refused). → Standing is the only reader; a test fails any other module or workflow that reads `/statuses`. A workflow
+  asks `pipe gate standing --pr N --result uat`.
+- **An older commit's run that finished late hid the newer commit's result** (a superseded review). → The newest
+  commit's result wins, in the PR's commit order, then the newest by time on it.
+- **A running AI review posted no status**, so the card offered a second one. → The start decision posts it pending.
+- **Each workflow ended its stage in its own order** (a lane released before its status; a planned UI regression that
+  failed to start recorded nothing). → One step, `pipe finish <stage>`: verdict, gate, card, next, in that order.
+- **A dropped `workflow_run` stalled a story with nothing running** (13 Oct). → `pipe reconcile` in the janitor every
+  6 hours starts what is owed on idle PRs; a workflow's run-name names its PR so the sweep can tell it is going.
+- **A flag read without being declared as taking a value** (`--result uat` made `uat` a positional). → A test checks
+  every `flag("x")` a command reads is in `VALUE_FLAGS`.
+- **Each module kept its own regex for Salesforce failures** (the snapshot retry knew a JWT error was a hiccup; the
+  improvement tickets did not). → `io.sfFailure`: one table (transient, licence, slots, limit, shape, real); `sf()`
+  sets `err.kind` and callers branch on it.
+- **An event payload named a field the envelope owns** (`kind`, `run`): Jev's fix decisions were stored under another
+  kind and never counted. → `event()` throws on the envelope's fields, and a test scans every `record()` call.
+- **Unit tests of each module passed while the modules disagreed.** → Scenario tests on a simulated code host
+  (`pipeline/test/sim.mjs`) check invariants after every step: card agrees with Standing, what the card offers the
+  action accepts, a person is called only when needed, nothing is stuck. Seeded fuzz found two bugs on its first run.
 - **A production validation that could not start said only "could not start".** → It reports the CLI's error per level.
 
 ## Skills on GitHub

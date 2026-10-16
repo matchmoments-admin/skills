@@ -244,19 +244,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: main }
-      - name: UI test not needed (no UI-facing changes)
-        if: github.event_name == 'pull_request' && needs.static.outputs.ui == 'false'
-        run: |
-          node pipeline/bin/pipe.mjs status set pipeline/ui-test success "${{ github.event.pull_request.head.sha }}" "not needed: no UI-facing changes" --pr "${{ github.event.pull_request.number }}"
-      - name: Merge now if a person already approved
+      # One step ends the stage (pipe finish, finish.mjs): the UI test as not needed when nothing is UI-facing, the gate
+      # if a person already approved, the card, then what the journey owes (AI_AUTO_CHAIN: a review that passed before CI
+      # finished left Claude's UI test to CI, #230)
+      - name: The verdict, then the gate, the card and what comes next
         env:
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          UI: ${{ needs.static.outputs.ui }}
         run: |
           PRN="${{ github.event.pull_request.number }}"
           [ -n "$PRN" ] || PRN=$(gh pr list --head "$REF" --state open --json number --jq '.[0].number // empty')
-          [ -z "$PRN" ] || node pipeline/bin/pipe.mjs gate nudge "$PRN"
-      # Auto-chain: a review that passed before CI finished left Claude's UI test to CI (journey.mjs, #230)
-      - name: What comes next
-        if: vars.AI_AUTO_CHAIN == 'true' && github.event_name == 'pull_request'
-        run: node pipeline/bin/pipe.mjs next --after ci --pr "${{ github.event.pull_request.number }}"
+          [ -n "$PRN" ] || exit 0
+          O=""; [ "${{ github.event_name }}" = pull_request ] && [ "$UI" = false ] && O=no-ui
+          node pipeline/bin/pipe.mjs finish ci --pr "$PRN" --sha "${{ github.event.pull_request.head.sha }}" --outcome "$O"

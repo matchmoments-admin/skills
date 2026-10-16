@@ -2,6 +2,7 @@
 // Part of Org provisioning (pipeline/src/org.mjs): orgRegistry composes these methods with the provisioning core.
 import { join } from "node:path";
 import { storyOf } from "../conventions.mjs";
+import { sfFailure } from "../io.mjs";
 
 export const DEVHUB = "devhub";
 /**
@@ -44,7 +45,7 @@ export function capacityProblem({ active = {}, daily = {} }, holders = [], reser
 }
 
 /** Salesforce refuses an org from a shape that a release has aged (E5): refresh the shape and try once more. */
-export const shapeOutdated = (message) => /shape.{0,40}(outdated|out of date|expired)|outdated.{0,40}shape/i.test(String(message || ""));
+export const shapeOutdated = (message) => sfFailure(message) === "shape";   // io.SF_FAILURES, the one table
 
 /** A job for a PR never rebuilds the story org once that PR is no longer open (a late UI test rebuilt issue-193 after
  *  its merge and took the slot UAT needed, E16). Jobs without a PR (start, build) always may: a reopened story gets its

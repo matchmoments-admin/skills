@@ -7,11 +7,17 @@
 // path each time, so writers never conflict on a file. Readers fetch the branch once.
 
 export const BRANCH = "metrics";
-const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed"];
+const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile"];
+
+/** The envelope's own fields: a payload never sets them (Jev's `run` was silently replaced by the Actions run id). */
+export const RESERVED = ["v", "at", "kind", "run", "workflow", "job"];
+export const isKind = (kind) => KINDS.includes(kind);
 
 /** The event as stored: what happened plus where (run, workflow, job). Pure. */
 export function event(kind, data = {}, env = process.env, now = new Date()) {
   if (!KINDS.includes(kind)) throw new Error(`Unknown event kind: ${kind}`);
+  const clash = Object.keys(data).filter((k) => RESERVED.includes(k));
+  if (clash.length) throw new Error(`event ${kind}: ${clash.join(", ")} is the envelope's own field; name it something else`);
   const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined && v !== null && v !== ""));
   return { v: 1, at: now.toISOString(), kind, ...clean, run: env.GITHUB_RUN_ID || null, workflow: env.GITHUB_WORKFLOW || null, job: env.GITHUB_JOB || null };
 }

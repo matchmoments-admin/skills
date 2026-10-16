@@ -5,7 +5,9 @@
 //   labels    sync                                       create or update every label the pipeline uses
 //   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits · capacity [--devs N] [--uat-sandbox] (load and cost)
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
-//   next      --after review|ci|staging|release-pr|org-freed [--pr N]   what the journey owes next, started (journey.mjs)
+//   next      --after review|ci|staging|release-pr|org-freed|any [--pr N]   what the journey owes next, started (journey.mjs)
+//   finish    review|ui-test|ci|staging|uat --pr N|--branch B --sha S --outcome O [--detail D]   end a stage (finish.mjs)
+//   reconcile [--pr N]                                    start what is owed on every idle open PR (the janitor's sweep)
 //   lane      acquire|release <org target> [--minutes M] [--no-card] [--park KIND] · wake   one job at a time per org; parked jobs re-run
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
@@ -67,11 +69,12 @@ import * as baseline from "../src/baseline.mjs";
 import * as start from "../src/start.mjs";
 import * as harness from "../src/harness.mjs";
 import * as journey from "../src/journey.mjs";
+import { finish, reconcile, STAGE } from "../src/finish.mjs";
 import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -174,10 +177,18 @@ const commands = {
   "gate nudge": async () => {
     // after every check or verdict: re-run the gate if a person signed off, and refresh the story card
     const pr = arg(0);
-    const n = gate.nudge(pr, io);
+    const n = gate.nudge(host.prFacts(pr));
     if (n.action === "dispatch") host.dispatch("gate.yml", { pr });
     await cards.refreshPr(pr);
     return say(n.action === "dispatch" ? `re-ran the gate for approved PR #${pr}` : `nothing to do: ${n.why}`);
+  },
+  "gate standing": () => {
+    // one result on a PR's head, as the gate reads it (owed | running | passed | failed): workflows ask this, never
+    // the statuses themselves (uat-deploy: is UAT already on this commit?)
+    const r = gate.standing(host.prFacts(flag("pr")))[flag("result")];
+    if (!r) throw new Error(`gate standing: unknown result "${flag("result")}" (review, ui, signoff, uat, uiRegression, record, gate)`);
+    output({ phase: r.phase, state: r.state, sha: r.sha || "" });
+    return say(`${r.phase} (${flag("result")}: ${r.state}${r.sha ? ` on ${r.sha.slice(0, 7)}` : ""})`);   // the phase first: a step reads it
   },
   "status set": () => {
     // a verdict on an exact commit; agent-free steps only, with the Actions token (see gate.mjs)
@@ -220,6 +231,16 @@ const commands = {
     const p = start.ciPlan({ ref, base, files: out === null ? null : out.split("\n").filter(Boolean), carried });
     output({ ...p, base });
     return say(JSON.stringify(p));
+  },
+  // the last step of every job that produces a result: verdict, gate, card, then what is owed next (finish.mjs)
+  ...Object.fromEntries(Object.keys(STAGE).map((stage) => [`finish ${stage}`, async () => {
+    const r = await finish(stage, { pr: flag("pr"), branch: flag("branch"), sha: flag("sha"), url: flag("url"), outcome: flag("outcome", ""), detail: flag("detail", ""), weak: flag("weak", ""), kind: flag("kind", ""), story: flag("story", ""), hasSpec: !has("no-spec"), planned: has("planned") },
+      { host, gh: io.gh, cards, next: nextAfter, record, log });
+    return say(r.said);
+  }])),
+  "reconcile ": async () => {   // the sweep (janitor): what is owed on every idle open PR, started; a dropped event costs one tick
+    const r = await reconcile({ host, gh: io.gh, cards, next: nextAfter, record, log, only: flag("pr") });
+    return say(r.map((x) => `#${x.pr}: ${x.skipped || (x.started.length ? `started ${x.started.join(", ")}` : "nothing owed")}`).join("\n") || "no open pull request");
   },
   "next ": async () => { const r = await nextAfter(flag("after"), flag("pr")); output({ next: r.steps.map((x) => x.start || x.dispatch).join(" ") }); return say(r.said); },
   "ci results": () => { const t = roles.ciResults(io.ghPages(`repos/${host.repo}/commits/${arg(0)}/check-runs?per_page=100`, "check_runs")); if (flag("out")) writeFileSync(flag("out"), t); return say(t); },   // for an agent or Jev
@@ -399,7 +420,7 @@ const commands = {
     return say(`${p.action}: ${p.why}`);
   },
   "ship renudge": () => {
-    const again = shipping.renudge(io, host, { base: flag("base", "main"), except: flag("except") }, (n) => gate.nudge(n, io));
+    const again = shipping.renudge(io, host, { base: flag("base", "main"), except: flag("except") }, (n) => gate.nudge(host.prFacts(n)));
     return say(again.length ? `re-ran the gate for ${again.map((n) => `#${n}`).join(", ")}` : `nothing else waiting on ${flag("base", "main")}`);
   },
   "ship watchdog": () => {

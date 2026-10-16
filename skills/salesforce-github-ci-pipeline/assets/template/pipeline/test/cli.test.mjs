@@ -79,3 +79,10 @@ test("every pipe command is reachable: a one-word command is keyed with its trai
   for (const k of keys) assert.match(k, /^[a-z-]+ ([a-z-]+)?$/, `"${k}" can never be looked up as "<command> <sub>"`);
   assert.ok(keys.includes("next "));
 });
+
+test("every flag a command reads with a value is declared as one (a bare --result made `uat` a positional)", () => {
+  const src = pipeSources();
+  const declared = new Set([...src.match(/VALUE_FLAGS = new Set\(\[([^\]]+)\]/)[1].matchAll(/"([a-z-]+)"/g)].map((m) => m[1]));
+  const read = new Set([...src.matchAll(/\bflag\("([a-z-]+)"/g)].map((m) => m[1]));
+  assert.deepEqual([...read].filter((f) => !declared.has(f)), [], "add these to VALUE_FLAGS in pipe.mjs");
+});

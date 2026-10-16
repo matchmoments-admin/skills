@@ -3,6 +3,7 @@
 import { mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
+import { sfFailure } from "../io.mjs";
 /**
  * The roles an Org Shape scratch org arrives with cannot be given to a user ("invalid cross reference id"; a role made
  * in the org can). Rebuilding them (delete, leaves first; recreate as Role metadata from what was read) makes them
@@ -126,7 +127,7 @@ export function usersMethods({ sf, sleep, log, keyFile, packages, env, baselineD
       // UI-test persona holds (they are recreated on their next run), as e2e/support/login.ts does
       const withLicence = (f) => {
         try { return f(); } catch (e) {
-          if (!/LICENSE_LIMIT_EXCEEDED|License Limit Exceeded/i.test(e.message)) throw e;
+          if ((e.kind || sfFailure(e.message)) !== "licence") throw e;
           for (const u of q(`SELECT Id FROM User WHERE IsActive = true AND Username LIKE 'persona.%'`)) sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", u.Id, "-v", "IsActive=false"], { allowFail: true });
           return f();
         }

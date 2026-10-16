@@ -58,12 +58,28 @@ export function ghPages(path, key) {
   return pages.flatMap((p) => (key ? p[key] || [] : p));
 }
 
+/**
+ * What kind of failure a Salesforce (or network) error is, from its message: one table for every caller, which branch
+ * on the kind instead of keeping a regex each (the snapshot retry knew a JWT login error was a hiccup; the improvement
+ * tickets did not). transient: try once more, never blame what was being made; licence, slots, limit: Salesforce's
+ * allocation (free one, or wait); shape: production's org shape aged out; real: anything else. Pure.
+ */
+export const SF_FAILURES = [
+  ["transient", /JwtAuthError|Error authenticating|invalid_grant|ECONNRESET|ETIMEDOUT|socket hang up|HTTP 50[234]|Service Unavailable|UNABLE_TO_LOCK_ROW|fatal signup error/i],
+  ["licence", /LICENSE_LIMIT_EXCEEDED|License Limit Exceeded/i],
+  ["slots", /scratch org slot|ORG_RESERVE|has created its \d+ scratch orgs for today/i],
+  ["limit", /REQUEST_LIMIT_EXCEEDED/i],
+  ["shape", /shape.{0,40}(outdated|out of date|expired)|outdated.{0,40}shape/i],
+];
+export const sfFailure = (message) => SF_FAILURES.find(([, re]) => re.test(String(message || "")))?.[0] || "real";
+
 export const sf = (args, opts) => {
-  const out = run("sf", [...args, "--json"], { quiet: true, ...opts });
+  let out;
+  try { out = run("sf", [...args, "--json"], { quiet: true, ...opts }); } catch (e) { e.kind = sfFailure(e.message); throw e; }
   if (out === null) return null;
   let j;
   try { j = parseJson(out); } catch (e) { if (opts?.allowFail) return null; throw e; }
-  if (j.status && j.status !== 0 && !opts?.allowFail) throw new Error(j.message || `sf ${args[0]} failed`);
+  if (j.status && j.status !== 0 && !opts?.allowFail) throw Object.assign(new Error(j.message || `sf ${args[0]} failed`), { kind: sfFailure(j.message) });
   return opts?.allowFail === "json" && j.status ? { ...(j.result || j.data || {}), success: false, failed: true } : j.result;
 };
 

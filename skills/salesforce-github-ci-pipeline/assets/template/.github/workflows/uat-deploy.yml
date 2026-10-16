@@ -1,4 +1,5 @@
 name: uat-deploy
+run-name: "${{ format('uat-deploy PR #{0}', inputs.pr) }}"   # the PR in the title: the reconcile sweep sees UAT is going
 # FLAG: repository variable UAT_ENABLED=true (off by default: staging is the last stop before production).
 # Puts the release PR's head into UAT for business sign-off: a UAT sandbox when secret SF_UAT_USERNAME is set (logged
 # in with the same CI app; variable SF_UAT_LOGIN_URL, default https://test.salesforce.com), otherwise a 30-day
@@ -50,16 +51,17 @@ jobs:
           HEAD_REF=$(jq -r .headRefName <<<"$J")
           [[ "$HEAD_REF" == release/* && "$(jq -r .baseRefName <<<"$J")" == main && "$(jq -r .state <<<"$J")" == OPEN ]] || { echo "::error::#$PR is not an open release PR"; exit 1; }
           { echo "ref=$HEAD_REF"; echo "sha=$(jq -r .headRefOid <<<"$J")"; echo "sprint=${HEAD_REF#release/}"; } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with: { ref: main }
       - name: Already in UAT? (a redeploy would reset a sign-off on the same commit to pending)
         id: seen
         env:
           SHA: ${{ steps.pr.outputs.sha }}
         run: |
-          N=$(gh api "repos/$GH_REPO/commits/$SHA/statuses?per_page=100" --jq '[.[] | select(.context=="pipeline/uat" and .creator.login=="github-actions[bot]")] | length')
-          if [ "$N" != "0" ] && [ "${{ inputs.again }}" != "true" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "UAT already has ${SHA:0:7}: nothing to do"; fi
-      - uses: actions/checkout@v4
-        if: steps.seen.outputs.skip != 'true'
-        with: { ref: main }
+          # the gate's own reading of UAT on the head (Standing), never the statuses read here: UAT running, passed or
+          # failed on this exact commit means it has it; owed means deploy
+          PHASE=$(node pipeline/bin/pipe.mjs gate standing --pr "$PR" --result uat | awk '{ print $1; exit }')
+          if [ "$PHASE" != "owed" ] && [ "${{ inputs.again }}" != "true" ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "UAT already has ${SHA:0:7} ($PHASE): nothing to do"; fi
       - uses: actions/checkout@v4
         if: steps.seen.outputs.skip != 'true'
         with: { ref: "${{ steps.pr.outputs.sha }}", path: candidate, persist-credentials: false }
@@ -105,8 +107,9 @@ jobs:
           SPRINT: ${{ steps.pr.outputs.sprint }}
         run: |
           case "$KIND" in sandbox) WHAT="sandbox" ;; *) WHAT="scratch org" ;; esac
-          node pipeline/bin/pipe.mjs status set pipeline/uat pending "$SHA" "In UAT ($WHAT): test it, then tick UAT passed on the release card" --url "$URL"
+          # the stage's end (finish.mjs): UAT running on this commit (the card offers UAT passed), then the release card; the
+          # comment after it, so a tester who acts on it finds UAT running
+          node pipeline/bin/pipe.mjs finish uat --pr "$PR" --sha "$SHA" --outcome deployed --detail "$WHAT" --url "$URL"
           if [ "$KIND" = sandbox ]; then WHERE="Open UAT: $URL (log in with your sandbox account)."
           else WHERE="Open UAT: $URL. No login yet? Tick **Send me a UAT login** on the release card: Salesforce emails you a link to set a password."; fi
           gh pr comment "$PR" --body "$(printf '**Ready for UAT** (%s), commit `%s`.\n\n%s\n\nWhen it has been tested, tick **UAT passed** on the release card (or comment **/uat-fail** with what is wrong). The release ships only after a UAT pass on this exact commit; a newer commit redeploys and needs a new sign-off.' "$KIND" "${SHA:0:7}" "$WHERE")"
-          node pipeline/bin/pipe.mjs pr card "$PR"

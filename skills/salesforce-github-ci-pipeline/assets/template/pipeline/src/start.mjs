@@ -3,7 +3,7 @@
 // starts only to find it has nothing to do costs a runner and a lane wait, and a rule in a release branch's YAML stays
 // stale until a back-merge. decide() and ciPlan() are pure; `pipe start` and `pipe ci plan` gather the facts and act.
 import { storyOf, sprintOf, uiNeeded } from "./conventions.mjs";
-import { STATUS, standing, carriedFrom, CARRY } from "./gate.mjs";
+import { STATUS, standing, carriedFrom, RESULTS } from "./gate.mjs";
 import { CHECKS, LIVE_TESTS_CHECK } from "./conventions.mjs";
 import { fixRoundsUsed, MAX_FIX_ROUNDS, REVIEW_LINE, reviewComments } from "./verdict.mjs";
 import { triageFix, fixSkippedMessage } from "./jev.mjs";
@@ -26,38 +26,36 @@ export function ciPlan({ ref, base, files, carried = null }) {
   const sf = files === null || files.some((f) => f.startsWith("force-app/"));
   const target = kind === "release" ? `sprint:${sprintOf(ref)}` : kind === "backmerge" ? `sprint:${sprintOf(base) || ""}` : ref;
   // carried: an earlier commit of this branch whose Salesforce tests passed, with nothing under force-app changed
-  // since (gate.CARRY's no-sf rule): the org already holds this source, so no deploy and no Apex run (story #193
+  // since (gate.RESULTS apex): the org already holds this source, so no deploy and no Apex run (story #193
   // deployed five times, three of them for spec-only pushes). The check is skipped, which the gate counts as passed.
   const org = kind === "release" || kind === "backmerge" ? false : sf && !carried;
   return { kind, sf, org, ui: uiNeeded(files), target, all: kind !== "story" && kind !== "maintenance", carried: carried || "" };
 }
 
 /**
- * The commit CI's Salesforce tests carry from (ciPlan's `carried`), or null: the newest of the branch's last 15
- * commits on which "Salesforce tests" passed, with nothing under force-app changed from it to the checkout (gate.CARRY,
- * rule no-sf). Story and maintenance branches only (release PRs and back-merges test in staging). io: git, host.
+ * The commit a Salesforce test result carries from, or null: the newest of `shas` (newest first) on which the result's
+ * proof check (gate.RESULTS: CI's org job, or the live "Salesforce tests" check that exists only where the tests
+ * really ran) succeeded on its latest completed run, with none of the result's inputs changed from it to the checkout.
+ * One walker for CI and staging. io: git, host.
  */
+export function testsCarry(result, { shas, git, host }) {
+  const name = RESULTS[result].proof;
+  const latest = (runs) => [...runs].filter((r) => r.status === "completed").sort((a, b) => String(a.started_at).localeCompare(String(b.started_at))).pop();
+  const passed = shas.filter((sha) => latest(host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}`)?.check_runs || [])?.conclusion === "success");
+  const changedSince = (sha) => { const d = git(["diff", "--name-only", sha, "HEAD"], { allowFail: true }); return d === null ? null : d.split("\n").filter(Boolean); };
+  return carriedFrom(result, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed, changedSince });
+}
+const history = (git, range, n) => (git(["rev-list", ...range, `--max-count=${n}`], { allowFail: true }) || "").split("\n").filter(Boolean);
+
+/** CI's Salesforce tests (ciPlan's `carried`): the branch's last 15 commits. Story and maintenance branches only
+ *  (release PRs and back-merges test in staging). */
 export function ciCarry({ ref, base, git, host }) {
   if (!["story", "maintenance"].includes(branchKind(ref))) return null;
-  const shas = (git(["rev-list", "--no-merges", "--max-count=15", `origin/${base}..HEAD`], { allowFail: true }) || "").split("\n").filter(Boolean);
-  // the newest run of the check on that commit must be the success (a later failure, or a re-run, is the truth)
-  const latest = (runs) => [...runs].sort((a, b) => String(a.started_at).localeCompare(String(b.started_at))).pop();
-  const passed = shas.filter((sha) => latest(host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(CHECKS.apex)}`)?.check_runs || [])?.conclusion === "success");
-  const changedSince = (sha) => { const d = git(["diff", "--name-only", sha, "HEAD"], { allowFail: true }); return d === null ? null : d.split("\n").filter(Boolean); };
-  return carriedFrom(CARRY.apex, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed, changedSince });
+  return testsCarry("apex", { shas: history(git, ["--no-merges", `origin/${base}..HEAD`], 15), git, host });
 }
 
-/** The staging regression's Apex and Flow run an earlier release-branch commit passed, if nothing it tests changed
- *  since (gate.CARRY staging, #237): the commit that carries it, or null. Same shape as ciCarry, on the release branch's
- *  own history, the head included. A commit counts only where the tests really ran: its live "Salesforce tests" check
- *  succeeded. A superseded run (it skipped everything) or a UI-only run ends green without one (code review, 14 Oct). */
-export function stagingCarry({ git, host }) {
-  const shas = (git(["rev-list", "--max-count=16", "HEAD"], { allowFail: true }) || "").split("\n").filter(Boolean);
-  const latest = (runs) => [...runs].sort((a, b) => String(a.started_at).localeCompare(String(b.started_at))).pop();
-  const testsPassed = (sha) => latest((host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(LIVE_TESTS_CHECK)}`)?.check_runs || []).filter((r) => r.status === "completed"))?.conclusion === "success";
-  const changedSince = (sha) => { const d = git(["diff", "--name-only", sha, "HEAD"], { allowFail: true }); return d === null ? null : d.split("\n").filter(Boolean); };
-  return carriedFrom(CARRY.staging, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed: shas.filter(testsPassed), changedSince });
-}
+/** The staging regression's Apex and Flow run (#237): the release branch's own last 16 commits, the head included. */
+export const stagingCarry = ({ git, host }) => testsCarry("staging", { shas: history(git, ["HEAD"], 16), git, host });
 
 /**
  * What a staging run does (#273). Apex and Flow on every run, unless they passed on this code (or one it carries to).
@@ -210,7 +208,7 @@ export async function fixGate(pr, { host, gh, jev }) {
     const review = reviewComments(comments).filter((b) => String(b).includes(REVIEW_LINE.changes)).at(-1) || "";
     t = await triageFix(jev, { review, ciFailed });
   } catch (err) { t = { fix: true, kind: "unknown", confidence: 0, why: `could not ask Jev (${err.message})` }; }
-  host.record?.("jev", { decision: "fix", pr: String(pr), skipped: !t.fix, kind: t.kind, confidence: t.confidence, why: t.why });
+  host.record?.("jev", { decision: "fix", pr: String(pr), skipped: !t.fix, finding: t.kind, confidence: t.confidence, why: t.why });   // not `kind`: the envelope's own (it renamed the event)
   return t;
 }
 

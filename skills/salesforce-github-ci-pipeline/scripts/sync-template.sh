@@ -16,7 +16,9 @@ copy pipeline .github scripts/ci scripts/skills-sync.sh config e2e/support playw
 # the test data: the template ships it with standard fields only (custom fields are the business's own) and no story data
 if [ -d "$SRC/data/seed" ]; then
   rm -f "$T/config/packages.json"   # production's managed packages are per org: each team lists its own
-  mkdir -p "$T/data" && cp -R "$SRC/data/seed" "$T/data/seed" && rm -rf "$T/data/seed/stories"
+  mkdir -p "$T/data" && cp -R "$SRC/data/seed" "$T/data/seed" && rm -rf "$T/data/seed/stories" "$T"/data/seed/story-*.json
+  # shipped stories' seeds folded into the baseline (seed-fold) are the project's own: their plan steps go too
+  node -e 'const fs=require("fs"),f=process.argv[1];if(fs.existsSync(f)){const p=JSON.parse(fs.readFileSync(f,"utf8"));fs.writeFileSync(f,JSON.stringify(p.filter((s)=>!s.files.every((x)=>x.startsWith("story-"))),null,2))}' "$T/data/seed/plan.json"
   for f in "$T"/data/seed/*.json; do
     node -e 'const fs=require("fs"),f=process.argv[1],j=JSON.parse(fs.readFileSync(f,"utf8"));if(j.records){for(const r of j.records)for(const k of Object.keys(r))if(/__c$/.test(k))delete r[k];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")}' "$f"
   done

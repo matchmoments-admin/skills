@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { world, rng } from "./sim.mjs";
 import { violations, finish, observe, actAs, nextDeps } from "./invariants.mjs";
 import { next } from "../src/journey.mjs";
+import { finish as finishStage, reconcile } from "../src/finish.mjs";
 import { STATUS } from "../src/gate.mjs";
 
 process.env.PIPELINE_BOTS = "github-actions,__owner__-pipeline";
@@ -25,6 +26,12 @@ async function play(w, pr, steps, env = ENV) {
   return broke;
 }
 const all = async (w, opts) => { let r; while ((r = w.take())) await finish(w, r, { env: ENV, ...opts }); };
+
+/** finish() and reconcile() on the simulated world, as `pipe` wires them. */
+const stageDeps = (w, env = ENV, cards = { refreshPr: async () => {} }) => {
+  const d = nextDeps(w, env);
+  return { host: d.host, gh: w.io.gh, cards, next: (after, pr) => next(after, pr, nextDeps(w, env)), record: () => {} };
+};
 
 /** A sprint with one story merged into its release branch, CI and staging passed, and the release PR not open yet. */
 function sprint() {
@@ -83,6 +90,7 @@ test("fuzz: random pushes, runs, sign-offs and approvals on a release keep every
       ["/uat-pass", () => actAs(w, REL, "tester", "/uat-pass")],
       ["/uat (redeploy)", () => actAs(w, REL, "tester", "/uat")],
       ["boss approves", () => w.approve(REL, "boss")],
+      ["GitHub drops a run's event, then the janitor reconciles", async () => { await finish(w, w.take(), { env: ENV, drop: true }); if (!w.state.inflight.length) await reconcile(stageDeps(w)); }],
     ];
     for (let i = 0; i < 15; i++) {
       const [name, move] = moves[Math.floor(r() * moves.length)];
@@ -150,4 +158,44 @@ test("fuzz: random pushes, runs and sign-offs on a story with every AI step keep
       assert.deepEqual(await violations(w, 31, AI), [], `seed ${seed}, after: ${log.join(" > ")}`);
     }
   }
+});
+
+test("finish: the verdict first, then the gate, the card and what is owed next, always in that order", async () => {
+  const w = world({ aiReview: true }), AI = { ...ENV, AI_REVIEW: "true", AI_UI_TEST: "true", AI_AUTO_CHAIN: "true" };
+  w.branch("release/2027-w01");
+  w.story("301", { approver: "boss" });
+  const sha = w.push("issue-301", ["force-app/main/default/lwc/a/a.js"], { by: "claude", from: "release/2027-w01" });
+  w.pr(31, { head: "issue-301", base: "release/2027-w01", author: "__owner__-pipeline" });
+  await finish(w, w.take((r) => r.workflow === "ci.yml"), { env: AI });
+  w.take((r) => r.workflow === "ai-review.yml");
+  const actAsBoss = await actAs(w, 31, "boss", "/ship");   // signed off before the review ended: the review's finish merges it
+  assert.ok(actAsBoss.done);
+  w.state.calls.length = 0; w.state.inflight.length = 0;
+  const order = [];
+  w.acting({ event: "workflow_run", branch: "main", workflow: "ai-review.yml" });
+  await finishStage("review", { pr: 31, sha, outcome: "pass" }, stageDeps(w, AI, { refreshPr: async () => order.push("card") }));
+  const calls = w.state.calls.map((c) => (/statuses\//.test(c) ? "status" : /workflow run gate\.yml/.test(c) ? "gate" : /workflow run/.test(c) ? "next" : null)).filter(Boolean);
+  assert.deepEqual([calls.indexOf("status"), calls.indexOf("gate")].every((i) => i >= 0), true, w.state.calls.join("\n"));
+  assert.ok(calls.indexOf("status") < calls.indexOf("gate"), "the verdict is on the commit before the gate reads it");
+  assert.deepEqual(order, ["card"]);
+  assert.equal(w.state.inflight.at(-1).workflow, "ui-test.yml", "then what is owed: Claude's UI test (the change is UI-facing)");
+  assert.deepEqual(await violations(w, 31, AI), []);
+});
+
+test("reconcile: a dropped workflow_run is caught on the next tick, once; a PR with a run going is left alone", async () => {
+  const w = sprint(), REL = 296;
+  w.push("release/2027-w01", ["force-app/main/default/lwc/a/a.js"], { by: "github-actions" });
+  await all(w);
+  w.pr(REL, { head: "release/2027-w01", base: "main", author: "__owner__-pipeline" });
+  await next("release-pr", REL, nextDeps(w, ENV));
+  await all(w);
+  w.push("release/2027-w01", ["e2e/a.spec.ts"], { by: "dev" });
+  await all(w, { drop: true });
+  assert.match((await violations(w, REL, ENV)).join(), /2: stuck/);
+  const first = await reconcile(stageDeps(w));
+  assert.deepEqual(first.find((x) => x.pr === REL).started, ["uat-deploy.yml"], "the staging run did the UI regression itself; UAT is what the dropped event never started");
+  assert.deepEqual(await reconcile(stageDeps(w)), [{ pr: REL, skipped: "a run is going" }], "what it started is running: the next tick starts nothing");
+  await all(w);
+  assert.deepEqual(await violations(w, REL, ENV), []);
+  assert.deepEqual((await reconcile(stageDeps(w))).find((x) => x.pr === REL).started, [], "nothing owed once UAT has the head");
 });

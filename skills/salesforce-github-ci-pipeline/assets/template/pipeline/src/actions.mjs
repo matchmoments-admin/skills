@@ -5,7 +5,7 @@
 //
 // Effects: a label (applied as the pipeline App, so its workflow starts), a trusted commit status from an agent-free job
 // (the sign-off and UAT verdicts the gate reads), or a workflow dispatch.
-import { STATUS, approvalProblem } from "./gate.mjs";
+import { STATUS, approvalProblem, standing } from "./gate.mjs";
 import { storyOf, storyBranch, nextSprint, sprintOfMilestoneTitle } from "./conventions.mjs";
 
 export const ACTIONS = {
@@ -165,8 +165,8 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
   const pr = isPr ? io.gh(["pr", "view", String(number), "--json", "number,headRefName,headRefOid,baseRefName,state"]) : null;
   const sprints = requested.some((r) => r.id === "sprint") ? (io.gh(["api", `repos/${host.repo}/milestones?state=all&per_page=100`]) || []).map((m) => sprintOfMilestoneTitle(m.title)).filter(Boolean) : [];
   const appGh = (args, o) => io.gh(args, { ...o, env: { GH_TOKEN: appToken || process.env.GH_TOKEN } });
-  const inUat = (sha) => io.ghPages(`repos/${host.repo}/commits/${sha}/statuses?per_page=100`)
-    .some((s) => s.context === STATUS.uat && s.creator?.login === "github-actions[bot]" && String(s.description || "").startsWith("In UAT"));
+  // in UAT: Standing's reading, the card's too (UAT pending on the head), so the card never offers what this refuses
+  const inUat = (sha) => { const u = standing(host.prFacts(pr.number)).uat; return u.phase === "running" && u.sha === sha; };
   for (const { id, arg } of requested) {
     if (id === "help") { io.gh(["issue", "comment", String(number), "--body", help(isPr)]); continue; }
     if (id === "story" || id === "story-anyway") {   // agent-free: the spec becomes one Story issue (once)

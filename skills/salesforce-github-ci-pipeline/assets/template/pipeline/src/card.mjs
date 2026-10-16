@@ -3,10 +3,11 @@
 // same facts and decision the gate uses (gate.gather / gate.evaluate), so the card and the gate cannot disagree.
 // storyCards() puts it on the story and its PR (and moves the board), through the code host and the tracker.
 import { CHECKS, storyBranch, aiFeatures, context, setting, sprintOf, storyOf } from "./conventions.mjs";
-import { latestCheck, verdictFor, approval, requiredVerdicts, evaluate, route, standing, checkState, STATUS } from "./gate.mjs";
+import { latestCheck, approval, requiredVerdicts, evaluate, route, standing, checkState, STATUS } from "./gate.mjs";
 import { planContext } from "./plan.mjs";
 import { stageOf, moveCard } from "./board.mjs";
 import { checklist, allowed } from "./actions.mjs";
+import { needs as whoIsNeeded } from "./journey.mjs";
 
 export const CARD_TITLE = "Pipeline status";
 export const CARD_MARK = "<!-- pipeline:story-card -->";
@@ -37,8 +38,9 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   }
 
   const merged = pr.state === "MERGED";
+  const st = facts ? standing(facts) : null;   // what counts on the head: the gate's own reading of every result
   rows.push(["done", "Pull request", `[#${pr.number}](${prUrl})${pr.title ? ` ${pr.title}` : ""}`]);
-  const ci = [CHECKS.static, CHECKS.apex].map((n) => stateOf(latestCheck(facts?.checkRuns || [], n)));
+  const ci = [CHECKS.static, CHECKS.apex].map((n) => stateOf(st?.checks[n]?.conclusion || "missing"));
   const ciState = ci.includes("failed") ? "failed" : ci.every((s) => s === "done") ? "done" : "running";
   // the live "Salesforce tests" check (pipeline/src/tests.mjs) says how far the tests are, while they run
   const live = (facts?.checkRuns || []).filter((c) => c.name === "Salesforce tests").sort((x, y) => String(x.started_at).localeCompare(String(y.started_at))).pop();
@@ -47,7 +49,7 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
 
   const ctx = { ...(facts || {}), head: pr.headRefOid };
   for (const v of requiredVerdicts(facts || {}, key)) {
-    const { state: got, url } = verdictFor(v.context, ctx);
+    const { state: got, url } = (v.context === STATUS.review ? st?.review : st?.ui) || { state: "missing" };
     const label = v.context === STATUS.review ? "AI review" : "UI test";
     const shots = url && /#issuecomment-|\/browse\//.test(url) ? `: **[see the screenshots](${url})**` : "";   // UI evidence (UI_EVIDENCE)
     if (got === "success") rows.push(["done", label, v.context === STATUS.review ? "passed" : `passed in the scratch org${shots}`]);
@@ -56,7 +58,7 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
     else rows.push(["off", label, v.context === STATUS.review ? "off: your approval is the review" : "not needed"]);
   }
 
-  const a = facts ? standing(facts).approval : approval(ctx, { signOff: base !== "main" });   // the route's rule, as the gate applies it
+  const a = st ? st.approval : approval(ctx, { signOff: base !== "main" });   // the route's rule, as the gate applies it
   const approved = merged || a.ok;
   const signOff = base === "main" ? "(Review changes > Approve)" : "(Review changes > Approve), or tick **Sign off** below";
   rows.push([approved ? "done" : "waiting", "Approval", approvalText(a, { merged, prUrl, how: signOff, approver: facts?.storyApprover })]);
@@ -80,10 +82,9 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   }
   const mergedActions = merged && !shipped && base !== "main" && !releasePr ? ["release-cut"] : [];   // nobody has cut the release yet
   if (mergedActions.length) next = `${next} When the sprint's stories are merged, tick **Cut the sprint's release** below.`;
-  // who the story needs now: its approver once everything else is green (notifyNeeds mentions them once)
-  const green = pr.state === "OPEN" && !merged && !rows.some((r) => ["failed", "running"].includes(r[0])) && !decision?.other?.length;
-  const needs = green && rows.find((r) => r[1] === "Approval")?.[0] === "waiting"
-    ? { who: facts?.storyApprover ? [facts.storyApprover] : facts?.approvers || [], what: `story #${key} is ready for your approval: ${prUrl}/files` } : null;
+  // who the story needs now (journey.needs, from Standing): its approver once everything else passed (notifyNeeds
+  // mentions them once)
+  const needs = st && !merged ? whoIsNeeded(st, facts, { decision, prUrl, key }) : null;
   return render(key, next, rows, now, merged ? mergedActions : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }), { needs });
 }
 
@@ -137,29 +138,29 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
   const prUrl = `${repoUrl}/pull/${pr.number}`;
   const sprint = sprintOf(pr.headRefName) || pr.headRefName;
   const runs = facts.checkRuns || [];
-  const ctx = { ...facts, head: pr.headRefOid };
+  const st = standing({ ...facts, pr });   // the gate's own reading of every result on the head
   const merged = pr.state === "MERGED";
   const rows = [];
   rows.push(["done", "What ships", stories.length ? stories.map((s) => `#${s.key} ${s.title}`).join("; ") : `everything merged into \`${pr.headRefName}\``]);
-  const ci = [CHECKS.static, CHECKS.apex].map((n) => stateOf(latestCheck(runs, n)));
+  const ci = [CHECKS.static, CHECKS.apex].map((n) => stateOf(st.checks[n]?.conclusion || "missing"));
   const ciState = merged ? "done" : ci.includes("failed") ? "failed" : ci.every((s) => s === "done") ? "done" : "running";
   rows.push([ciState, "CI (every test, staging org)", ciState === "failed" ? `[see what failed](${prUrl}/checks)` : ciState === "done" ? "passed" : `[running](${prUrl}/checks)`]);
-  const staging = merged ? "done" : stateOf(latestCheck(runs, CHECKS.staging));
+  const staging = merged ? "done" : stateOf(st.checks[CHECKS.staging]?.conclusion || "missing");
   rows.push([staging, "Staging regression", staging === "failed" ? `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)` : staging === "done" ? "passed on this commit" : "runs after each merge into the sprint"]);
   // every UI spec, once per release (#273): it starts when the release PR opens, beside UAT
-  const ui = merged ? { state: "success" } : verdictFor(STATUS.uiRegression, ctx);
+  const ui = merged ? { state: "success" } : st.uiRegression;
   const uiRow = { success: ["done", "every UI spec passed"], failure: ["failed", `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)`],
     stale: ["waiting", "passed on an older commit: it runs again"], pending: ["running", "running on the staging org"], missing: ["running", "runs once per release, now that the release PR is open"] }[ui.state] || ["waiting", ui.state];
   rows.push([uiRow[0], "UI regression (every UI spec)", uiRow[1]]);
   if (uat) {
-    const u = merged ? { state: "success" } : verdictFor(STATUS.uat, ctx);
+    const u = merged ? { state: "success" } : st.uat;
     const open = u.url ? `**[open UAT](${u.url})** (⌘/Ctrl-click: a new tab; GitHub links cannot open one themselves)` : "open UAT";
     const how = /scratch org/.test(u.description || "") ? " (no login yet? tick **Send me a UAT login**)" : " (your UAT sandbox login)";
     const row = { success: ["done", "signed off"], failure: ["failed", `failed: ${u.description || "see the comments"}`], pending: ["running", `in UAT now: ${open}${how}, test it, then tick **UAT passed**`],
       stale: ["waiting", "signed off an older commit: it redeploys, then sign off again"], missing: ["waiting", "deploys after the staging regression"] }[u.state] || ["waiting", u.state];
     rows.push([row[0], "UAT sign-off", row[1]]);
   }
-  const a = approval(ctx);
+  const a = st.approval;
   const approved = merged || a.ok;
   rows.push([approved ? "done" : "waiting", "Approval", approvalText(a, { merged, prUrl, how: "(Review changes > Approve)", approver: null, team: facts.approvers })]);
   const v = stateOf(latestCheck(runs, "Production validation"));
@@ -188,19 +189,15 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
     if (["running", "failed"].includes(at("UAT sign-off"))) ids.push("uat-pass");
     if (at("UAT sign-off") === "failed") ids.push("uat");
     if ([ciState, staging, validation].includes("failed")) ids.push("fix-story");
-    if (at("UAT sign-off") === "running" && /scratch org/.test(verdictFor(STATUS.uat, ctx).description || "")) ids.push("uat-login");
+    if (at("UAT sign-off") === "running" && /scratch org/.test(st.uat.description || "")) ids.push("uat-login");
     if (at("UAT sign-off") === "waiting" && staging === "done") ids.push("uat");
     if (approved && !failed) ids.push("gate");
     if (validation === "failed") ids.push("gate");
   }
   if (shipped) ids.push("sprint");
-  // who the release needs now: the UAT testers while it is in UAT, then the approvers (notifyNeeds mentions them once)
-  const open = !merged && pr.state === "OPEN" && !failed;
-  // approvers are called only when every row above Approval is done: release 2027-w01 mentioned them as its PR opened,
-  // half an hour before staging and UAT (one mention, so it must come when there is something to approve)
-  const readyForApproval = rows.slice(0, rows.findIndex((r) => r[1] === "Approval")).every((r) => r[0] === "done");
-  const needs = !open ? null : at("UAT sign-off") === "running" ? { who: testers(), what: `release ${sprint} is in UAT: test it, then tick **UAT passed** on ${prUrl}` }
-    : at("Approval") === "waiting" && readyForApproval ? { who: facts.approvers || [], what: `release ${sprint} is ready for your approval: ${prUrl}/files` } : null;
+  // who the release needs now (journey.needs, from Standing): the UAT testers while it is in UAT, then the approvers once
+  // everything before approval passed (notifyNeeds mentions them once)
+  const needs = merged || failed ? null : whoIsNeeded(st, { ...facts, pr, uat }, { decision, testers: testers(), prUrl });
   return render(`release ${sprint}`, next, rows, activityLine(activity), [...new Set(ids)], { release: true, needs });
 }
 
