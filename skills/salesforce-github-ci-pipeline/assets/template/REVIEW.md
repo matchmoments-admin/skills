@@ -19,6 +19,15 @@ finding. Comments on the story and its spec since they were written win over the
   class or trigger to name uses `@IsTest(critical=true)` instead, and that is correct (never ask for `testFor='Flow:...'`).
 - **minor**: naming, duplication, comment quality, small clarity issues.
 
+## What already exists (the story file's "The codebase today")
+Check the change against what is already there, including names marked **(production)**: production's own components,
+built outside this pipeline, in every scratch org and in production.
+- **major**: a second trigger on an object that has one; a new Flow or Apex doing what an existing one already does on
+  the same object and event; a change that duplicates a production component instead of using it.
+- **major**: a change the existing automation would break or fight: data that an active validation, duplicate or
+  workflow rule refuses or rewrites, a field an existing Flow or Apex also sets, access that a sharing rule already
+  gives or takes away. Name the existing component in the finding.
+
 ## Flows
 - **blocker**: a Get, Create, Update or Delete element inside a Loop; a recursive trigger (a flow updating the record that
   triggers it, after save, with no entry condition that stops it); hard-coded record IDs.

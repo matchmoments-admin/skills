@@ -101,3 +101,30 @@ test("context pack: what exists per object and production's sharing model, so th
     "CaseHandler (with sharing)", "Tests that name it: CaseHandlerTest", "grant it: Esc"]) assert.ok(md.includes(want), want);
   assert.match(pack.owdQuery(["Case", "Bad'; DROP"]), /IN \('Case','BadDROP'\)/);
 });
+
+test("context pack: production's own components (baseline/) are listed and marked, with validation, workflow, sharing and duplicate rules and every Flow that touches the object", () => {
+  const B = "baseline/main/default";
+  const r = repo({
+    [`${O}/classes/CaseHandler.cls`]: "public with sharing class CaseHandler { Case c; }",
+    [`${B}/triggers/LegacyCase.trigger`]: "trigger LegacyCase on Case (after update) { }",
+    [`${B}/objects/Case/validationRules/Need_Reason.validationRule-meta.xml`]: "<ValidationRule><active>true</active></ValidationRule>",
+    [`${B}/objects/Case/validationRules/Old.validationRule-meta.xml`]: "<ValidationRule><active>false</active></ValidationRule>",
+    [`${B}/workflows/Case.workflow-meta.xml`]: "<Workflow><rules><fullName>Notify_Owner</fullName></rules></Workflow>",
+    [`${B}/sharingRules/Case.sharingRules-meta.xml`]: "<SharingRules><sharingCriteriaRules><fullName>Support_Sees_All</fullName></sharingCriteriaRules></SharingRules>",
+    [`${B}/duplicateRules/Case.Same_Subject.duplicateRule-meta.xml`]: "<DuplicateRule/>",
+    [`${B}/layouts/Case-Case %28Support%29 Layout.layout-meta.xml`]: "<Layout/>",
+    [`${B}/flows/Nightly_Close.flow-meta.xml`]: "<Flow><start><triggerType>Scheduled</triggerType></start><recordUpdates><object>Case</object></recordUpdates><status>Active</status></Flow>",
+    [`${B}/objects/Visit__c/fields/When__c.field-meta.xml`]: "",
+  });
+  const files = r.files.filter((p) => p.startsWith(O)), production = r.files.filter((p) => p.startsWith(B));
+  const md = pack.pack({ files, production, read: r.read, objects: ["Case"] });
+  for (const want of ["**(production)** are production's own", "Triggers: LegacyCase (production)", "Apex that names it: CaseHandler (with sharing)",
+    "Validation rules: Need_Reason (production), Old (inactive) (production)", "Workflow rules: Notify_Owner (production)", "Sharing rules: Support_Sees_All (production)",
+    "Duplicate rules: Same_Subject (production)", "Page layouts: Case (Support) Layout (production)", "Other Flows that read or write it: Nightly_Close (production)"]) assert.ok(md.includes(want), want);
+  // a production custom object is recognised in a story's words; kinds nothing has are left out, the core ones say none
+  assert.deepEqual(pack.objectsFor({ text: "Log a visit", files: [...files, ...production] }), ["Visit__c"]);
+  // a lookup named after an object does not bring every object that has one
+  assert.deepEqual(pack.objectsFor({ text: "Update the Account", files: [...files, `${O}/objects/Visit__c/fields/Account__c.field-meta.xml`] }), ["Account"]);
+  const bare = pack.pack({ files, read: r.read, objects: ["Case"] });
+  assert.ok(!bare.includes("(production)") && !bare.includes("Sharing rules") && bare.includes("Validation rules: none"));
+});
