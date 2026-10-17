@@ -30,8 +30,10 @@ export function buttons({ body, key, title = "", url = "", actions = true }) {
   const boxes = actions ? [...String(body).matchAll(/^- \[ \] .*<!-- act:([a-z-]+) -->/gm)].map((m) => m[1]).filter((id) => BUTTONS[id]) : [];
   const out = [];
   const asked = String(body).match(/<summary>The open questions<\/summary>\s*([\s\S]*?)\s*<\/details>/)?.[1] || "";   // Slack caps a button's value at 2000
-  if (/open question/.test(body) && boxes.includes("spec")) out.push({ text: "✍️ Answer in Slack", value: { n, act: "answer", title: title.slice(0, 120), q: asked.slice(0, 1500) }, style: "primary" });
-  for (const id of boxes) out.push({ text: BUTTONS[id], value: { n, act: id }, ...(out.length ? {} : { style: "primary" }) });
+  // answering rewrites what asked: the spec, or a story's build plan
+  const cmd = boxes.includes("spec") ? "/spec" : boxes.includes("plan") && /Build plan/.test(body) ? "/plan" : null;
+  if (/open question/.test(body) && cmd) out.push({ text: "✍️ Answer in Slack", value: { n, act: "answer", cmd, title: title.slice(0, 120), q: asked.slice(0, 1500) }, style: "primary" });
+  for (const id of boxes) out.push({ text: id === "plan" && /Build plan/.test(body) ? "🧭 Rewrite the plan" : BUTTONS[id], value: { n, act: id }, ...(out.length ? {} : { style: "primary" }) });
   const approve = String(body).match(/\[Approve here\]\(([^)]+)\)/)?.[1];
   if (approve) out.push({ text: "✅ Approve on GitHub", url: approve, style: "primary" });
   if (url) out.push({ text: "Open the card", url });
@@ -44,8 +46,12 @@ export function buttons({ body, key, title = "", url = "", actions = true }) {
 export function notice({ before, after, key, title = "", url = "", kinds = ["you", "failed", "shipped"], actions = false }) {
   const now = turnOf(after), was = turnOf(before);
   if (!now || !kinds.includes(now.kind) || (was && was.kind === now.kind && was.next === now.next)) return null;
+  // every work item number links back to it: the card's own address is the item's (GitHub issue or PR, a Jira issue)
+  const item = String(url).split("#")[0], repo = item.match(/^(https:\/\/[^/]+\/[^/]+\/[^/]+)\/(issues|pull)\//)?.[1];
   const name = `#${String(key).replace(/^#/, "")}${title ? ` ${title}` : ""}`;
-  const text = [`${now.kind === "failed" ? "❌" : now.kind === "shipped" ? "🚀" : "👉"} *${name}*: ${HEAD[now.kind]}`, mrkdwn(now.next).replace(/ (above|below)\b/g, ""), url ? `<${url}|Open the card>` : ""].filter(Boolean).join("\n");
+  const head = item ? `<${item}|${name}>` : name;
+  const linked = (s) => (repo ? s.replace(/(^|[\s(])#(\d+)\b/g, (m, pre, n) => `${pre}<${repo}/issues/${n}|#${n}>`) : s);
+  const text = [`${now.kind === "failed" ? "❌" : now.kind === "shipped" ? "🚀" : "👉"} *${head}*: ${HEAD[now.kind]}`, linked(mrkdwn(now.next).replace(/ (above|below)\b/g, "")), url ? `<${url}|Open the card>` : ""].filter(Boolean).join("\n");
   const acts = buttons({ body: after, key, title, url, actions });
   // text is the notification's fallback; the blocks show the same words with the next options as buttons
   return { text, blocks: [{ type: "section", text: { type: "mrkdwn", text: text.split("\n").slice(0, 2).join("\n") } }, ...(acts.length ? [{ type: "actions", elements: acts }] : [])] };

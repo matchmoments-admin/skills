@@ -339,13 +339,13 @@ const commands = {
   "story plan-pending": async () => {
     // the Build plan comment appears at once, saying Claude is planning (or that it failed), with a link
     const what = has("failed") ? { state: "failed", what: "Claude could not produce a plan", url: host.runUrl } : { state: "running", what: "Claude is planning the build (2 to 5 minutes)", url: host.runUrl };
-    await tracker.card(arg(0), plans.planPending(what), plans.PLAN_MARK, plans.PLAN_TITLE);
+    await tracker.card(arg(0), plans.planPending(what), plans.PLAN_MARK, plans.PLAN_TITLE); await cards.refresh(arg(0));   // the card (and Slack) follow the plan
     return say(`plan pending on ${arg(0)}`);
   },
   "story plan-post": async () => {
     const s = await tracker.story(arg(0));
     const readiness = await storyReadiness(jev(), { criteria: plans.criteria(s.body), title: s.title, body: s.body });
-    await tracker.card(arg(0), plans.planComment(readFileSync(flag("file"), "utf8"), { readiness, started: has("started") }), plans.PLAN_MARK, plans.PLAN_TITLE);
+    await tracker.card(arg(0), plans.planComment(readFileSync(flag("file"), "utf8"), { readiness, started: has("started") }), plans.PLAN_MARK, plans.PLAN_TITLE); await cards.refresh(arg(0));
     return say(`build plan posted on ${arg(0)}`);
   },
   "story readiness": async () => {

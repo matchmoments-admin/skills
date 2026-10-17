@@ -278,7 +278,7 @@ test("Slack notices: one message when a card's turn changes (a person is needed,
   const writing = newStoryCard({ key: "333", spec: true, stage: "writing" });
   assert.equal(notify.turnOf(writing), null, "⏳: the pipeline is on it");
   const m = notify.notice({ before: writing, after: written, key: "333", title: "FFLib", url: "https://github.com/o/r/issues/333#c" });
-  assert.match(m.text, /^👉 \*#333 FFLib\*: your turn\n.*\*1 open question\*/);
+  assert.match(m.text, /^👉 \*<https:\/\/github\.com\/o\/r\/issues\/333\|#333 FFLib>\*: your turn\n.*\*1 open question\*/);
   assert.match(m.text, /<https:\/\/github\.com\/o\/r\/issues\/333#c\|Open the card>$/);
   assert.equal(notify.notice({ before: written, after: written, key: "333" }), null, "the same turn twice: one message");
   const failed = "**Next:** Fix it.\n\n| ❌ | CI | [see what failed](https://x/1) |";
@@ -293,7 +293,7 @@ test("Slack notices: one message when a card's turn changes (a person is needed,
   const tracker = { prior: async () => writing, card: async () => "https://github.com/o/r/issues/333#c", story: async () => ({ title: "Spec: FFLib" }) };
   await storyCards({ host: {}, tracker, prTracker: tracker, slack: async (msg) => sent.push(msg) }).newStory("333", { spec: true, stage: "spec", questions: 1 });
   assert.equal(sent.length, 1);
-  assert.match(sent[0].text, /\*#333 FFLib\*/);
+  assert.match(sent[0].text, /#333 FFLib>\*/);
   const posted = [];
   await notify.slackNotifier({ url: "https://hooks.slack.test/x", post: async (u, b) => { posted.push([u, JSON.parse(b)]); return { ok: true }; } })({ text: "hi" });
   assert.deepEqual(posted, [["https://hooks.slack.test/x", { text: "hi" }]]);

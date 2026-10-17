@@ -15,6 +15,7 @@ permissions:
   id-token: write
   checks: read          # the story card reads checks and verdicts (after /start)
   statuses: read
+  pull-requests: read   # the story card (it follows the plan: card.refresh)
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
@@ -40,6 +41,7 @@ jobs:
       id-token: write
       checks: read
       statuses: read
+      pull-requests: read   # the story card (it follows the plan: card.refresh)
     concurrency:
       group: plan-${{ github.event.issue.number }}
       cancel-in-progress: true   # a newer /plan replaces an older one

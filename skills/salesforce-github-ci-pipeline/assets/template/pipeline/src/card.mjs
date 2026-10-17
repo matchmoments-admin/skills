@@ -4,7 +4,7 @@
 // storyCards() puts it on the story and its PR (and moves the board), through the code host and the tracker.
 import { CHECKS, storyBranch, aiFeatures, context, setting, sprintOf, storyOf } from "./conventions.mjs";
 import { latestCheck, approval, requiredVerdicts, evaluate, route, standing, checkState, STATUS } from "./gate.mjs";
-import { planContext } from "./plan.mjs";
+import { planContext, planState } from "./plan.mjs";
 import { stageOf, moveCard } from "./board.mjs";
 import { checklist, allowed } from "./actions.mjs";
 import { notice, slackNotifier } from "./notify.mjs";
@@ -114,7 +114,7 @@ function storyActions(rows, { ai, base, ci }) {
 
 /** The card on a story before /start (or a spec issue: where the spec stands; stage: new | writing | spec | story | shipped;
  *  questions: the spec's open questions, as written, or how many). */
-export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [], tag = null, questions: asked = 0 }) {
+export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [], tag = null, questions: asked = 0, plan = null }) {
   if (spec) {
     const list = Array.isArray(asked) ? asked : [], questions = Array.isArray(asked) ? asked.length : asked;
     const story = stories[0];
@@ -137,8 +137,15 @@ export function newStoryCard({ key, ai = {}, spec = false, stage = "new", storie
     const shown = stage === "spec" && list.length ? `${next}\n\n<details><summary>The open questions</summary>\n\n${list.join("\n")}\n\n</details>` : next;
     return render(key, shown, rows, null, allowed(boxes, ai));
   }
-  return render(key, ai.plan ? "Bigger story? Tick **Plan it with Claude** first. Small story? Tick **Start**." : "Tick **Start** when you are ready to work on it.",
-    [["waiting", "Branch and scratch org", "created when you start the story"]], null, allowed(["plan", "start", "hotfix"], ai));
+  // plan: where its build plan stands (plan.planState): Claude planning, failed, or ready with its open questions
+  const asks = plan?.questions?.length ? `${plan.questions.length === 1 ? "1 open question" : `${plan.questions.length} open questions`}` : "";
+  const planRow = !plan ? [] : [{ writing: ["running", "Build plan", "Claude is planning the build (2 to 5 minutes): wait for it"], failed: ["failed", "Build plan", "Claude could not plan it: tick **Plan it with Claude** again, or **Start** without a plan"] }[plan.stage]
+    || ["done", "Build plan", `written: the **Build plan** comment below${asks ? `, with **${asks}**` : ""}`]];
+  const next = !plan ? (ai.plan ? "Bigger story? Tick **Plan it with Claude** first. Small story? Tick **Start**." : "Tick **Start** when you are ready to work on it.")
+    : { writing: "Nothing yet: Claude is planning the build. This card updates when it is done.", failed: "Tick **Plan it with Claude** to try again, or **Start** to go ahead without a plan." }[plan.stage]
+    || `Read the **Build plan** comment below. ${asks ? `It has **${asks}**: answer in a comment, then tick **Plan it with Claude** again (or comment \`/plan\`). ` : "To change it, reply with your changes in a comment, then tick **Plan it with Claude** again. "}When it is right, tick **Start**${asks ? " (the plan's guesses then stand for any question you leave)" : ""}.`;
+  const shown = plan?.questions?.length ? `${next}\n\n<details><summary>The open questions</summary>\n\n${plan.questions.join("\n")}\n\n</details>` : next;
+  return render(key, shown, [...planRow, ["waiting", "Branch and scratch org", "created when you start the story"]], null, plan?.stage === "writing" ? [] : allowed(["plan", "start", "hotfix"], ai));
 }
 
 /**
@@ -320,7 +327,8 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
         // not started (no PR, no branch): the card offers Plan and Start, never "branch and org" it does not have
         if (!c.pr && !tag && !activity && host.api("GET", `repos/${host.repo}/branches/${encodeURIComponent(c.branch)}`)?.status === 404) {
           const s = await tracker.story(key).catch(() => null);
-          if (!(s?.labels || []).includes("spec")) await write(tracker, key, newStoryCard({ key, ai: aiFeatures() }), { name: s?.title || "" });
+          const plan = planState(await tracker.comments(key).catch(() => []));
+          if (!(s?.labels || []).includes("spec")) await write(tracker, key, newStoryCard({ key, ai: aiFeatures(), plan }), { name: s?.title || "" });
           return;
         }
         const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, base: c.base, releasePr: c.releasePr,

@@ -48,7 +48,7 @@ export function decide(payload, env) {
     if (!login) return notLinked;
     if (v.act === "answer") return { ack: "", modal: { trigger_id: payload.trigger_id, view: answerView(n, v.title, v.cmd, v.q) } };
     if (!ACTS[v.act]) return { ack: "", reply: "That action cannot be started from Slack: open the card." };
-    return { ack: "", dispatch: { number: n, command: ACTS[v.act], by: login, text: "" }, reply: `⏳ Done as @${login}: \`${ACTS[v.act]}\` on #${n}. The card shows what happens next; this channel hears when it is your turn again.` };
+    return { ack: "", dispatch: { number: n, command: ACTS[v.act], by: login, text: "" }, reply: `⏳ Done as @${login}: \`${ACTS[v.act]}\` on <https://github.com/${env.GITHUB_REPO}/issues/${n}|#${n}>. The card shows what happens next; this channel hears when it is your turn again.` };
   }
   if (payload.type === "view_submission" && payload.view?.callback_id === "answer") {
     const n = number(value(payload.view.private_metadata).n);

@@ -26,7 +26,7 @@ test("Slack actions: only Slack's signed, fresh requests are trusted", async () 
 test("Slack actions: a button starts the card's action as the linked person; never an approval; unlinked people are told how", () => {
   const d = decide(click({ n: "333", act: "story" }), env);
   assert.deepEqual(d.dispatch, { number: 333, command: "/story", by: "pat", text: "" });
-  assert.match(d.reply, /as @pat: `\/story` on #333/);
+  assert.match(d.reply, /as @pat: `\/story` on <https:\/\/github\.com\/o\/r\/issues\/333\|#333>/);
   assert.equal(decide(click({ n: "333", act: "story-anyway" }), env).dispatch.command, "/story");
   assert.match(decide(click({ n: "333", act: "story" }, "U9"), env).reply, /not linked[\s\S]*"U9": "<your GitHub login>"/);
   for (const act of ["approve", "uat-pass", "ship", "review-ok"]) assert.ok(!decide(click({ n: "1", act }), env).dispatch, `${act} is not startable from Slack`);
@@ -87,4 +87,30 @@ test("Slack actions: the Worker answers Slack at once, then dispatches; a bad si
   const wf = readFileSync(new URL("../../.github/workflows/slack.yml", import.meta.url), "utf8");
   assert.match(wf, /types: \[slack-act\]/);
   assert.match(wf, /\^\/\(spec\|story\|plan\|start\|build\)\$/, "the workflow refuses anything else, whatever the Worker sends");
+});
+
+test("a story's card follows its build plan (⏳ while Claude plans, then what to do), so Slack hears when the plan is ready", () => {
+  const c = (body, created) => ({ author: "github-actions[bot]", body, created });
+  assert.equal(plans.planState([]), null);
+  assert.deepEqual(plans.planState([c(plans.planPending({ state: "running", what: "planning" }), "1")]), { stage: "writing" });
+  const posted = plans.planComment("### Proposed build\nx\n\n### Open questions\n1. Which role?\n\nPLAN-SIZE: M");
+  assert.deepEqual(plans.planState([c(posted, "2")]), { stage: "ready", questions: ["1. Which role?"] });
+  const writing = newStoryCard({ key: "343", ai: { plan: true }, plan: { stage: "writing" } });
+  assert.equal(notify.turnOf(writing), null, "⏳: Slack waits");
+  assert.doesNotMatch(writing, /act:/, "no boxes while Claude plans");
+  const ready = newStoryCard({ key: "343", ai: { plan: true }, plan: { stage: "ready", questions: ["1. Which role?"] } });
+  assert.match(ready, /\| ✅ \| Build plan \| written: the \*\*Build plan\*\* comment below, with \*\*1 open question\*\*/);
+  const m = notify.notice({ before: writing, after: ready, key: "343", actions: true });
+  assert.match(m.text, /your turn\nRead the \*Build plan\* comment/);
+  // numbers link back to the work item
+  const linked = notify.notice({ before: "", after: newStoryCard({ key: "333", spec: true, stage: "story", stories: [343] }).replace("Done:", "See"), key: "333", title: "FFLib", url: "https://github.com/o/r/issues/333#issuecomment-1" });
+  assert.match(linked.text, /^👉 \*<https:\/\/github\.com\/o\/r\/issues\/333\|#333 FFLib>\*/);
+  assert.match(linked.text, /<https:\/\/github\.com\/o\/r\/issues\/343\|#343>/);
+  const els = m.blocks[1].elements;
+  assert.deepEqual(els.map((e) => e.text.text), ["✍️ Answer in Slack", "🧭 Rewrite the plan", "▶️ Start"]);
+  assert.equal(JSON.parse(els[0].value).cmd, "/plan");
+  const submitted = decide({ type: "view_submission", user: { id: "U1" }, view: { callback_id: "answer", private_metadata: decide(click(JSON.parse(els[0].value)), env).modal.view.private_metadata, state: { values: { answer: { text: { value: "1. Customer support." } } } } } }, env);
+  assert.equal(submitted.dispatch.command, "/plan", "answers to a plan rewrite the plan");
+  const clear = newStoryCard({ key: "343", ai: { plan: true }, plan: { stage: "ready", questions: [] } });
+  assert.match(clear, /When it is right, tick \*\*Start\*\*\./);
 });

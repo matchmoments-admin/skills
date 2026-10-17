@@ -85,6 +85,18 @@ export const PENDING = "<!-- pipeline:plan-pending -->";
 
 /** The Build plan comment while Claude is still writing it, or after it failed (replaced when a plan lands).
  *  It is never read as a plan (planContext skips it). */
+/** Open questions as written ("1. Which…"), from a spec's or a plan's "### Open questions" section. Pure. */
+export const questionsOf = (text) => (String(text).match(/### Open questions\s*\n([\s\S]*?)(\n###\s|\n\*\*Next|\n- ⚠|$)/i)?.[1] || "").split("\n").filter((l) => /^\s*\d+[.)]\s+\S/.test(l)).map((l) => l.trim());
+
+/** Where a story's build plan stands, from its comments: null (none), { stage: "writing" | "failed" } while the plan
+ *  comment is a placeholder, or { stage: "ready", questions } once Claude posted it. The story card shows it. Pure. */
+export function planState(comments) {
+  const c = [...comments].reverse().find((x) => String(x.body || "").includes(PLAN_MARK));
+  if (!c) return null;
+  if (c.body.includes(PENDING)) return { stage: /❌ \*\*Failed:\*\*/.test(c.body) ? "failed" : "writing" };
+  return { stage: "ready", questions: questionsOf(c.body) };
+}
+
 export function planPending(activity) {
   const failed = activity.state === "failed";
   const link = activity.url ? ` · **[${failed ? "see what went wrong" : "watch it live"}](${activity.url})**` : "";

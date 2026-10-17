@@ -5,7 +5,7 @@
 // by hand only when one slice cannot pass the production validation alone (docs/agents/salesforce.md, "Stories").
 // Pure, except makeStory(), which acts through the gh seam.
 import { checklist } from "./actions.mjs";
-import { planContext, PENDING, personal } from "./plan.mjs";
+import { planContext, PENDING, personal, questionsOf } from "./plan.mjs";
 import { approverList } from "./gate.mjs";
 import { setting } from "./conventions.mjs";
 
@@ -18,7 +18,7 @@ const MADE = /<!-- story:(\d+) -->/;
 export const STORY_SIZE_LIMIT = 6;
 const userStories = (text) => (sections(String(text))["User stories"] || "").split("\n").filter((l) => /^\s*(?:\d+[.)]|[-*])\s+\S/.test(l)).length;
 /** The spec's open questions, as written ("1. Which release…"). Pure. */
-export const questionsOf = (text) => (String(text).match(/### Open questions\s*\n([\s\S]*?)(\n###\s|\n\*\*Next|$)/i)?.[1] || "").split("\n").filter((l) => /^\s*\d+[.)]\s+\S/.test(l)).map((l) => l.trim());
+export { questionsOf } from "./plan.mjs";
 export const openQuestions = (text) => questionsOf(text).length;
 
 /** The spec comment: Claude's spec, then what to do next. With open questions, making the story is an explicit choice.
