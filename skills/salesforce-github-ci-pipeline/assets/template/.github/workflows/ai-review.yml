@@ -24,6 +24,7 @@ permissions:
   checks: read   # the story card reads checks and verdicts
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
 jobs:
   route:
     # PR events only decide and dispatch the real review with --ref main (a PR runs the workflow file from GitHub's test

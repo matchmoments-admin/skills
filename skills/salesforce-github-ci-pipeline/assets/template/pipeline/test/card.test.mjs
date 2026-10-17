@@ -271,3 +271,30 @@ test("a release calls its approvers only when everything above Approval is done 
   const done = releaseCard({ ...base, facts: { ...base.facts, checkRuns: green, statuses: [st(gate.STATUS.uat, "success"), st(gate.STATUS.uiRegression, "success")], reviews: [] } });
   assert.deepEqual(needsOf(done)?.who, ["lead"]);
 });
+
+test("Slack notices: one message when a card's turn changes (a person is needed, a failure, shipped), none while the pipeline works", async () => {
+  const notify = await import("../src/notify.mjs");
+  const written = newStoryCard({ key: "333", ai: { plan: true }, spec: true, stage: "spec", questions: 1 });
+  const writing = newStoryCard({ key: "333", spec: true, stage: "writing" });
+  assert.equal(notify.turnOf(writing), null, "⏳: the pipeline is on it");
+  const m = notify.notice({ before: writing, after: written, key: "333", title: "FFLib", url: "https://github.com/o/r/issues/333#c" });
+  assert.match(m.text, /^👉 \*#333 FFLib\*: your turn\n.*\*1 open question\*/);
+  assert.match(m.text, /<https:\/\/github\.com\/o\/r\/issues\/333#c\|Open the card>$/);
+  assert.equal(notify.notice({ before: written, after: written, key: "333" }), null, "the same turn twice: one message");
+  const failed = "**Next:** Fix it.\n\n| ❌ | CI | [see what failed](https://x/1) |";
+  assert.match(notify.notice({ before: "", after: failed, key: "9" }).text, /^❌ \*#9\*: something failed/);
+  assert.equal(notify.mrkdwn("tick **Start** · [see](https://x)"), "tick *Start* · <https://x|see>");
+  const shipped = "**Next:** Done: live in production since v1.\n\n| ✅ | In production | released in v1 |";
+  assert.equal(notify.notice({ before: "", after: shipped, key: "9", kinds: ["you", "failed"] }), null, "a story's shipping is the release's message");
+  assert.match(notify.notice({ before: "", after: shipped, key: "296", title: "release 2027-w01" }).text, /^🚀 \*#296 release 2027-w01\*: shipped/);
+  // the cards post through the notifier; no webhook, no Slack
+  assert.equal(notify.slackNotifier({ url: "" }), null);
+  const sent = [];
+  const tracker = { prior: async () => writing, card: async () => "https://github.com/o/r/issues/333#c", story: async () => ({ title: "Spec: FFLib" }) };
+  await storyCards({ host: {}, tracker, prTracker: tracker, slack: async (msg) => sent.push(msg) }).newStory("333", { spec: true, stage: "spec", questions: 1 });
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /\*#333 FFLib\*/);
+  const posted = [];
+  await notify.slackNotifier({ url: "https://hooks.slack.test/x", post: async (u, b) => { posted.push([u, JSON.parse(b)]); return { ok: true }; } })({ text: "hi" });
+  assert.deepEqual(posted, [["https://hooks.slack.test/x", { text: "hi" }]]);
+});

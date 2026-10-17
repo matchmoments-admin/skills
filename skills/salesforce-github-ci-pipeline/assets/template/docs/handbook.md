@@ -307,17 +307,17 @@ An honest rating against an enterprise Salesforce delivery setup.
 | **Enterprise fit** | 7/10 | The release train, hotfix path, back-merges, org shape and DORA metrics are what enterprises run. Missing: a UAT or full-copy sandbox stage before production, data seeding, unlocked packages for modular teams, more than one production org. |
 | **Scaling** | 5/10 today, 8/10 on a bigger Dev Hub | A Developer Edition Dev Hub allows 3 active and 6 new scratch orgs a day, so about two stories in flight. Enterprise Edition allows 40 and 80, Unlimited 100 and 200. One open sprint and one staging org by design; parallel trains need a staging org each. |
 | **Ease for developers** | 8/10 | Push and approve; the pipeline opens PRs, picks orgs, merges and ships. |
-| **Ease for non-technical users** | 7/10 | Issue forms, the story card (next step, live diagram, **Approve here**), comment commands, an optional delivery board. Still GitHub-shaped, no Slack yet, and opening an org needs the CLI. |
+| **Ease for non-technical users** | 7/10 | Issue forms, the story card (next step, live diagram, **Approve here**), comment commands, an optional delivery board. Still GitHub-shaped (Slack notices, optional, say when it is your turn), and opening an org needs the CLI. |
 
 ### Making it the easiest pipeline to use
 
 Built: issue forms; the story card (next step, a live colour-coded diagram, a link per stage); comment commands
 (`/start`, `/build`, `/hotfix` on stories; `/test`, `/review`, `/fix`, `/ship`, `/help` on PRs); the pipeline
 opening PRs on push; a delivery board (GitHub Project) moved by the pipeline; the release drawn as one job graph;
-plain-language gate messages; "AI is off" replies instead of silent no-ops.
+plain-language gate messages; "AI is off" replies instead of silent no-ops; Slack notices (below).
 
 Next:
-1. **Slack.** Post the card's **Next** line to a channel when it changes, with an **Approve here** button.
+1. **Slack, more:** a direct message to the person the card needs (a Slack ID per GitHub login), and buttons that act.
 2. **Jira end to end** on a real Jira site (built and unit-tested; the card mirrors to a Jira comment).
 3. **"Open the org" without the CLI**: a short-lived login link for the requester only (login links are credentials).
 
@@ -475,6 +475,20 @@ is one CLI, so the Salesforce steps can run on Buildkite agents if a company alr
   Salesforce emails you a link to set a password. Your address comes from the repository variable `UAT_TESTERS`
   (`{"github-login": "you@company.com"}`), else your public GitHub email. No password or session is ever put in GitHub.
 - Then tick **UAT passed** (or comment `/uat-fail <what is wrong>`).
+
+## Slack notices (optional)
+
+With the `SLACK_WEBHOOK_URL` secret set, one Slack channel hears whenever a card's turn changes: **👉 your turn**
+(the card's **Next** line: a spec to read, a plan's questions, UAT, an approval), **❌ something failed**, and
+**🚀 shipped** (one message per release, not per story). Each message links the card. Nothing is sent while the
+pipeline is working (a ⏳ row), and the same turn is never sent twice: the card before an update is compared with the
+card after it (`pipeline/src/notify.mjs`). Without the secret, nothing changes.
+
+Set it up once (about five minutes):
+1. At https://api.slack.com/apps, **Create New App** → **From scratch**, in your workspace.
+2. **Incoming Webhooks** → on → **Add New Webhook to Workspace** → pick the channel → copy the URL.
+3. GitHub → the repo → **Settings → Secrets and variables → Actions** → **New repository secret**:
+   `SLACK_WEBHOOK_URL`, the URL. It is a credential: anyone holding it can post to the channel.
 
 ## Doing things from the card (tick boxes)
 

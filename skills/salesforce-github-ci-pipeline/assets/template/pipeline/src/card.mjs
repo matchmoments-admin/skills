@@ -7,6 +7,7 @@ import { latestCheck, approval, requiredVerdicts, evaluate, route, standing, che
 import { planContext } from "./plan.mjs";
 import { stageOf, moveCard } from "./board.mjs";
 import { checklist, allowed } from "./actions.mjs";
+import { notice, slackNotifier } from "./notify.mjs";
 import { needs as whoIsNeeded } from "./journey.mjs";
 
 export const CARD_TITLE = "Pipeline status";
@@ -124,7 +125,7 @@ export function newStoryCard({ key, ai = {}, spec = false, stage = "new", storie
       [made ? "done" : "waiting", "Story", made ? `#${story}${stage === "story" ? ": its card offers **Plan** and **Start**" : ""}` : "not made yet: tick **Make it a story** above when the spec is right"],
       ...(stage === "shipped" ? [["done", "In production", `released in ${tag}`]] : [])];
     // the boxes are on the card itself (the stage icons below are not boxes): rewrite with the comments, or make the story
-    const change = "To change it, reply with your answers or changes in a comment, then tick **rewrite the spec** above (or comment `/spec`).";
+    const change = "To change it, reply with your answers or changes in a comment, then tick **Write the spec with Claude** above (or comment `/spec`).";
     const next = { new: ai.plan ? "Tick **Write the spec with Claude** below; then answer its questions." : "Write the spec in a comment (problem, solution, user stories, decisions), then open a story for it.",
       writing: "Nothing yet: Claude is writing the spec. This card updates when it is done.",
       spec: `Read the **Spec** comment below. ${asks ? `It has **${asks}**. ` : ""}${change} When it is right, tick **Make it a story** above${asks ? " (the spec's guesses then stand for any question you leave)" : ""}.`,
@@ -286,8 +287,18 @@ function render(key, next, rows, now = null, actions = [], { release = false, ne
  * refresh(key, { light }) with light=true reuses this process's facts and leaves the board alone: two edits, for the
  * Now line while tests run. Never throws: a card is information, not a gate.
  */
-export function storyCards({ host, tracker, prTracker, log = () => {} }) {
+export function storyCards({ host, tracker, prTracker, log = () => {}, slack = slackNotifier({ log }) }) {
   const seen = new Map();
+  // write a card; with Slack set up, tell the channel when its turn changed (the card before against the card after)
+  async function write(t, key, body, { name = null, kinds } = {}) {
+    const before = slack && t.prior ? await t.prior(key, CARD_MARK).catch(() => "") : "";
+    const url = await t.card(key, body, CARD_MARK, CARD_TITLE);
+    if (!slack) return url;
+    const title = name ?? (await tracker.story(key).catch(() => null))?.title?.replace(/^(Story|Spec):\s*/i, "") ?? "";
+    const m = notice({ before, after: body, key, title, url: typeof url === "string" ? url : "", kinds });
+    if (m) await slack(m);
+    return url;
+  }
   async function facts(key, base) {
     const branch = storyBranch(key);
     const pr = host.storyPr(branch);
@@ -306,12 +317,12 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
         // not started (no PR, no branch): the card offers Plan and Start, never "branch and org" it does not have
         if (!c.pr && !tag && !activity && host.api("GET", `repos/${host.repo}/branches/${encodeURIComponent(c.branch)}`)?.status === 404) {
           const s = await tracker.story(key).catch(() => null);
-          if (!(s?.labels || []).includes("spec")) await tracker.card(key, newStoryCard({ key, ai: aiFeatures() }), CARD_MARK, CARD_TITLE);
+          if (!(s?.labels || []).includes("spec")) await write(tracker, key, newStoryCard({ key, ai: aiFeatures() }), { name: s?.title || "" });
           return;
         }
         const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, base: c.base, releasePr: c.releasePr,
           shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null, activity });
-        await tracker.card(key, body, CARD_MARK, CARD_TITLE);
+        await write(tracker, key, body, { kinds: ["you", "failed"] });
         if (c.pr) {
           await notifyNeeds({ tracker: prTracker, number: c.pr.number, body }).catch((e) => log(`::warning::nobody notified: ${e.message}`));
           await prTracker.card(c.pr.number, body, CARD_MARK, CARD_TITLE);   // the same card on the PR
@@ -324,7 +335,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
     },
     /** A new story's card (before /start): what to do first, with the boxes to do it. */
     async newStory(key, { spec = false, stage = "new", stories = [], tag = null, questions = 0 } = {}) {
-      await tracker.card(key, newStoryCard({ key, ai: aiFeatures(), spec, stage, stories, tag, questions }), CARD_MARK, CARD_TITLE).catch((e) => log(`::warning::${e.message}`));
+      await write(tracker, key, newStoryCard({ key, ai: aiFeatures(), spec, stage, stories, tag, questions }), { kinds: ["you", "failed"] }).catch((e) => log(`::warning::${e.message}`));
     },
     /** The card of the pull request a commit was merged by (the release workflow knows only the SHA). */
     async refreshCommit(sha, opts) {
@@ -341,7 +352,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {} }) {
           const body = releaseCard({ repoUrl: host.repoUrl, pr, facts, decision: evaluate(facts), uat: facts.uat, stories, activity,
             shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null });
           await notifyNeeds({ tracker: prTracker, number: pr.number, body }).catch((e) => log(`::warning::nobody notified: ${e.message}`));
-          await prTracker.card(pr.number, body, CARD_MARK, CARD_TITLE);
+          await write(prTracker, pr.number, body, { name: `release ${sprintOf(pr.headRefName)}` });
           return "release";
         }
         const key = storyOf(pr.headRefName);

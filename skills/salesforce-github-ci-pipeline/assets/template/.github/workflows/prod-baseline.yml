@@ -18,6 +18,7 @@ permissions:
   pull-requests: write
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
 jobs:
   capture:
     if: github.event_name != 'schedule' || vars.BASELINE_NIGHTLY == 'true'
