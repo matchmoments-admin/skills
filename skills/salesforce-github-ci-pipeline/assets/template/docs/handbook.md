@@ -517,6 +517,12 @@ apply as ever. **Approving stays in GitHub**: an approval is your own review, so
    member ID**; an unlinked person who clicks is told theirs): `echo '{...}' | npx wrangler secret put SLACK_USERS`.
 4. Set the repository variable `SLACK_ACTIONS` to `true`: notices carry the buttons from then on.
 
+Slack sends each click to the Worker's URL (**Interactivity & Shortcuts › Request URL**), so **Socket Mode must be off**:
+with it on, clicks go to a connection nothing holds open and every button shows a bare ⚠️. Socket Mode suits only a
+company that allows no inbound endpoints; the same Worker code then runs as a small always-on service inside its
+network. The Worker logs one line per click (`npx wrangler tail` in `pipeline/slack/`, or the dashboard's **Logs**),
+and every failure also tells the clicker why, privately in Slack.
+
 ## Doing things from the card (tick boxes)
 
 - Every card ends with **Do it from here**: tick a box and the pipeline does it, then clears the box. A new story's card

@@ -17,7 +17,9 @@ const MADE = /<!-- story:(\d+) -->/;
 // More user stories than this and one story gets hard to review and to UAT: the spec suggests slicing it.
 export const STORY_SIZE_LIMIT = 6;
 const userStories = (text) => (sections(String(text))["User stories"] || "").split("\n").filter((l) => /^\s*(?:\d+[.)]|[-*])\s+\S/.test(l)).length;
-export const openQuestions = (text) => (String(text).match(/### Open questions\s*\n([\s\S]*?)(\n###\s|$)/i)?.[1] || "").split("\n").filter((l) => /^\s*\d+[.)]\s+\S/.test(l)).length;
+/** The spec's open questions, as written ("1. Which release…"). Pure. */
+export const questionsOf = (text) => (String(text).match(/### Open questions\s*\n([\s\S]*?)(\n###\s|\n\*\*Next|$)/i)?.[1] || "").split("\n").filter((l) => /^\s*\d+[.)]\s+\S/.test(l)).map((l) => l.trim());
+export const openQuestions = (text) => questionsOf(text).length;
 
 /** The spec comment: Claude's spec, then what to do next. With open questions, making the story is an explicit choice.
  *  story: the story already made from this spec (a revision keeps the link and offers no second story). */
@@ -100,7 +102,7 @@ export function pendingComment(existing, { state, what, url }) {
 export function pendingCard(existing, { failed = false } = {}) {
   const spec = String(existing || "").includes(SPEC_MARK) && !String(existing).includes(PENDING) ? String(existing) : null;
   if (storyOfSpec(spec)) return null;
-  return { spec: true, stage: failed ? (spec ? "spec" : "new") : "writing", questions: spec ? openQuestions(spec) : 0 };
+  return { spec: true, stage: failed ? (spec ? "spec" : "new") : "writing", questions: spec ? questionsOf(spec) : [] };
 }
 
 /** What a story hears when its spec is revised after it was made (its criteria are a copy; the spec binds). Pure. */

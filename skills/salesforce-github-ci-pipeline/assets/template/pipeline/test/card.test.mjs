@@ -156,9 +156,9 @@ test("completion fixes: UAT failure offers a retest; a spec card follows the spe
   assert.match(newStoryCard({ key: "125", ai: { plan: true }, spec: true, stage: "spec" }), /act:story -->/);
   assert.match(newStoryCard({ key: "125", spec: true, stage: "writing" }), /Claude is writing the spec/);
   assert.doesNotMatch(newStoryCard({ key: "125", ai: { plan: true }, spec: true, stage: "story", stories: [142] }), /act:/);
-  assert.deepEqual(specs.pendingCard(null), { spec: true, stage: "writing", questions: 0 });
+  assert.deepEqual(specs.pendingCard(null), { spec: true, stage: "writing", questions: [] });
   const written = specs.specComment("### Open questions\n\n1. Which?\n2. Where?");
-  assert.deepEqual(specs.pendingCard(written, { failed: true }), { spec: true, stage: "spec", questions: 2 });
+  assert.deepEqual(specs.pendingCard(written, { failed: true }), { spec: true, stage: "spec", questions: ["1. Which?", "2. Where?"] });
   assert.equal(specs.pendingCard(`${written}\n<!-- story:9 -->`), null, "a spec made into a story keeps its card");
   // answers written after the command on the same comment are kept; a bare command is not an answer
   const c = (body, created) => ({ author: "pat", body, created });

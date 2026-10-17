@@ -5,6 +5,10 @@ main = "worker.mjs"
 compatibility_date = "2026-10-01"
 workers_dev = true
 
+# keep the Worker's logs (one JSON line per click) in the dashboard: Workers › sf-pipeline-slack › Logs
+[observability]
+enabled = true
+
 [vars]
 GITHUB_REPO = "__OWNER__/__project__"
 # SLACK_USERS ({"<Slack user ID>": "<GitHub login>"}: who may act from Slack, and as whom) is a secret too, so the

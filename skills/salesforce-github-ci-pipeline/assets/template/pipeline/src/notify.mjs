@@ -29,7 +29,8 @@ export function buttons({ body, key, title = "", url = "", actions = true }) {
   // actions: the Worker is set up (SLACK_ACTIONS); without it, only the links
   const boxes = actions ? [...String(body).matchAll(/^- \[ \] .*<!-- act:([a-z-]+) -->/gm)].map((m) => m[1]).filter((id) => BUTTONS[id]) : [];
   const out = [];
-  if (/open question/.test(body) && boxes.includes("spec")) out.push({ text: "✍️ Answer in Slack", value: { n, act: "answer", title: title.slice(0, 120) }, style: "primary" });
+  const asked = String(body).match(/<summary>The open questions<\/summary>\s*([\s\S]*?)\s*<\/details>/)?.[1] || "";   // Slack caps a button's value at 2000
+  if (/open question/.test(body) && boxes.includes("spec")) out.push({ text: "✍️ Answer in Slack", value: { n, act: "answer", title: title.slice(0, 120), q: asked.slice(0, 1500) }, style: "primary" });
   for (const id of boxes) out.push({ text: BUTTONS[id], value: { n, act: id }, ...(out.length ? {} : { style: "primary" }) });
   const approve = String(body).match(/\[Approve here\]\(([^)]+)\)/)?.[1];
   if (approve) out.push({ text: "✅ Approve on GitHub", url: approve, style: "primary" });

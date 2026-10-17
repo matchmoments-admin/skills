@@ -113,9 +113,10 @@ function storyActions(rows, { ai, base, ci }) {
 }
 
 /** The card on a story before /start (or a spec issue: where the spec stands; stage: new | writing | spec | story | shipped;
- *  questions: the spec's open questions). */
-export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [], tag = null, questions = 0 }) {
+ *  questions: the spec's open questions, as written, or how many). */
+export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [], tag = null, questions: asked = 0 }) {
   if (spec) {
+    const list = Array.isArray(asked) ? asked : [], questions = Array.isArray(asked) ? asked.length : asked;
     const story = stories[0];
     const made = ["story", "shipped"].includes(stage);
     const asks = questions ? `${questions === 1 ? "1 open question" : `${questions} open questions`}` : "";
@@ -132,7 +133,9 @@ export function newStoryCard({ key, ai = {}, spec = false, stage = "new", storie
       story: `Done: the spec is story #${story}. Work on it there (Plan, Start, Build).`,
       shipped: `Done: shipped in ${tag} (story ${stories.map((n) => `#${n}`).join(", ")}).` }[stage];
     const boxes = { new: ["spec"], spec: ["spec", questions ? "story-anyway" : "story"] }[stage] || [];
-    return render(key, next, rows, null, allowed(boxes, ai));
+    // the questions themselves, folded (Slack's answer box shows them too: notify.buttons)
+    const shown = stage === "spec" && list.length ? `${next}\n\n<details><summary>The open questions</summary>\n\n${list.join("\n")}\n\n</details>` : next;
+    return render(key, shown, rows, null, allowed(boxes, ai));
   }
   return render(key, ai.plan ? "Bigger story? Tick **Plan it with Claude** first. Small story? Tick **Start**." : "Tick **Start** when you are ready to work on it.",
     [["waiting", "Branch and scratch org", "created when you start the story"]], null, allowed(["plan", "start", "hotfix"], ai));

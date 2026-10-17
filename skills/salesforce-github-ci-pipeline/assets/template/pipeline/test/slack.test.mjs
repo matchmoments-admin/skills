@@ -59,6 +59,13 @@ test("Slack actions: notices carry the card's next options as buttons once the W
   assert.deepEqual(ids(on), ["answer", "spec", "story-anyway", "link:Open the card"]);
   assert.doesNotMatch(on.blocks[0].text.text, / above\b/, "Slack has no 'above'");
   assert.deepEqual(ids(notify.notice({ before: "", after: card, key: "333", url: "https://x/c" })), ["link:Open the card"], "no Worker: links only");
+  // the questions travel: the card folds them, the button carries them, the box shows them
+  const asking = newStoryCard({ key: "333", ai: { plan: true }, spec: true, stage: "spec", questions: ["1. Is the vendor skip complete?"] });
+  assert.match(asking, /<details><summary>The open questions<\/summary>\n\n1\. Is the vendor skip complete\?/);
+  const answer = notify.notice({ before: "", after: asking, key: "333", actions: true }).blocks[1].elements[0];
+  assert.equal(JSON.parse(answer.value).q, "1. Is the vendor skip complete?");
+  const box = decide(click(JSON.parse(answer.value)), env).modal.view;
+  assert.match(JSON.stringify(box.blocks), /The open questions\*\\n1\. Is the vendor skip complete/);
   const release = "**Next:** **[Approve here](https://github.com/o/r/pull/9/files)** when you are happy.\n\n| ⬜ | Approval | waiting |";
   assert.deepEqual(ids(notify.notice({ before: "", after: release, key: "9", actions: true })), ["link:✅ Approve on GitHub"], "approving stays in GitHub");
 });

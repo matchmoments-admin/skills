@@ -46,7 +46,7 @@ export function decide(payload, env) {
     const v = value(a.value), n = number(v.n);
     if (!n) return { ack: "" };
     if (!login) return notLinked;
-    if (v.act === "answer") return { ack: "", modal: { trigger_id: payload.trigger_id, view: answerView(n, v.title, v.cmd) } };
+    if (v.act === "answer") return { ack: "", modal: { trigger_id: payload.trigger_id, view: answerView(n, v.title, v.cmd, v.q) } };
     if (!ACTS[v.act]) return { ack: "", reply: "That action cannot be started from Slack: open the card." };
     return { ack: "", dispatch: { number: n, command: ACTS[v.act], by: login, text: "" }, reply: `⏳ Done as @${login}: \`${ACTS[v.act]}\` on #${n}. The card shows what happens next; this channel hears when it is your turn again.` };
   }
@@ -62,41 +62,64 @@ export function decide(payload, env) {
 }
 
 /** The "Answer in Slack" box: one text field; the answers land on the issue and the spec is rewritten with them. */
-export function answerView(n, title = "", cmd = "/spec") {
+export function answerView(n, title = "", cmd = "/spec", questions = "") {
   return { type: "modal", callback_id: "answer", private_metadata: JSON.stringify({ n, cmd: cmd === "/plan" ? "/plan" : "/spec" }),
     title: { type: "plain_text", text: `Answer #${n}`.slice(0, 24) }, submit: { type: "plain_text", text: "Send and rewrite" }, close: { type: "plain_text", text: "Cancel" },
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: `${title ? `*${title}*\n` : ""}Answer the open questions (numbered, as the spec asks them) or say what to change. Your words go on the issue as yours, then Claude rewrites the ${cmd === "/plan" ? "plan" : "spec"} with them.` } },
+      ...(questions ? [{ type: "section", text: { type: "mrkdwn", text: `*The open questions*\n${String(questions).replace(/\*\*([^*]+)\*\*/g, "*$1*").slice(0, 2900)}` } }] : []),
       { type: "input", block_id: "answer", label: { type: "plain_text", text: "Your answers" }, element: { type: "plain_text_input", action_id: "text", multiline: true } },
     ] };
 }
 
+// one JSON line per event in the Worker's logs (wrangler tail, or the dashboard's Logs): never a secret or what was typed
+const log = (event, fields = {}) => console.log(JSON.stringify({ event, ...fields }));
+const tell = async (payload, text) => {
+  if (!payload.response_url) return;
+  try {
+    const r = await fetch(payload.response_url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ response_type: "ephemeral", replace_original: false, text }) });
+    if (!r.ok) log("reply-failed", { status: r.status });
+  } catch (e) { log("reply-error", { error: String(e.message || e) }); }
+};
+
 async function work(d, env, payload) {
   if (d.modal) {
-    const r = await fetch("https://slack.com/api/views.open", { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${env.SLACK_BOT_TOKEN}` }, body: JSON.stringify(d.modal) });
-    const j = await r.json().catch(() => ({}));
-    if (!j.ok) d.reply = `The answer box did not open (${j.error || r.status}). Answer in a comment on the issue instead.`;
+    try {
+      const r = await fetch("https://slack.com/api/views.open", { method: "POST", headers: { "content-type": "application/json; charset=utf-8", authorization: `Bearer ${env.SLACK_BOT_TOKEN}` }, body: JSON.stringify(d.modal) });
+      const j = await r.json().catch(() => ({}));
+      log("views.open", { ok: Boolean(j.ok), status: r.status, error: j.error, messages: j.response_metadata?.messages });
+      if (!j.ok) d.reply = `The answer box did not open (${j.error || r.status}${j.response_metadata?.messages ? `: ${j.response_metadata.messages.join("; ")}` : ""}). Answer in a comment on the issue instead.`;
+    } catch (e) { log("views.open-error", { error: String(e.message || e) }); d.reply = "The answer box did not open. Answer in a comment on the issue instead."; }
   }
   if (d.dispatch) {
-    const r = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, { method: "POST",
-      headers: { authorization: `Bearer ${env.GITHUB_TOKEN}`, accept: "application/vnd.github+json", "user-agent": "sf-pipeline-slack", "content-type": "application/json" },
-      body: JSON.stringify({ event_type: "slack-act", client_payload: d.dispatch }) });
-    if (r.status !== 204) d.reply = `The pipeline was not started (GitHub said ${r.status}). Use the card instead.`;
+    try {
+      const r = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, { method: "POST",
+        headers: { authorization: `Bearer ${env.GITHUB_TOKEN}`, accept: "application/vnd.github+json", "user-agent": "sf-pipeline-slack", "content-type": "application/json" },
+        body: JSON.stringify({ event_type: "slack-act", client_payload: d.dispatch }) });
+      log("dispatch", { status: r.status, number: d.dispatch.number, command: d.dispatch.command, by: d.dispatch.by, typed: d.dispatch.text.length });
+      if (r.status !== 204) d.reply = `The pipeline was not started (GitHub said ${r.status}${r.status === 401 || r.status === 403 || r.status === 404 ? ": the Worker's GITHUB_TOKEN cannot send dispatches to this repository" : ""}). Use the card instead.`;
+    } catch (e) { log("dispatch-error", { error: String(e.message || e) }); d.reply = "The pipeline was not started (GitHub did not answer). Use the card instead."; }
   }
-  if (d.reply && payload.response_url) {
-    await fetch(payload.response_url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ response_type: "ephemeral", replace_original: false, text: d.reply }) });
-  }
+  if (d.reply) await tell(payload, d.reply);
 }
 
 export default {
   async fetch(request, env, ctx) {
     if (request.method !== "POST") return new Response("SF Pipeline: Slack actions. POST only.", { status: 405 });
-    const body = await request.text();
-    const ok = await fromSlack({ body, timestamp: request.headers.get("x-slack-request-timestamp"), signature: request.headers.get("x-slack-signature"), secret: env.SLACK_SIGNING_SECRET });
-    if (!ok) return new Response("bad signature", { status: 401 });
-    const payload = value(new URLSearchParams(body).get("payload"));
-    const d = decide(payload, env);
-    if (d.dispatch || d.reply || d.modal) ctx.waitUntil(work(d, env, payload).catch(() => {}));
-    return new Response(d.ack, { status: 200, headers: d.ack ? { "content-type": "application/json" } : {} });
+    try {
+      const body = await request.text();
+      const ok = await fromSlack({ body, timestamp: request.headers.get("x-slack-request-timestamp"), signature: request.headers.get("x-slack-signature"), secret: env.SLACK_SIGNING_SECRET });
+      if (!ok) { log("bad-signature", { secretSet: Boolean(env.SLACK_SIGNING_SECRET), age: Math.floor(Date.now() / 1000) - Number(request.headers.get("x-slack-request-timestamp")) }); return new Response("bad signature", { status: 401 }); }
+      const payload = value(new URLSearchParams(body).get("payload"));
+      const d = decide(payload, env);
+      log("interaction", { type: payload.type, callback: payload.view?.callback_id, action: (() => { try { return JSON.parse(payload.actions?.[0]?.value || "{}").act; } catch { return null; } })() ?? (payload.actions?.[0]?.url ? "link" : undefined),
+        user: payload.user?.id, linked: Boolean(users(env)[payload.user?.id]), ack: d.ack ? JSON.parse(d.ack).response_action : "", dispatch: Boolean(d.dispatch), modal: Boolean(d.modal) });
+      if (d.dispatch || d.reply || d.modal) ctx.waitUntil(work(d, env, payload).catch((e) => log("work-error", { error: String(e.message || e) })));
+      return new Response(d.ack, { status: 200, headers: d.ack ? { "content-type": "application/json" } : {} });
+    } catch (e) {
+      // never a Slack error screen: answer 200 and say so in the logs
+      log("error", { error: String(e.message || e), stack: String(e.stack || "").split("\n").slice(0, 3).join(" | ") });
+      return new Response("", { status: 200 });
+    }
   },
 };
