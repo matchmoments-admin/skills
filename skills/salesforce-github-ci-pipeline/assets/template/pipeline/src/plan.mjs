@@ -11,7 +11,8 @@ export const READINESS_TITLE = "Story readiness";
 
 // the pipeline's own comments: its exact identities (conventions.isPipelineAuthor), or anything carrying its marker
 const isPipeline = (c) => isPipelineAuthor(c.author) || c.author === "app/pipeline" || /<!-- pipeline:/.test(c.body || "");
-const isCommand = (c) => /^\s*\//.test(c.body || "");
+// a person's words in a comment: a leading command ("/spec") is dropped, what follows it is kept ("/spec 1. Use X" answers)
+export const words = (body) => String(body || "").replace(/^\s*\/[a-z-]+\b/i, "").trim();
 
 /**
  * comments: [{ author, body, created }] oldest first (GitHub issue comments or Jira comments as text).
@@ -23,7 +24,7 @@ export function planContext(comments, { mark = PLAN_MARK, title = PLAN_TITLE } =
   if (at < 0) return { plan: null, answers: [] };
   const plan = sorted[at].body.replace(mark, "").replace(/^(⏳ \*\*Now:\*\*|❌ \*\*Failed:\*\*).*\n*/m, "").replace(/<!-- story:\d+ -->\n?/, "")
     .replace(/\n\*\*(Do it from here|Story):\*\*[\s\S]*$/, "").trim();   // a status line or the story link is not the spec
-  const answers = sorted.slice(at + 1).filter((c) => !isPipeline(c) && !isCommand(c) && (c.body || "").trim()).map((c) => ({ author: c.author, body: c.body.trim() }));
+  const answers = sorted.slice(at + 1).filter((c) => !isPipeline(c) && words(c.body)).map((c) => ({ author: c.author, body: words(c.body) }));
   return { plan, answers };
 }
 

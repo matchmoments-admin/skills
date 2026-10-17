@@ -445,7 +445,9 @@ is one CLI, so the Salesforce steps can run on Buildkite agents if a company alr
 
 - **New spec (bigger work)** form → its card offers **Write the spec with Claude** (`/spec`): problem, solution, user
   stories, decisions per object (fields, automation, permission set, page, Access), testing seams, one-way doors, open
-  questions. Answer in comments; `/spec` again revises it.
+  questions. Answer in comments (or after `/spec` in the same comment: the text after the command is kept); `/spec` again,
+  or the card's **Write the spec** box, revises it. The card carries the boxes, counts the open questions, and shows ⏳
+  while Claude writes.
 - **Make it a story** (`/story`): one tick, no AI. The spec becomes one Story issue in the pipeline's format (its user
   stories are the acceptance criteria), a sub-issue of the spec. Every agent working on the story (plan, build, review,
   UI test) also reads the whole spec and the answers to it, so its decisions and out of scope bind. While the spec has

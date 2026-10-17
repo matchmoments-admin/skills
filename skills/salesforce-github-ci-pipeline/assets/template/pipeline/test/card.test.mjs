@@ -150,6 +150,20 @@ test("completion fixes: UAT failure offers a retest; a spec card follows the spe
   const failedUat = releaseCard({ repoUrl: "https://github.com/o/r", pr, uat: true, facts: { checkRuns: [], statuses: [st], reviews: [] } });
   assert.match(failedUat, /act:uat-pass[\s\S]*act:uat\b/);
   assert.match(newStoryCard({ key: "125", spec: true, stage: "spec" }), /tick \*\*Make it a story\*\*/);
+  // the card carries the boxes (its stage icons are not boxes), the open questions, and ⏳ while Claude writes
+  const asked = newStoryCard({ key: "125", ai: { plan: true }, spec: true, stage: "spec", questions: 5 });
+  assert.match(asked, /\*\*5 open questions\*\*[\s\S]*act:spec[\s\S]*act:story-anyway/);
+  assert.match(newStoryCard({ key: "125", ai: { plan: true }, spec: true, stage: "spec" }), /act:story -->/);
+  assert.match(newStoryCard({ key: "125", spec: true, stage: "writing" }), /Claude is writing the spec/);
+  assert.doesNotMatch(newStoryCard({ key: "125", ai: { plan: true }, spec: true, stage: "story", stories: [142] }), /act:/);
+  assert.deepEqual(specs.pendingCard(null), { spec: true, stage: "writing", questions: 0 });
+  const written = specs.specComment("### Open questions\n\n1. Which?\n2. Where?");
+  assert.deepEqual(specs.pendingCard(written, { failed: true }), { spec: true, stage: "spec", questions: 2 });
+  assert.equal(specs.pendingCard(`${written}\n<!-- story:9 -->`), null, "a spec made into a story keeps its card");
+  // answers written after the command on the same comment are kept; a bare command is not an answer
+  const c = (body, created) => ({ author: "pat", body, created });
+  const ctx = plans.planContext([c(written, "1"), c("/spec 1. Use X\n2. Here", "2"), c("  /spec", "3"), c("plain answer", "4")], { mark: specs.SPEC_MARK, title: specs.SPEC_TITLE });
+  assert.deepEqual(ctx.answers.map((x) => x.body), ["1. Use X\n2. Here", "plain answer"]);
   assert.match(newStoryCard({ key: "125", spec: true, stage: "story", stories: [142] }), /Done: the spec is story #142/);
   assert.equal(names.nextSprint(["2026-w45", "2026-w44"]), "2026-w46");
   assert.equal(names.nextSprint(["2026-w52"]), "2027-w01");

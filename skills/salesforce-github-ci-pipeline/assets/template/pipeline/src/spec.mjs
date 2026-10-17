@@ -5,7 +5,7 @@
 // by hand only when one slice cannot pass the production validation alone (docs/agents/salesforce.md, "Stories").
 // Pure, except makeStory(), which acts through the gh seam.
 import { checklist } from "./actions.mjs";
-import { planContext, PENDING } from "./plan.mjs";
+import { planContext, PENDING, words } from "./plan.mjs";
 import { approverList } from "./gate.mjs";
 import { setting } from "./conventions.mjs";
 
@@ -95,6 +95,14 @@ export function pendingComment(existing, { state, what, url }) {
   return current ? [SPEC_MARK, line, "", current].join("\n") : [SPEC_MARK, PENDING, `### ${SPEC_TITLE}`, "", line].join("\n");
 }
 
+/** The spec issue's card while Claude writes (or fails to): ⏳ while writing; back to where it stood when the run fails.
+ *  null once a story is made (its card says so already). existing: the spec comment's body now, or null. Pure. */
+export function pendingCard(existing, { failed = false } = {}) {
+  const spec = String(existing || "").includes(SPEC_MARK) && !String(existing).includes(PENDING) ? String(existing) : null;
+  if (storyOfSpec(spec)) return null;
+  return { spec: true, stage: failed ? (spec ? "spec" : "new") : "writing", questions: spec ? openQuestions(spec) : 0 };
+}
+
 /** What a story hears when its spec is revised after it was made (its criteria are a copy; the spec binds). Pure. */
 export const revisedNote = (spec) => `📝 Spec #${spec} was revised. Its decisions bind this story (every agent reads the latest spec): where a criterion above disagrees with it, the spec wins. Builders: bring the pull request's title and description in line with what is built.`;
 
@@ -108,7 +116,7 @@ export async function specFile(tracker, key) {
   const issue = await tracker.story(key);
   const comments = await tracker.comments(key).catch(() => []);
   const spec = planContext(comments, { mark: SPEC_MARK, title: SPEC_TITLE });
-  const people = comments.filter((c) => !/<!-- pipeline:/.test(c.body || "") && !/^\s*\//.test(c.body || "")).map((c) => `- **${c.author}:** ${String(c.body).replace(/\n+/g, " ")}`);
+  const people = comments.filter((c) => !/<!-- pipeline:/.test(c.body || "") && words(c.body)).map((c) => `- **${c.author}:** ${words(c.body).replace(/\n+/g, " ")}`);
   const parts = [`# ${issue.title} (#${key})`, "", issue.body || "(no description)", ""];
   if (spec.plan) parts.push("---", "", "## The current spec", "", spec.plan, "");
   if (spec.answers.length) parts.push("## Comments since the spec (they win over it)", "", ...spec.answers.map((a) => `- **${a.author}:** ${a.body.replace(/\n+/g, " ")}`), "");

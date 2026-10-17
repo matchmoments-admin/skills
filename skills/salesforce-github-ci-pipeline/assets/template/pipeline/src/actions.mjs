@@ -9,7 +9,7 @@ import { STATUS, approvalProblem, standing } from "./gate.mjs";
 import { storyOf, storyBranch, nextSprint, sprintOfMilestoneTitle } from "./conventions.mjs";
 
 export const ACTIONS = {
-  spec: { label: "📝 Write the spec with Claude: the problem, the solution, user stories, decisions, open questions", on: "issue", adds: ["ai:spec"], flag: "plan" },
+  spec: { label: "📝 Write the spec with Claude: the problem, the solution, user stories, decisions, open questions (again: it rewrites it with your comments since)", on: "issue", adds: ["ai:spec"], flag: "plan" },
   story: { label: "📌 Make it a story (one story with this spec's user stories as its criteria; no AI)", on: "issue" },
   "story-anyway": { label: "📌 Make it a story anyway (the spec's assumed answers stand)", on: "issue" },
   plan: { label: "🧭 Plan it with Claude: it proposes the build and asks its questions", on: "issue", adds: ["ai:plan"], flag: "plan" },
