@@ -36,7 +36,7 @@ export const ACTIONS = {
   uat: { label: "🔁 Deploy this commit to UAT again", on: "pr" },
 };
 // the comment commands, and the action each one is
-const COMMANDS = { "/spec": "spec", "/story": "story", "/tickets": "story", "/plan": "plan", "/start": "start", "/build": "build", "/hotfix": "hotfix", "/review": "review", "/fix": "fix",
+const COMMANDS = { "/sprint": "sprint", "/spec": "spec", "/story": "story", "/tickets": "story", "/plan": "plan", "/start": "start", "/build": "build", "/hotfix": "hotfix", "/review": "review", "/fix": "fix",
   "/test": "test", "/ui-test": "ai-test", "/ship": "ship", "/review-ok": "review-ok", "/uat-pass": "uat-pass", "/uat-fail": "uat-fail", "/gate": "gate", "/ci": "ci",
   "/staging": "staging", "/uat": "uat", "/fix-story": "fix-story", "/login": "org-login", "/admin-login": "org-login-admin", "/retrieve": "retrieve", "/sprint-start": "sprint", "/release-cut": "release-cut", "/help": "help" };
 

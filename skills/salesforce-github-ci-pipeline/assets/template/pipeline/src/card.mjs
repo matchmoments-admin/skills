@@ -114,7 +114,7 @@ function storyActions(rows, { ai, base, ci }) {
 
 /** The card on a story before /start (or a spec issue: where the spec stands; stage: new | writing | spec | story | shipped;
  *  questions: the spec's open questions, as written, or how many). */
-export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [], tag = null, questions: asked = 0, plan = null }) {
+export function newStoryCard({ key, ai = {}, spec = false, stage = "new", stories = [], tag = null, questions: asked = 0, plan = null, sprintOpen = true }) {
   if (spec) {
     const list = Array.isArray(asked) ? asked : [], questions = Array.isArray(asked) ? asked.length : asked;
     const story = stories[0];
@@ -144,8 +144,11 @@ export function newStoryCard({ key, ai = {}, spec = false, stage = "new", storie
   const next = !plan ? (ai.plan ? "Bigger story? Tick **Plan it with Claude** first. Small story? Tick **Start**." : "Tick **Start** when you are ready to work on it.")
     : { writing: "Nothing yet: Claude is planning the build. This card updates when it is done.", failed: "Tick **Plan it with Claude** to try again, or **Start** to go ahead without a plan." }[plan.stage]
     || `Read the **Build plan** comment below. ${asks ? `It has **${asks}**: answer in a comment, then tick **Plan it with Claude** again (or comment \`/plan\`). ` : "To change it, reply with your changes in a comment, then tick **Plan it with Claude** again. "}When it is right, tick **Start**${asks ? " (the plan's guesses then stand for any question you leave)" : ""}.`;
-  const shown = plan?.questions?.length ? `${next}\n\n<details><summary>The open questions</summary>\n\n${plan.questions.join("\n")}\n\n</details>` : next;
-  return render(key, shown, [...planRow, ["waiting", "Branch and scratch org", "created when you start the story"]], null, plan?.stage === "writing" ? [] : allowed(["plan", "start", "hotfix"], ai));
+  // a story starts on the open sprint: with none open, Start would refuse, so the card says what comes first
+  const first = sprintOpen || plan?.stage === "writing" ? "" : "**No sprint is open**, so it cannot start yet: tick **Start the next sprint** first (a release branch and a staging org, about 10 minutes; Slack says when it is open), then **Start**. ";
+  const shown = plan?.questions?.length ? `${first}${next}\n\n<details><summary>The open questions</summary>\n\n${plan.questions.join("\n")}\n\n</details>` : `${first}${next}`;
+  const sprintRow = first ? [["waiting", "Sprint", "none open: start one first"]] : [];
+  return render(key, shown, [...planRow, ...sprintRow, ["waiting", "Branch and scratch org", "created when you start the story"]], null, plan?.stage === "writing" ? [] : allowed([...(first ? ["sprint"] : []), "plan", "start", "hotfix"], ai));
 }
 
 /**
@@ -317,7 +320,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
     const f = pr ? host.prFacts(pr.number) : null;
     const planned = Boolean(planContext(await tracker.comments(key).catch(() => [])).plan);
     const releasePr = pr?.state === "MERGED" && openRel ? (host.api("GET", `repos/${host.repo}/pulls?state=open&base=main&head=${host.repo.split("/")[0]}:${openRel}`) || [])[0]?.number || null : null;
-    return { branch, pr, ai, facts: f, planned, releasePr, base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
+    return { branch, pr, ai, facts: f, planned, releasePr, sprintOpen: Boolean(openRel), base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
   }
   return {
     async refresh(key, { base = null, tag = null, activity = null, light = false } = {}) {
@@ -328,7 +331,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
         if (!c.pr && !tag && !activity && host.api("GET", `repos/${host.repo}/branches/${encodeURIComponent(c.branch)}`)?.status === 404) {
           const s = await tracker.story(key).catch(() => null);
           const plan = planState(await tracker.comments(key).catch(() => []));
-          if (!(s?.labels || []).includes("spec")) await write(tracker, key, newStoryCard({ key, ai: aiFeatures(), plan }), { name: s?.title || "" });
+          if (!(s?.labels || []).includes("spec")) await write(tracker, key, newStoryCard({ key, ai: aiFeatures(), plan, sprintOpen: c.sprintOpen }), { name: s?.title || "" });
           return;
         }
         const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, base: c.base, releasePr: c.releasePr,

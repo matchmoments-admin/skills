@@ -33,7 +33,7 @@ jobs:
     steps:
       - name: A story or spec number, a GitHub login and a command, nothing else
         run: |
-          [[ "$N" =~ ^[0-9]{1,7}$ && "$WHO" =~ ^[A-Za-z0-9-]{1,39}$ && "$COMMAND" =~ ^/(spec|story|plan|start|build)$ ]] || { echo "::error::refused: number '$N', login '$WHO', command '$COMMAND'"; exit 1; }
+          [[ "$N" =~ ^[0-9]{1,7}$ && "$WHO" =~ ^[A-Za-z0-9-]{1,39}$ && "$COMMAND" =~ ^/(sprint|spec|story|plan|start|build)$ ]] || { echo "::error::refused: number '$N', login '$WHO', command '$COMMAND'"; exit 1; }
       - uses: actions/checkout@v4
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       - id: app

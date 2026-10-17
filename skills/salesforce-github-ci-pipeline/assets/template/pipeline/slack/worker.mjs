@@ -13,7 +13,7 @@
 //   SLACK_USERS           (secret) JSON {"<Slack user ID>": "<GitHub login>"}: who may act, and as whom
 
 /** The actions a Slack button may start: the card's own boxes, for issues (specs and stories). Never an approval. */
-export const ACTS = { spec: "/spec", story: "/story", "story-anyway": "/story", plan: "/plan", start: "/start", build: "/build" };
+export const ACTS = { sprint: "/sprint", spec: "/spec", story: "/story", "story-anyway": "/story", plan: "/plan", start: "/start", build: "/build" };
 const MAX_AGE = 300;   // seconds: an older signed request is a replay
 
 /** Is this request from Slack? Its v0 signature over the timestamp and the raw body, and not older than 5 minutes. */

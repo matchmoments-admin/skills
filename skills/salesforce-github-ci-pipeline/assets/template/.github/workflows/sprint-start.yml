@@ -55,3 +55,11 @@ jobs:
         run: |
           node pipeline/bin/pipe.mjs org ready "sprint:$SPRINT"
           node pipeline/bin/pipe.mjs org limits
+      - name: Slack hears the sprint is open (stories waiting for it can start)
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          LINK: ${{ github.server_url }}/${{ github.repository }}/issues?q=is%3Aissue+is%3Aopen+-label%3Aspec
+        run: |
+          node --input-type=module -e '
+            const { slackNotifier } = await import(process.cwd() + "/pipeline/src/notify.mjs");
+            await slackNotifier({ log: console.log })({ text: `🏁 *Sprint ${process.env.SPRINT} is open*: stories can start now. Press *Start* on a story (its card, or its last Slack message). <${process.env.LINK}|Open stories>` });'

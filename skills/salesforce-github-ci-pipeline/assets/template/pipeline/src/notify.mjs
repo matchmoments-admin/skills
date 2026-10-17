@@ -20,7 +20,7 @@ export const mrkdwn = (s) => String(s).replace(/\*\*([^*]+)\*\*/g, "*$1*").repla
 const HEAD = { you: "your turn", failed: "something failed", shipped: "shipped" };
 
 // the card's boxes a Slack button may start (pipeline/slack/worker.mjs ACTS: never an approval), with short labels
-const BUTTONS = { spec: "📝 Rewrite the spec", story: "📌 Make it a story", "story-anyway": "📌 Make it a story anyway", plan: "🧭 Plan it", start: "▶️ Start", build: "🤖 Build it" };
+const BUTTONS = { sprint: "🏁 Start the sprint", spec: "📝 Rewrite the spec", story: "📌 Make it a story", "story-anyway": "📌 Make it a story anyway", plan: "🧭 Plan it", start: "▶️ Start", build: "🤖 Build it" };
 
 /** The buttons for a card: its tick boxes (unticked), "Answer in Slack" while a spec has open questions, an approval
  *  link (approving stays in GitHub), and the card itself. Slack runs the action buttons through the Worker. Pure. */

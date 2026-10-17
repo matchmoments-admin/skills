@@ -5,10 +5,13 @@ name: slack-test
 on:
   workflow_dispatch:
     inputs:
-      issue: { description: "Optional: an issue whose card's notice to send now", required: false, default: "" }
+      issue: { description: "Optional: an issue whose card (brought up to date) is sent now, with its buttons", required: false, default: "" }
 permissions:
   contents: read
-  issues: read
+  issues: write          # an issue's card is brought up to date before its notice is sent
+  pull-requests: read
+  statuses: read
+  checks: read
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
@@ -18,7 +21,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-        with: { sparse-checkout: pipeline, persist-credentials: false }
+        with: { sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       - name: Send this card's notice now
         if: inputs.issue != ''
         env:
@@ -27,6 +30,8 @@ jobs:
           N: ${{ inputs.issue }}
         run: |
           [[ "$N" =~ ^[0-9]{1,7}$ ]] || { echo "::error::an issue number"; exit 1; }
+          # the card as the pipeline would draw it now (quietly: the notice below is the one message)
+          SLACK_WEBHOOK_URL="" node pipeline/bin/pipe.mjs story card "$N" || true
           gh api "repos/$GH_REPO/issues/$N/comments?per_page=100" --jq '[.[] | select(.body | contains("<!-- pipeline:story-card -->"))][0] | {body, url: .html_url}' > "$RUNNER_TEMP/card.json"
           gh issue view "$N" --json title --jq .title > "$RUNNER_TEMP/title.txt"
           node --input-type=module -e '

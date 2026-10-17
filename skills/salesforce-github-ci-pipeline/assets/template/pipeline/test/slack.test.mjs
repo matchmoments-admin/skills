@@ -32,7 +32,7 @@ test("Slack actions: a button starts the card's action as the linked person; nev
   for (const act of ["approve", "uat-pass", "ship", "review-ok"]) assert.ok(!decide(click({ n: "1", act }), env).dispatch, `${act} is not startable from Slack`);
   assert.ok(!decide(click({ n: "1; rm -rf", act: "story" }), env).dispatch, "a number is a number");
   assert.deepEqual(decide({ type: "block_actions", user: { id: "U1" }, actions: [{ url: "https://github.com/o/r/pull/1/files" }] }, env), { ack: "" }, "a link button: Slack opens it");
-  assert.deepEqual(Object.keys(ACTS).sort(), ["build", "plan", "spec", "start", "story", "story-anyway"]);
+  assert.deepEqual(Object.keys(ACTS).sort(), ["build", "plan", "spec", "sprint", "start", "story", "story-anyway"]);
 });
 
 test("Slack actions: Answer in Slack opens a box; what is typed goes to the issue as the person's words, then the spec is rewritten", () => {
@@ -86,7 +86,7 @@ test("Slack actions: the Worker answers Slack at once, then dispatches; a bad si
   } finally { globalThis.fetch = realFetch; }
   const wf = readFileSync(new URL("../../.github/workflows/slack.yml", import.meta.url), "utf8");
   assert.match(wf, /types: \[slack-act\]/);
-  assert.match(wf, /\^\/\(spec\|story\|plan\|start\|build\)\$/, "the workflow refuses anything else, whatever the Worker sends");
+  assert.match(wf, /\^\/\(sprint\|spec\|story\|plan\|start\|build\)\$/, "the workflow refuses anything else, whatever the Worker sends");
 });
 
 test("a story's card follows its build plan (⏳ while Claude plans, then what to do), so Slack hears when the plan is ready", () => {
@@ -113,4 +113,16 @@ test("a story's card follows its build plan (⏳ while Claude plans, then what t
   assert.equal(submitted.dispatch.command, "/plan", "answers to a plan rewrite the plan");
   const clear = newStoryCard({ key: "343", ai: { plan: true }, plan: { stage: "ready", questions: [] } });
   assert.match(clear, /When it is right, tick \*\*Start\*\*\./);
+});
+
+test("a story with no open sprint says to start the sprint first, with its box and its Slack button", () => {
+  const card = newStoryCard({ key: "343", ai: { plan: true }, plan: { stage: "ready", questions: [] }, sprintOpen: false });
+  assert.match(card, /\*\*Next:\*\* \*\*No sprint is open\*\*, so it cannot start yet: tick \*\*Start the next sprint\*\* first/);
+  assert.match(card, /act:sprint[\s\S]*act:start/);
+  assert.match(card, /\| ⬜ \| Sprint \| none open: start one first \|/);
+  const els = notify.notice({ before: "", after: card, key: "343", actions: true }).blocks[1].elements;
+  assert.deepEqual(els.map((e) => e.text.text), ["🏁 Start the sprint", "🧭 Rewrite the plan", "▶️ Start"]);
+  assert.equal(decide(click(JSON.parse(els[0].value)), env).dispatch.command, "/sprint");
+  assert.doesNotMatch(newStoryCard({ key: "343", ai: { plan: true }, plan: { stage: "ready", questions: [] } }), /act:sprint|No sprint/, "a sprint is open: nothing to say");
+  assert.match(readFileSync(new URL("../../.github/workflows/sprint-start.yml", import.meta.url), "utf8"), /Sprint \$\{process\.env\.SPRINT\} is open/);
 });
