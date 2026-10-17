@@ -456,3 +456,35 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **A job that starts only to stop still bills a minute and holds a lane.** → Start decisions (`pipe start`) in the
   short route job: flag off, release or back-merge, spec-only push, nothing reviewable, blocked, the fix-round limit,
   no committed spec.
+
+## Slack (17 Oct, the first live run)
+
+- **Every Slack button shows a bare ⚠️, but "Open the card" works**: Socket Mode was on (the Starter and AI agent
+  templates turn it on), so clicks went to a connection nothing held, and the Request URL field was hidden. Socket
+  Mode off, Request URL = the Worker, **Save Changes**. `slack-setup.sh` creates the app from a manifest with it off.
+- **Unit tests posted to the real channel**: once `SLACK_WEBHOOK_URL` was a secret, CI's test step (the workflow env)
+  built the real notifier. The test step blanks it and `pipeline/test/helpers.mjs` deletes it.
+- **"Answer in Slack" answers were ignored**: a comment that starts with `/` was skipped as a command. Text after a
+  command now counts (`plan.words`), and answers relayed from Slack count as the person's only when the pipeline
+  posted them (`plan.personal`).
+- **A finished plan sent no notice**: the plan step updated its comment, never the story card. `plan-pending` and
+  `plan-post` refresh the card (`plan.planState`), so ⏳ while planning and 👉 when ready.
+- **A failed build sent no notice**: the failure was on the card's Now line (`❌ Failed:`), not a stage row.
+  `notify.turnOf` reads both.
+- **Start pressed twice, then a "your turn: Start" while starting**: with no sprint open the card now offers only
+  **Start the next sprint**, which starts the story itself when the sprint opens; a story being started shows ⏳.
+- **PR boxes ticked on the story's issue did nothing** ("fix works on a pull request"): `act` routes a PR action from
+  the story issue to its open PR.
+
+## Vendored libraries (17 Oct, FFLib)
+
+- **The build agent stopped at 40 seconds**: it may not `mkdir`/`cp`/`mv`, and rightly would not retype ~200 files.
+  `scripts/vendor.sh` copies a library byte for byte at a pinned commit; the agents may run that one script.
+- **Code Analyzer scanned force-app/vendor anyway**: `ignores.files` is relative to the scanned workspace
+  (`force-app`): `vendor/**` works, `force-app/vendor/**` and `**/force-app/vendor/**` match nothing. Checked with the
+  ESLint engine (no Java needed) and a probe file.
+- **The AI review would crash on the FFLib PR**: GitHub refuses `gh pr diff` over 20,000 lines (HTTP 406). The review
+  builds its diff with `git diff` and leaves the vendor folder out.
+- **The fix round edited code-analyzer.yml in the story**, and CI refused the PR. The agents were told only "not
+  .github/ or pipeline/"; they now get the full `PIPELINE_PATHS` list and report a pipeline-config failure instead.
+

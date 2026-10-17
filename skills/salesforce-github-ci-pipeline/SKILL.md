@@ -49,7 +49,12 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
     the staging regression grows with every story's UI spec. Record the Dev Hub edition, whether UAT is a sandbox and
     the monthly estimate. After Phase 2, confirm them with `node pipeline/bin/pipe.mjs org capacity --devs <N>`.
 
-Done when: all fourteen answers are written down.
+15. **Slack (optional).** None (the default: the cards and GitHub notifications), **notices** (one channel hears when
+    a story needs someone, fails or ships) or **notices and actions** (buttons that do what the card's tick boxes do,
+    as the person; approvals stay in GitHub). See [`references/slack.md`](references/slack.md); it is set up after
+    Phase 3 with [`scripts/slack-setup.sh`](scripts/slack-setup.sh).
+
+Done when: all fifteen answers are written down.
 
 ## Phase 1 — Repo from the template
 
@@ -82,6 +87,10 @@ is the rulesets' bypass list ("for pull requests only"): repository admins by de
 (`{"actor_type":"Team","actor_id":<team id>,"bypass_mode":"pull_request"}`). The `merged` workflow comments who
 bypassed and still starts the follow-ups (a release validates against production itself).
 
+**Slack** (only if chosen in Phase 0): [`scripts/slack-setup.sh`](scripts/slack-setup.sh) `<owner/repo> <repo-dir>`
+(`--notices-only` for level 1). It deploys the Slack actions Worker, opens Slack's create-from-manifest page (Socket
+Mode off, interactivity pointing at the Worker), stores the secrets without printing them and sends a test message.
+
 Done when: a direct `git push` to `main` is refused with GH013, a PR's merge button says "pipeline/gate expected", `gh api orgs/<org>/installations` lists the App, the repo's workflow permissions show `can_approve_pull_request_reviews: true`, and `gh variable list` shows exactly the chosen switches.
 
 ## Phase 4 — Tracer story
@@ -112,6 +121,9 @@ Done when: a GitHub Release tag exists for both, the change is visible in produc
 - Orgs are used one job at a time through **lanes** (`pipeline/src/lane.mjs`: an atomic `refs/locks/<org>` ref; no GitHub concurrency groups on orgs, which drop waiting runs); `org ensure` finishes a half-made org.
 - Specs on GitHub: the **New spec** form; `/spec` (Claude writes the spec, `ai-spec.yml` under `AI_PLAN`), then **Make it a story** (`/story`; agent-free: one Story issue from the spec, `pipeline/src/spec.mjs`). Every agent on that story reads the whole spec (`pipe tracker story`). More stories only by hand, with `Blocked by #N`, checked at Start and at merge. Everything runs from GitHub; no local skill is needed.
 - Engineering skills: the template carries `docs/agents/` (story format, label mapping, domain docs, **salesforce.md**: seams, slices, tests, debugging, PR bodies and review for Apex and Flows), `GLOSSARY-MAP.md` and a starter `docs/org/GLOSSARY.md`, so `/to-spec`, `/to-tickets`, `/pr`, `/tdd`, `/diagnosing-bugs` and `/code-review` work in the new repo; the agents' prompts carry the adapted parts (PR body, spec-axis review, diagnosing loop).
+- Slack (optional, [`references/slack.md`](references/slack.md)): notices when a card's turn changes; with the Worker
+  and `SLACK_ACTIONS`, the card's next options as buttons, done as the person who clicked. Test it any time with
+  **Actions › slack-test** (an issue number sends that card's notice with its buttons).
 - Cards are the UI: story cards and a **release card** say what is happening now, what is next, and offer **tick boxes** (`card-actions.yml`: the card before and after an edit -> `pipe act`, the same as the comment commands in `commands.yml`; `pipeline/src/actions.mjs`). A ticked sign-off is the trusted status `pipeline/sign-off`.
 - Shipping is keyed by commit (`pipeline/src/shipping.mjs`): the gate validates its own candidate (base tip + head) under the `main` lock; `release.yml` takes the merge SHA and the validated tree and quick-deploys only on a match; close-out works from that SHA and the previous `v*` tag; `pipe ship renudge` and the janitor's `pipe ship watchdog` make sure nothing queued is lost.
 - Agent context and access: every agent's story file ends with the **context pack** (`pipe tracker story --pack`: what exists for the objects the story touches, and production's org-wide defaults from `EntityDefinition`); `ai-implement` merges the base into the story branch first. CLAUDE.md's **Access** rules, the plan's **Access** section and CI's **access check** (`pipe access check`: profiles, admin permissions, View All/Modify All, sharing keywords, unexplained `without sharing`, ungranted new fields/objects) keep access least-privilege with or without AI; PMD's Apex security rules are raised to High in `code-analyzer.yml`. Exceptions: `config/access-exceptions.json`.

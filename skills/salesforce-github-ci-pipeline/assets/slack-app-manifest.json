@@ -1,0 +1,20 @@
+{
+  "_metadata": { "major_version": 1, "minor_version": 1 },
+  "display_information": {
+    "name": "__APP_NAME__",
+    "description": "The Salesforce pipeline: says when a story needs you, and lets you act on it",
+    "background_color": "#1d4f91"
+  },
+  "features": {
+    "bot_user": { "display_name": "__APP_NAME__", "always_online": false }
+  },
+  "oauth_config": {
+    "scopes": { "bot": ["incoming-webhook", "chat:write"] }
+  },
+  "settings": {
+    "interactivity": { "is_enabled": true, "request_url": "__REQUEST_URL__" },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}
