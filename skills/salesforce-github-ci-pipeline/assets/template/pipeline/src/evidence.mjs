@@ -88,6 +88,19 @@ export function evidenceComment({ key, pr, sha, shots, orgUrl = null, repoUrl, w
 export const removedComment = () => [EVIDENCE_MARK, `### ${EVIDENCE_TITLE}: removed`, "", "The story is closed, so its screenshots were deleted from the `evidence` branch and its scratch org is gone. The UI test's own verdict and report are unchanged."].join("\n");
 
 /**
+ * How the UI tester logs in, for the top of its prompt: as the story's Persona ({ role, permsets }, org.personaOf) when
+ * it has one, else as the admin. Story #343: "Call login(page)" came first and the Persona was mid-paragraph, so the
+ * agent logged in as the admin twice and specProblems failed the spec. Pure.
+ */
+export function loginStep(persona) {
+  const role = String(persona?.role || "").replace(/[^A-Za-z0-9_]/g, "");
+  const sets = (persona?.permsets || []).filter((p) => /^[A-Za-z][A-Za-z0-9_]*$/.test(p));
+  if (!role && !sets.length) return "Log in with `await login(page)` from e2e/support/login.ts (SCRATCH_ALIAS is already set, so it needs no arguments).";
+  const as = `{ ${[role && `role: "${role}"`, `permsets: [${sets.map((p) => `"${p}"`).join(", ")}]`].filter(Boolean).join(", ")} }`;
+  return `This story names a Persona, so test every criterion as that user: \`await loginAs(page, ${as})\` from e2e/support/login.ts, never \`login(page)\` (the admin sees everything, so it proves nothing; the pipeline fails a spec without loginAs). For the negative case, log in as a user without it (\`loginAs(page, { permsets: [] })\`) and assert what that user is refused or does not see.`;
+}
+
+/**
  * Does a story's Playwright spec check anything a criterion is about? Problems, or [] when it does. A spec that only
  * waits for something to be visible passed story #143 without checking a row or a total. Pure (the spec's source).
  */

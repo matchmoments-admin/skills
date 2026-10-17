@@ -358,7 +358,7 @@ test("seed: dates never go stale; loaded once per org (markers); a story's own d
   } finally { process.chdir(cwd); }
 });
 
-test("Org Shape roles are rebuilt so they can be assigned; personas log in through Log in as (no password)", () => {
+test("Org Shape roles are rebuilt so they can be assigned; personas log in through Log in as (no password)", async () => {
   const { roleRebuild } = orgMod;
   const roles = [{ Id: "1", Name: "CEO", DeveloperName: "CEO", ParentRoleId: null, CaseAccessForAccountOwner: "Edit", ContactAccessForAccountOwner: "Edit", OpportunityAccessForAccountOwner: "Read" },
     { Id: "2", Name: "Director", DeveloperName: "DirectorDirectSales", ParentRoleId: "1", RollupDescription: "Direct & Sales" },
@@ -374,7 +374,19 @@ test("Org Shape roles are rebuilt so they can be assigned; personas log in throu
   assert.match(login, /LICENSE_LIMIT_EXCEEDED/);
   assert.doesNotMatch(login, /"generate", "password"|"org", "create", "user"/, "no password, and no create user (JWT on Hyperforce refuses it)");
   assert.match(readFileSync(new URL("../../pipeline/src/org/users.mjs", import.meta.url), "utf8"), /enableAdminLoginAsAnyUser>true/);
-  assert.match(readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8"), /loginAs\(page, \{ role, permsets \}\)/);
+  // the tester's first instruction is how to log in: as the story's Persona when it has one (#343: it came mid-paragraph,
+  // after "Call login(page)", and the agent logged in as the admin)
+  const ui = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
+  assert.match(ui, /ui login-step --story/);
+  assert.match(ui, /spec\.ts\.\n\s+\$\{\{ steps\.org\.outputs\.login \}\}/);
+  assert.doesNotMatch(ui, /Call `login\(page\)`/);
+  const { loginStep } = await import("../src/evidence.mjs");
+  const { personaOf } = await import("../src/org.mjs");
+  const step = loginStep(personaOf("- Persona: CustomerSupportNorthAmerica role, Case_Escalated_Access (a Customer Support user who sees the flag)."));
+  assert.match(step, /loginAs\(page, \{ role: "CustomerSupportNorthAmerica", permsets: \["Case_Escalated_Access"\] \}\)/);
+  assert.match(step, /never `login\(page\)`/);
+  assert.match(loginStep(null), /await login\(page\)/);
+  assert.match(loginStep({ role: 'X"); evil(', permsets: ["ok", "no way"] }), /role: "Xevil", permsets: \["ok"\]/, "story text cannot break out of the snippet");
 });
 
 test("persona lines with an explanation after them still give the role and the permission sets (story #166)", () => {

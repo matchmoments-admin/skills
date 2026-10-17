@@ -258,6 +258,7 @@ const commands = {
     output({ url: r.url || "", shots: r.shots }); return say(r.said);
   },
   "ui spec-check": () => { const p = evidence.specProblems(readFileSync(flag("file"), "utf8"), { persona: Boolean(flag("story") && orgPersona(existsSync(flag("story")) ? readFileSync(flag("story"), "utf8") : "")) }); output({ problems: p.join("; ") }); return say(p.length ? `weak spec: ${p.join("; ")}` : "spec checks values"); },
+  "ui login-step": () => say(evidence.loginStep(orgPersona(existsSync(flag("story")) ? readFileSync(flag("story"), "utf8") : ""))),   // the UI tester's first instruction
   "evidence squash": async () => say(await evidence.sweep({ host, tracker, log })),   // whatever UI_EVIDENCE says: off still clears what was stored
   "baseline capture": () => {   // production's customisations into baseline/ (pipeline/src/baseline.mjs); the workflow opens the drift PR
     const r = baseline.capture({ sf: io.sf, config: JSON.parse(readFileSync("config/baseline.json", "utf8")), log, packages: packageList() });
