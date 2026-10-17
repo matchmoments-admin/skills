@@ -1,10 +1,14 @@
 name: slack-test
 # Actions › slack-test › Run workflow: one test message to the Slack channel of SLACK_WEBHOOK_URL, to check the setup
-# (docs/handbook.md, "Slack notices"). Real notices come from the cards (pipeline/src/notify.mjs).
+# (docs/handbook.md, "Slack notices"). Real notices come from the cards (pipeline/src/notify.mjs). With an issue number:
+# that card's notice as it is now, with its buttons (to try Slack actions), sent even though its turn has not changed.
 on:
   workflow_dispatch:
+    inputs:
+      issue: { description: "Optional: an issue whose card's notice to send now", required: false, default: "" }
 permissions:
   contents: read
+  issues: read
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
@@ -15,7 +19,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { sparse-checkout: pipeline, persist-credentials: false }
+      - name: Send this card's notice now
+        if: inputs.issue != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          N: ${{ inputs.issue }}
+        run: |
+          [[ "$N" =~ ^[0-9]{1,7}$ ]] || { echo "::error::an issue number"; exit 1; }
+          gh api "repos/$GH_REPO/issues/$N/comments?per_page=100" --jq '[.[] | select(.body | contains("<!-- pipeline:story-card -->"))][0] | {body, url: .html_url}' > "$RUNNER_TEMP/card.json"
+          gh issue view "$N" --json title --jq .title > "$RUNNER_TEMP/title.txt"
+          node --input-type=module -e '
+            const fs = await import("node:fs");
+            const { notice, slackNotifier } = await import(process.cwd() + "/pipeline/src/notify.mjs");
+            const { setting } = await import(process.cwd() + "/pipeline/src/conventions.mjs");
+            const card = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/card.json", "utf8") || "null");
+            if (!card?.body) { console.log("::error::no card on that issue"); process.exit(1); }
+            const title = fs.readFileSync(process.env.RUNNER_TEMP + "/title.txt", "utf8").trim().replace(/^(Story|Spec):\s*/i, "");
+            const m = notice({ before: "", after: card.body, key: process.env.N, title, url: card.url, actions: setting("SLACK_ACTIONS") === "true" });
+            if (!m) { console.log("that card needs nobody now (the pipeline is working, or it is done): nothing to send"); process.exit(0); }
+            let failed = null;
+            await slackNotifier({ log: (x) => { failed = x; } })(m);
+            if (failed) { console.log(failed); process.exit(1); }
+            console.log("sent");'
       - name: Send a test message
+        if: inputs.issue == ''
         env:
           TEXT: "✅ *Slack notices are set up* for <${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>. This channel hears when a card needs someone (👉), something fails (❌) or a release ships (🚀). Sent by @${{ github.actor }}."
         run: |

@@ -7,5 +7,5 @@ workers_dev = true
 
 [vars]
 GITHUB_REPO = "__OWNER__/__project__"
-# {"<Slack user ID>": "<GitHub login>"}: who may act from Slack, and as whom (the pipeline still checks write access)
-SLACK_USERS = "{}"
+# SLACK_USERS ({"<Slack user ID>": "<GitHub login>"}: who may act from Slack, and as whom) is a secret too, so the
+# repo stays generic and a deploy never resets it: echo '{"U0123ABC":"login"}' | npx wrangler secret put SLACK_USERS

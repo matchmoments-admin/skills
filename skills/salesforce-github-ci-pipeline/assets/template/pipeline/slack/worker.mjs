@@ -10,7 +10,7 @@
 //   SLACK_BOT_TOKEN       (secret) the app's Bot User OAuth Token: opens the "Answer in Slack" box (views.open)
 //   GITHUB_TOKEN          (secret) a fine-grained token for this one repository, Contents: read and write (dispatches)
 //   GITHUB_REPO           owner/name
-//   SLACK_USERS           JSON {"<Slack user ID>": "<GitHub login>"}: who may act, and as whom
+//   SLACK_USERS           (secret) JSON {"<Slack user ID>": "<GitHub login>"}: who may act, and as whom
 
 /** The actions a Slack button may start: the card's own boxes, for issues (specs and stories). Never an approval. */
 export const ACTS = { spec: "/spec", story: "/story", "story-anyway": "/story", plan: "/plan", start: "/start", build: "/build" };

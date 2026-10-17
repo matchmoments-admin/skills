@@ -513,8 +513,8 @@ apply as ever. **Approving stays in GitHub**: an approval is your own review, so
    Bot User OAuth Token**, for the answer box) and `GITHUB_TOKEN` (a fine-grained token for this repository only,
    **Contents: read and write**: it may send dispatches, nothing else matters).
 2. In the Slack app: **Interactivity & Shortcuts** › on › **Request URL**: the Worker's URL.
-3. Link people: `SLACK_USERS` in `pipeline/slack/wrangler.toml` (`{"U0123ABC": "github-login"}`; a Slack profile's
-   **⋮ › Copy member ID**; an unlinked person who clicks is told theirs), then deploy again.
+3. Link people: the Worker secret `SLACK_USERS`, `{"U0123ABC": "github-login", ...}` (a Slack profile's **⋮ › Copy
+   member ID**; an unlinked person who clicks is told theirs): `echo '{...}' | npx wrangler secret put SLACK_USERS`.
 4. Set the repository variable `SLACK_ACTIONS` to `true`: notices carry the buttons from then on.
 
 ## Doing things from the card (tick boxes)
