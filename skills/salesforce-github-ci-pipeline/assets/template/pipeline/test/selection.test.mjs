@@ -211,6 +211,16 @@ test("RunRelevantTests (enterprise C): CI lets Salesforce choose a story's Apex 
   assert.equal(st.apex.ran, 3);
   assert.equal(st.flows.ran, 1);
   assert.ok(!calls.some((c) => c.startsWith("apex run test")));
+  // a run Salesforce reports Skipped (no test passed) or Aborted is finished, not polled for an hour (#353), and fails
+  for (const outcome of ["Skipped", "Aborted"]) {
+    let polls = 0;
+    const done = tests.runTests({ sf: (a) => (a[1] === "run" ? { testRunId: "f1" } : (polls++, { summary: { outcome }, tests: [] })) },
+      { alias: "a", plan: { mode: "relevant", apex: r.chosen, flows: ["F"] }, sleep: () => {}, apexDone: r.state });
+    assert.equal(polls, 1, `${outcome}: one look, then done`);
+    assert.ok(done.flows.finished);
+    const v = tests.verdict(done, { plan: { mode: "relevant", apex: [], flows: ["F"] } });
+    assert.ok(v.reasons.some((x) => new RegExp(`Flow tests did not run: Salesforce reported the run ${outcome}`).test(x)), `${outcome}: ${v.reasons}`);
+  }
 
   // production: a "Succeeded" RunRelevantTests validation that ran nothing is re-run with every test class
   const prodCalls = [];

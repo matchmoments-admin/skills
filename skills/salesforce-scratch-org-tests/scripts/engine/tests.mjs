@@ -21,6 +21,7 @@ const isFlowTest = (p) => /\.flowtest-meta\.xml$/.test(p);
 const flowOfTest = (src) => (src.match(/<flowApiName>([^<]+)<\/flowApiName>/) || [])[1];
 const objectOf = (p) => (p.match(/\/objects\/([^/]+)\//) || [])[1] || null;
 const isPermissionSet = (p) => p.endsWith(".permissionset-meta.xml");
+const FLOW_DONE = ["Passed", "Failed", "Completed", "Aborted", "Skipped"];
 
 const isRecordTriggered = (xml) => /<triggerType>Record(Before|After)Save<\/triggerType>/.test(xml);
 const isActive = (xml) => /<status>Active<\/status>/.test(xml);
@@ -287,8 +288,11 @@ export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs
     for (let i = 0; i < maxPolls; i++) {
       const r = io.sf(["flow", "get", "test", "-o", alias, "--test-run-id", id, ...(outDir ? ["--output-dir", `${outDir}/flow`] : [])], { allowFail: true });
       const outcome = r?.summary?.outcome;
-      if (["Passed", "Failed", "Completed"].includes(outcome)) {
+      // every status the CLI treats as finished (apex-node's finishedStatuses): "Skipped" (no test passed) and "Aborted"
+      // too, which once read as unfinished, so a run that had ended was polled for an hour (#353)
+      if (FLOW_DONE.includes(outcome)) {
         state.flows.finished = true;
+        if (["Aborted", "Skipped"].includes(outcome)) state.flows.outcome = outcome;
         const tests = r.tests || [];
         Object.assign(state.flows, { ran: tests.length, passed: tests.filter((t) => /^pass/i.test(t.Outcome || t.outcome)).length,
           failed: tests.filter((t) => !/^pass/i.test(t.Outcome || t.outcome)).length,
@@ -313,6 +317,8 @@ export function verdict(state, { plan, changedCode = [], min = 75 }) {
   if (plan.mode === "all" && state.apex.ran > 0 && state.orgWide === null) reasons.push("coverage is unknown (this repo's code)");
   if (state.apex.failed) reasons.push(`${state.apex.failed} Apex test(s) failed`);
   if (state.flows.failed) reasons.push(`${state.flows.failed} Flow test(s) failed`);
+  // a run Salesforce aborted, or one where no Flow test passed, proves nothing: say so instead of passing it
+  else if (plan.flows.length && state.flows.outcome) reasons.push(`the Flow tests did not run: Salesforce reported the run ${state.flows.outcome} (${state.flows.ran} test(s) reported)`);
   if (plan.mode === "all" && state.orgWide !== null && state.orgWide < min) reasons.push(`coverage of this repo's code ${state.orgWide}% is below ${min}%`);
   if (plan.mode === "relevant") {
     for (const c of changedCode) {
