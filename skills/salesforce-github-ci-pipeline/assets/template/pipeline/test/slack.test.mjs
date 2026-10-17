@@ -161,3 +161,13 @@ test("pull request actions from Slack (fix, re-run CI, review, UI test) name the
   assert.deepEqual(notify.buttons({ body: card.replace(/\/pull\/353/g, ""), key: "343", actions: true }).map((b) => b.text.text), [], "no PR named: no PR buttons");
   assert.match(readFileSync(new URL("../../.github/workflows/slack.yml", import.meta.url), "utf8"), /client_payload\.pr == true && '--is-pr'/);
 });
+
+test("a pull request box ticked on the story's own card acts on the story's open PR (not 'fix works on a pull request')", async () => {
+  const calls = [];
+  const io = { gh: (a) => { calls.push(a.join(" ")); return a[0] === "pr" && a[1] === "view" ? { number: 353, headRefName: "issue-343", headRefOid: "abc", baseRefName: "release/x", state: "OPEN" } : null; }, ghPages: () => [] };
+  const host = { repo: "o/r", api: () => ({ permission: "write" }), storyPr: (b) => (b === "issue-343" ? { number: 353, state: "OPEN" } : null), prFacts: () => ({}), record: () => {}, dispatch: () => {} };
+  const card = "<!-- pipeline:story-card -->\n- [x] 🛠 Fix <!-- act:fix -->";
+  await actions.act({ number: 343, isPr: false, who: "pat", whoType: "User", before: card.replace("[x]", "[ ]"), after: card, commentId: 1 }, { io, host, cards: { refresh: async () => {}, refreshPr: async () => {} } });
+  assert.ok(calls.some((c) => /pr edit 353 --add-label ai:fix/.test(c) || /issue edit 353 --add-label ai:fix/.test(c)), `labels the PR: ${calls.join(" | ")}`);
+  assert.ok(!calls.some((c) => /works on a pull request/.test(c)));
+});

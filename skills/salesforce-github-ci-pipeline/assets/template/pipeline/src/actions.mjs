@@ -167,7 +167,7 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
   const sprints = requested.some((r) => r.id === "sprint") ? (io.gh(["api", `repos/${host.repo}/milestones?state=all&per_page=100`]) || []).map((m) => sprintOfMilestoneTitle(m.title)).filter(Boolean) : [];
   const appGh = (args, o) => io.gh(args, { ...o, env: { GH_TOKEN: appToken || process.env.GH_TOKEN } });
   // in UAT: Standing's reading, the card's too (UAT pending on the head), so the card never offers what this refuses
-  const inUat = (sha) => { const u = standing(host.prFacts(pr.number)).uat; return u.phase === "running" && u.sha === sha; };
+  const inUatOf = (pr) => (sha) => { const u = standing(host.prFacts(pr.number)).uat; return u.phase === "running" && u.sha === sha; };
   for (const { id, arg } of requested) {
     if (id === "help") { io.gh(["issue", "comment", String(number), "--body", help(isPr)]); continue; }
     if (id === "story" || id === "story-anyway") {   // agent-free: the spec becomes one Story issue (once)
@@ -189,8 +189,15 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
       await cards.newStory(String(number), { spec: true, stage: "story", stories: [r.number] });
       continue;
     }
-    const mayApprove = (login) => (pr ? approvalProblem(host.prFacts(pr.number), login) : null);
-    const r = perform(id, arg, { number, isPr, pr, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat, mayApprove });
+    // a pull request action ticked on the story's own card (the issue) acts on the story's open PR (#343: "fix works on a
+    // pull request" was the answer to a tick the card itself offered)
+    let at = { number, isPr, pr };
+    if (!isPr && ACTIONS[id]?.on === "pr") {
+      const open = host.storyPr?.(storyBranch(String(number)));
+      if (open?.state === "OPEN") at = { number: open.number, isPr: true, pr: io.gh(["pr", "view", String(open.number), "--json", "number,headRefName,headRefOid,baseRefName,state"]) };
+    }
+    const mayApprove = (login) => (at.pr ? approvalProblem(host.prFacts(at.pr.number), login) : null);
+    const r = perform(id, arg, { ...at, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat: at.pr ? inUatOf(at.pr) : () => false, mayApprove });
     if (r.said) io.gh(["issue", "comment", String(number), "--body", r.said]);
     if (r.done) { log(r.done); host.record("stage", { story: storyOf(pr?.headRefName || "") || (isPr ? undefined : String(number)), pr: isPr ? Number(number) : undefined, what: `${id} by @${who}`, state: "running" }); }
   }
