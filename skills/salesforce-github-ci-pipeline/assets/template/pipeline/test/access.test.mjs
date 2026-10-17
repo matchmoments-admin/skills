@@ -143,4 +143,5 @@ test("vendored libraries (force-app/vendor/): the access check and the context p
   assert.ok(names.touchesPipeline([".prettierignore"]).length, "what the checks skip is a pipeline decision");
   assert.match(verdict.instructions("spec"), /Needs a pipeline change first:/);
   assert.match(verdict.instructions("plan"), /force-app\/vendor\//);
+  for (const role of ["spec", "plan"]) assert.match(verdict.instructions(role), /answered is no longer open: record its answer under Decisions \(a plan: in the Proposed build\) and remove it/, `${role}: answered questions leave Open questions`);
 });

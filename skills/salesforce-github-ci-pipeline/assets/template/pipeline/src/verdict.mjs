@@ -31,7 +31,9 @@ export const SHELL_RULE =
 
 /** The output-format part of each role's prompt. */
 // Story work cannot change the pipeline (its checks, their config, CI): a spec or plan that needs that says so plainly
-const PIPELINE_NEED = " If the work needs a pipeline change first (a check's configuration, a CI rule, anything under .github/, pipeline/, config/ or code-analyzer.yml), say so as an open question that begins \"Needs a pipeline change first:\", naming the change: story work cannot make it, a maintainer must. Third-party Apex goes under force-app/vendor/ (CLAUDE.md, Apex), which the code checks already skip.";
+// an answered question is a decision: it leaves Open questions (seen live on #333: a restated answer kept the spec "open")
+const ANSWERED = " A question a comment has answered is no longer open: record its answer under Decisions (a plan: in the Proposed build) and remove it from Open questions (never restate an answer there); write \"none\" when nothing is left to ask.";
+const PIPELINE_NEED = ANSWERED + " If the work needs a pipeline change first (a check's configuration, a CI rule, anything under .github/, pipeline/, config/ or code-analyzer.yml), say so as an open question that begins \"Needs a pipeline change first:\", naming the change: story work cannot make it, a maintainer must. Third-party Apex goes under force-app/vendor/ (CLAUDE.md, Apex), which the code checks already skip.";
 
 export function instructions(role, { key = "N" } = {}) {
   const common = SHELL_RULE + "\nDo not edit .github/ or pipeline/.";
