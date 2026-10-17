@@ -3,6 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
+// tests never reach Slack: CI carries SLACK_WEBHOOK_URL for the cards, and a card test would post to the real channel
+delete process.env.SLACK_WEBHOOK_URL;
 import * as names from "../src/conventions.mjs";
 import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";

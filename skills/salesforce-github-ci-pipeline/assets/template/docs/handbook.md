@@ -489,6 +489,7 @@ Set it up once (about five minutes):
 2. **Incoming Webhooks** → on → **Add New Webhook to Workspace** → pick the channel → copy the URL.
 3. GitHub → the repo → **Settings → Secrets and variables → Actions** → **New repository secret**:
    `SLACK_WEBHOOK_URL`, the URL. It is a credential: anyone holding it can post to the channel.
+4. **Actions › slack-test › Run workflow** sends one test message to check it.
 
 ## Doing things from the card (tick boxes)
 

@@ -1,0 +1,28 @@
+name: slack-test
+# Actions › slack-test › Run workflow: one test message to the Slack channel of SLACK_WEBHOOK_URL, to check the setup
+# (docs/handbook.md, "Slack notices"). Real notices come from the cards (pipeline/src/notify.mjs).
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: pipeline, persist-credentials: false }
+      - name: Send a test message
+        env:
+          TEXT: "✅ *Slack notices are set up* for <${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>. This channel hears when a card needs someone (👉), something fails (❌) or a release ships (🚀). Sent by @${{ github.actor }}."
+        run: |
+          [ -n "$SLACK_WEBHOOK_URL" ] || { echo "::error::SLACK_WEBHOOK_URL is not set (Settings › Secrets and variables › Actions)"; exit 1; }
+          node --input-type=module -e '
+            const { slackNotifier } = await import(process.cwd() + "/pipeline/src/notify.mjs");
+            let failed = null;
+            await slackNotifier({ log: (m) => { failed = m; } })({ text: process.env.TEXT });
+            if (failed) { console.log(failed); process.exit(1); }
+            console.log("sent");'
