@@ -8,6 +8,9 @@
 export function turnOf(body) {
   const next = String(body || "").match(/^\*\*Next:\*\* (.+)$/m)?.[1]?.trim();
   if (!next) return null;
+  // a failed run says so on the card's Now line (an agent's build, a deploy) or in a stage row
+  const now = String(body).match(/^❌ \*\*Failed:\*\* (.+)$/m)?.[1];
+  if (now) return { kind: "failed", next: `${now.replace(/ · \*\*\[see what went wrong\]\(([^)]+)\)\*\*/, " ([see what went wrong]($1))")}. ${next}` };
   if (/^\| ❌ \|/m.test(body)) return { kind: "failed", next };
   if (/^Done: shipped in /.test(next) || /^\| ✅ \| In production \|/m.test(body)) return { kind: "shipped", next };
   if (/^\| ⏳ \|/m.test(body) || /^Done:/.test(next)) return null;

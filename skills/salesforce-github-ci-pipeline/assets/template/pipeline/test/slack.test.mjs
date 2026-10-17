@@ -140,3 +140,12 @@ test("one press: a sprint started from a story starts that story when it opens; 
   assert.match(wf, /is starting now \(its branch and scratch org\)/);
   assert.equal(notify.turnOf(startingCard({ key: "343", activity: { state: "running", what: "Creating the branch" } })), null, "starting: Slack waits");
 });
+
+test("a failed agent run (the card's Now line says ❌ Failed) reaches Slack, with the retry and the run link", () => {
+  const card = "<!-- pipeline:story-card -->\n### Pipeline status\n\n❌ **Failed:** Claude's build · **[see what went wrong](https://github.com/o/r/actions/runs/9)** · comment /build to retry\n\n**Next:** Build it, or tick **Build it with Claude** below.\n\n- [ ] 🤖 Build it with Claude <!-- act:build -->\n\n| ⬜ | Build | build on the branch |";
+  const before = card.replace(/^❌.*\n\n/m, "");
+  const m = notify.notice({ before, after: card, key: "343", title: "FFLib", url: "https://github.com/o/r/issues/343#c", actions: true });
+  assert.match(m.text, /^❌ \*<https:\/\/github\.com\/o\/r\/issues\/343\|#343 FFLib>\*: something failed\nClaude's build \(<https:\/\/github\.com\/o\/r\/actions\/runs\/9\|see what went wrong>\) · comment \/build to retry\. Build it/);
+  assert.deepEqual(m.blocks[1].elements.map((e) => e.text.text), ["🤖 Build it", "Open the card"]);
+  assert.equal(notify.notice({ before: card, after: card, key: "343" }), null, "the same failure once");
+});
