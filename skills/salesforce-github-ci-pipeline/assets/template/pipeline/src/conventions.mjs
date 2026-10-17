@@ -48,8 +48,14 @@ export const COVERAGE_MIN = 75;
 // package.json and the lockfile too: install scripts run in jobs that hold credentials, so a story cannot change them.
 // The rules the checks and agents enforce too (code-analyzer.yml, CLAUDE.md, REVIEW.md, docs/agents): a story cannot
 // loosen its own review, and agents always read main's copy (the harness overlay), so a story's edit would be lost.
+/** Vendored libraries (GLOSSARY.md: Vendored library): third-party source kept unmodified under force-app/vendor/<library>/.
+ *  It deploys and its tests run; the code checks (access, Code Analyzer, Prettier), the context pack and the AI review
+ *  skip it, since it is not ours to fix. The folder is the decision a person reviews, in the PR that adds it. */
+export const VENDOR_DIR = "force-app/vendor/";
+export const isVendored = (p) => String(p).startsWith(VENDOR_DIR);
+
 export const PIPELINE_PATHS = [".github/", "pipeline/", "scripts/", "config/", "devhub-setup/", "baseline/", "package.json", "package-lock.json",
-  "code-analyzer.yml", "CLAUDE.md", "REVIEW.md", "docs/agents/"];
+  "code-analyzer.yml", ".prettierignore", "CLAUDE.md", "REVIEW.md", "docs/agents/"];
 
 /** Is this login one of the pipeline's own identities (PIPELINE_BOTS: bare names, e.g. "github-actions,acme-pipeline")?
  *  Exact names only, in the three forms GitHub prints them (name, name[bot], app/name): a look-alike user is not trusted. */

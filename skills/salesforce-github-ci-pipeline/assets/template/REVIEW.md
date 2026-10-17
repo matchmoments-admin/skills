@@ -28,6 +28,12 @@ built outside this pipeline, in every scratch org and in production.
   workflow rule refuses or rewrites, a field an existing Flow or Apex also sets, access that a sharing rule already
   gives or takes away. Name the existing component in the finding.
 
+## Vendored libraries (`force-app/vendor/`)
+Third-party source kept unmodified; the diff you are given leaves it out (its last line says how many files). Do not
+review it line by line, and never ask for it to follow our Apex rules.
+- **major**: our own code (a class written for this story, a test of our code) under `force-app/vendor/`; a vendored
+  library missing from `docs/vendor.md` (repository, pinned commit, why); vendored code edited beyond its API version.
+
 ## Flows
 - **blocker**: a Get, Create, Update or Delete element inside a Loop; a recursive trigger (a flow updating the record that
   triggers it, after save, with no entry condition that stops it); hard-coded record IDs.

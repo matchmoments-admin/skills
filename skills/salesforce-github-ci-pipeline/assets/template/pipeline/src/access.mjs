@@ -5,6 +5,7 @@
 // Blockers fail CI. Warnings are annotations the reviewer (person or AI) reads. A blocker that is really needed
 // (an integration user's permission set, say) is allowed only by an entry in config/access-exceptions.json, which a
 // story cannot change (pipeline paths), so every exception is a reviewed pipeline-maintenance change.
+import { isVendored } from "./conventions.mjs";
 
 /** User permissions that make a user an administrator in all but name. */
 export const ADMIN_PERMISSIONS = ["ModifyAllData", "ViewAllData", "ManageUsers", "AuthorApex", "CustomizeApplication",
@@ -26,8 +27,9 @@ const fieldOf = (p) => (p.match(/\/fields\/([^/]+)\.field-meta\.xml$/) || [])[1]
  * exceptions: [{ file, rule, why }] from config/access-exceptions.json.
  * Returns [{ level: "blocker" | "warning", rule, file, line, message }].
  */
-export function findings({ changed = [], added = [], files = [], read, exceptions = [] }) {
+export function findings({ changed: all = [], added = [], files = [], read, exceptions = [] }) {
   const out = [];
+  const changed = all.filter((p) => !isVendored(p));   // a vendored library is upstream's code, kept unmodified: not ours to fix
   const say = (level, rule, file, line, message) => {
     const ex = exceptions.find((e) => e.file === file && e.rule === rule);
     out.push({ level: ex ? "warning" : level, rule, file, line, message: ex ? `${message} (allowed: ${ex.why})` : message });

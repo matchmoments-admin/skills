@@ -5,6 +5,7 @@
 // however large the repo grows. Pure: pack() takes paths, a reader and the sharing model. Production's own customisations
 // (the production baseline, baseline/) are listed too, marked: an agent that only saw force-app missed them.
 import { DIR as BASELINE } from "./baseline.mjs";
+import { isVendored } from "./conventions.mjs";
 
 /** Standard objects worth recognising in a story's words (custom objects come from the repo). */
 const STANDARD = ["Account", "Contact", "Lead", "Opportunity", "Case", "Task", "Event", "Campaign", "Contract", "Order",
@@ -103,7 +104,8 @@ export const owdFrom = (records = []) =>
 
 /** The pack for a story's text, from this checkout and (when logged in) production's org-wide defaults. */
 export function packForCheckout(io, { text, base = null, log = () => {} }) {
-  const { files, read, changed } = io.sourceFiles({ base });
+  const { files: all, read, changed } = io.sourceFiles({ base });
+  const files = all.filter((p) => !isVendored(p));   // a vendored library's classes are not "the codebase" to extend
   const production = io.sourceFiles({ dirs: [BASELINE] }).files;
   const objects = objectsFor({ text, changed, files: [...files, ...production] });
   const owd = objects.length ? owdFrom(io.sf(["data", "query", "-o", "devhub", "-q", owdQuery(objects)], { allowFail: true })?.records) : {};

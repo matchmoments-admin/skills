@@ -138,7 +138,8 @@ jobs:
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           git fetch -q origin "${{ steps.pr.outputs.base }}"
           if [ -n "$KEY" ]; then node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --base "origin/${{ steps.pr.outputs.base }}" --out "$RUNNER_TEMP/story.md"; else echo "(no story: a pipeline maintenance PR)" > "$RUNNER_TEMP/story.md"; fi
-          gh pr diff "$PR" > "$RUNNER_TEMP/pr.diff"
+          # a vendored library (force-app/vendor/, third-party and unmodified) is listed, not reviewed line by line
+          gh pr diff "$PR" | awk '/^diff --git /{skip=($3 ~ /^a\/force-app\/vendor\//)} skip{if(/^diff --git /)v[$3]=1; next} {print} END{n=0; for(f in v)n++; if(n) printf "\n# %d vendored file(s) under force-app/vendor/ left out of this diff (REVIEW.md, Vendored libraries)\n", n}' > "$RUNNER_TEMP/pr.diff"
           # what CI found on this exact commit: code CI deployed and tested compiles (no "syntax error" guesses)
           node .pipeline/pipeline/bin/pipe.mjs ci results "${{ steps.pr.outputs.head }}" --out "$RUNNER_TEMP/ci.md" >/dev/null || echo "- (CI results not available)" > "$RUNNER_TEMP/ci.md"
           node .pipeline/pipeline/bin/pipe.mjs access check --base "origin/${{ steps.pr.outputs.base }}" --out "$RUNNER_TEMP/access.md" --report-only

@@ -476,6 +476,15 @@ is one CLI, so the Salesforce steps can run on Buildkite agents if a company alr
   (`{"github-login": "you@company.com"}`), else your public GitHub email. No password or session is ever put in GitHub.
 - Then tick **UAT passed** (or comment `/uat-fail <what is wrong>`).
 
+## Vendored libraries (FFLib and other third-party Apex)
+
+Third-party source goes under `force-app/vendor/<library>/`, unmodified (only its API version may change), with a line
+in `docs/vendor.md`: the repository, the pinned commit, and why it is here. It deploys and its tests run in every org
+and in the production validation; the access check, Code Analyzer, Prettier, the context pack and the AI review skip
+it, because it is not ours to fix. Our own code that uses it is checked as usual, and the review flags our code put
+under `vendor/`. What the checks skip is a pipeline decision (`code-analyzer.yml`, `.prettierignore`): story work
+cannot widen it.
+
 ## Slack notices (optional)
 
 With the `SLACK_WEBHOOK_URL` secret set, one Slack channel hears whenever a card's turn changes: **👉 your turn**

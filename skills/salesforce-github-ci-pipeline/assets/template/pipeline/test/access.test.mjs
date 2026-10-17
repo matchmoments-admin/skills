@@ -128,3 +128,19 @@ test("context pack: production's own components (baseline/) are listed and marke
   const bare = pack.pack({ files, read: r.read, objects: ["Case"] });
   assert.ok(!bare.includes("(production)") && !bare.includes("Sharing rules") && bare.includes("Validation rules: none"));
 });
+
+test("vendored libraries (force-app/vendor/): the access check and the context pack skip them; Code Analyzer, Prettier and the review are told to", () => {
+  const V = "force-app/vendor/fflib-apex-common/classes";
+  const r = repo({ [`${V}/fflib_SObjects.cls`]: "public virtual class fflib_SObjects { Case c; }", [`${O}/classes/Plain.cls`]: "public class Plain {\n}" });
+  assert.deepEqual(access.findings({ ...r, changed: r.files }).map((x) => `${x.rule} ${x.file.split("/").pop()}`), ["sharing-keyword Plain.cls"], "only our code is checked");
+  assert.ok(names.isVendored(`${V}/fflib_SObjects.cls`) && !names.isVendored(`${O}/classes/Plain.cls`));
+  const io = { sourceFiles: ({ dirs } = {}) => (dirs ? { files: [] } : { files: r.files, read: r.read, changed: [] }), sf: () => null, git: () => "" };
+  assert.doesNotMatch(pack.packForCheckout(io, { text: "Escalate the Case" }), /fflib/, "a library's classes are not the codebase to extend");
+  const cfg = (f) => readFileSync(new URL(`../../${f}`, import.meta.url), "utf8");
+  assert.match(cfg("code-analyzer.yml"), /ignores:\s*\n\s*files:\s*\n\s*- "force-app\/vendor\/\*\*"/);
+  assert.match(cfg(".prettierignore"), /^force-app\/vendor\/$/m);
+  assert.match(cfg(".github/workflows/ai-review.yml"), /force-app\\\/vendor/);
+  assert.ok(names.touchesPipeline([".prettierignore"]).length, "what the checks skip is a pipeline decision");
+  assert.match(verdict.instructions("spec"), /Needs a pipeline change first:/);
+  assert.match(verdict.instructions("plan"), /force-app\/vendor\//);
+});
