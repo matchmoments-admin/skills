@@ -152,6 +152,7 @@ who does each step for any combination.
 | `AI_MODEL_UI_TEST` | the ui-test role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
 
 | `APPROVERS` | the team's approvers (`@lead,@senior1`), default first: stories name an **Approver**; only that person (or another approver when none is named, or when the approver pushed the latest change) can approve, sign off or `/review-ok`, and never whoever pushed the latest change. The card says who must approve | anyone with write access approves |
+| `SLACK_ACTIONS` | Slack notices carry the card's next options as buttons, run by the Slack actions Worker (`pipeline/slack/`; see "Slack notices") | notices carry links only |
 | `UAT_ENABLED` | releases go to UAT and need **UAT passed** | staging is the last stop before production |
 | `UAT_TESTERS` | `{"github-login": "email"}`: where **Send me a login** emails the set-password link | the person's public GitHub email |
 | `SCRATCH_SNAPSHOT` | a snapshot name to force, or `off`; unset, new scratch orgs start from the **newest Active pipeline snapshot** (`snapshot-refresh` makes them: shape + packages + production baseline + main + test data), falling back to production's shape. A snapshot that fails once is tagged `snapshot-refused-<name>` and not tried again (each try costs a daily org); delete the tag to retry it | (unset: the newest snapshot, automatically) |
@@ -499,6 +500,22 @@ Set it up once (about five minutes):
 3. GitHub → the repo → **Settings → Secrets and variables → Actions** → **New repository secret**:
    `SLACK_WEBHOOK_URL`, the URL. It is a credential: anyone holding it can post to the channel.
 4. **Actions › slack-test › Run workflow** sends one test message to check it.
+
+**Acting from Slack (optional).** With the Slack actions Worker set up, each notice carries the card's next options
+as buttons (**Make it a story**, **Rewrite the spec**, **Plan it**, **Start**, **Build it**) and, while a spec has
+open questions, **✍️ Answer in Slack**: a box whose text lands on the issue as your words, then the spec is rewritten.
+A button does exactly what the card's tick box does, as you: the Worker (`pipeline/slack/worker.mjs`, a Cloudflare
+Worker) checks Slack's signature, maps your Slack user to your GitHub login (`SLACK_USERS`) and sends a
+`repository_dispatch`; `.github/workflows/slack.yml` runs `pipe act` as you, so write access and the two-person rule
+apply as ever. **Approving stays in GitHub**: an approval is your own review, so that button opens GitHub. Setup:
+1. `cd pipeline/slack && npx wrangler deploy` (prints the Worker's URL), then `npx wrangler secret put` each of
+   `SLACK_SIGNING_SECRET` (the app's **Basic Information › Signing Secret**), `SLACK_BOT_TOKEN` (**OAuth & Permissions ›
+   Bot User OAuth Token**, for the answer box) and `GITHUB_TOKEN` (a fine-grained token for this repository only,
+   **Contents: read and write**: it may send dispatches, nothing else matters).
+2. In the Slack app: **Interactivity & Shortcuts** › on › **Request URL**: the Worker's URL.
+3. Link people: `SLACK_USERS` in `pipeline/slack/wrangler.toml` (`{"U0123ABC": "github-login"}`; a Slack profile's
+   **⋮ › Copy member ID**; an unlinked person who clicks is told theirs), then deploy again.
+4. Set the repository variable `SLACK_ACTIONS` to `true`: notices carry the buttons from then on.
 
 ## Doing things from the card (tick boxes)
 

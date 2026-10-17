@@ -295,7 +295,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
     const url = await t.card(key, body, CARD_MARK, CARD_TITLE);
     if (!slack) return url;
     const title = name ?? (await tracker.story(key).catch(() => null))?.title?.replace(/^(Story|Spec):\s*/i, "") ?? "";
-    const m = notice({ before, after: body, key, title, url: typeof url === "string" ? url : "", kinds });
+    const m = notice({ before, after: body, key, title, url: typeof url === "string" ? url : "", kinds, actions: setting("SLACK_ACTIONS") === "true" });
     if (m) await slack(m);
     return url;
   }

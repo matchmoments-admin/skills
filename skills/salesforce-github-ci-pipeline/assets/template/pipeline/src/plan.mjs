@@ -13,6 +13,17 @@ export const READINESS_TITLE = "Story readiness";
 const isPipeline = (c) => isPipelineAuthor(c.author) || c.author === "app/pipeline" || /<!-- pipeline:/.test(c.body || "");
 // a person's words in a comment: a leading command ("/spec") is dropped, what follows it is kept ("/spec 1. Use X" answers)
 export const words = (body) => String(body || "").replace(/^\s*\/[a-z-]+\b/i, "").trim();
+// a person's words the pipeline posted for them (answers typed in Slack, .github/workflows/slack.yml): read as theirs,
+// but only when the pipeline posted it (a person writing the marker speaks for nobody else)
+const RELAY = /<!-- via-slack:([A-Za-z0-9-]+) -->/;
+export const relayBody = (login, text) => `**@${login}, from Slack:**\n\n${text}\n\n<!-- via-slack:${login} -->`;
+/** A comment as a person's words { author, body }, or null (the pipeline's own, or nothing but a command). */
+export function personal(c) {
+  const via = isPipeline(c) ? String(c.body || "").match(RELAY)?.[1] : null;
+  if (isPipeline(c) && !via) return null;
+  const body = words(via ? String(c.body).replace(RELAY, "").replace(/^\*\*@[A-Za-z0-9-]+, from Slack:\*\*\s*/, "") : c.body);
+  return body ? { author: via || c.author, body } : null;
+}
 
 /**
  * comments: [{ author, body, created }] oldest first (GitHub issue comments or Jira comments as text).
@@ -24,7 +35,7 @@ export function planContext(comments, { mark = PLAN_MARK, title = PLAN_TITLE } =
   if (at < 0) return { plan: null, answers: [] };
   const plan = sorted[at].body.replace(mark, "").replace(/^(⏳ \*\*Now:\*\*|❌ \*\*Failed:\*\*).*\n*/m, "").replace(/<!-- story:\d+ -->\n?/, "")
     .replace(/\n\*\*(Do it from here|Story):\*\*[\s\S]*$/, "").trim();   // a status line or the story link is not the spec
-  const answers = sorted.slice(at + 1).filter((c) => !isPipeline(c) && words(c.body)).map((c) => ({ author: c.author, body: words(c.body) }));
+  const answers = sorted.slice(at + 1).map(personal).filter(Boolean);
   return { plan, answers };
 }
 

@@ -5,7 +5,7 @@
 // by hand only when one slice cannot pass the production validation alone (docs/agents/salesforce.md, "Stories").
 // Pure, except makeStory(), which acts through the gh seam.
 import { checklist } from "./actions.mjs";
-import { planContext, PENDING, words } from "./plan.mjs";
+import { planContext, PENDING, personal } from "./plan.mjs";
 import { approverList } from "./gate.mjs";
 import { setting } from "./conventions.mjs";
 
@@ -116,7 +116,7 @@ export async function specFile(tracker, key) {
   const issue = await tracker.story(key);
   const comments = await tracker.comments(key).catch(() => []);
   const spec = planContext(comments, { mark: SPEC_MARK, title: SPEC_TITLE });
-  const people = comments.filter((c) => !/<!-- pipeline:/.test(c.body || "") && words(c.body)).map((c) => `- **${c.author}:** ${words(c.body).replace(/\n+/g, " ")}`);
+  const people = comments.map(personal).filter(Boolean).map((c) => `- **${c.author}:** ${c.body.replace(/\n+/g, " ")}`);
   const parts = [`# ${issue.title} (#${key})`, "", issue.body || "(no description)", ""];
   if (spec.plan) parts.push("---", "", "## The current spec", "", spec.plan, "");
   if (spec.answers.length) parts.push("## Comments since the spec (they win over it)", "", ...spec.answers.map((a) => `- **${a.author}:** ${a.body.replace(/\n+/g, " ")}`), "");

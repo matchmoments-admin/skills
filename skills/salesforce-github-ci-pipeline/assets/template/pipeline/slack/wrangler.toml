@@ -1,0 +1,11 @@
+# The Slack actions Worker (pipeline/slack/worker.mjs). Deploy from this folder: npx wrangler deploy
+# Secrets (never here): npx wrangler secret put SLACK_SIGNING_SECRET | SLACK_BOT_TOKEN | GITHUB_TOKEN
+name = "sf-pipeline-slack"
+main = "worker.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+GITHUB_REPO = "__OWNER__/__project__"
+# {"<Slack user ID>": "<GitHub login>"}: who may act from Slack, and as whom (the pipeline still checks write access)
+SLACK_USERS = "{}"

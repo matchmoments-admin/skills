@@ -1,0 +1,54 @@
+name: slack
+# A button on a Slack notice (pipeline/src/notify.mjs), sent here by the Slack actions Worker (pipeline/slack/worker.mjs)
+# as a repository_dispatch: the same action as the card's tick box, done as the person who clicked. The Worker maps
+# their Slack user to a GitHub login; `pipe act` then checks that login's write access, as for a comment command.
+# Answers typed in Slack land on the issue as the person's words first (plan.mjs relayBody), then /spec rewrites.
+on:
+  repository_dispatch:
+    types: [slack-act]
+permissions:
+  actions: write
+  contents: read
+  statuses: write
+  issues: write
+  pull-requests: write
+  checks: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
+jobs:
+  act:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: card-${{ github.event.client_payload.number }}   # the same queue as commands and card-actions
+      cancel-in-progress: false
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      N: ${{ github.event.client_payload.number }}
+      WHO: ${{ github.event.client_payload.by }}
+      COMMAND: ${{ github.event.client_payload.command }}
+      TEXT: ${{ github.event.client_payload.text }}
+    steps:
+      - name: A story or spec number, a GitHub login and a command, nothing else
+        run: |
+          [[ "$N" =~ ^[0-9]{1,7}$ && "$WHO" =~ ^[A-Za-z0-9-]{1,39}$ && "$COMMAND" =~ ^/(spec|story|plan|start|build)$ ]] || { echo "::error::refused: number '$N', login '$WHO', command '$COMMAND'"; exit 1; }
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - id: app
+        uses: actions/create-github-app-token@v1   # labels the App applies start their workflows (the Actions token's start nothing)
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: The answers typed in Slack, on the issue as the person's words
+        if: env.TEXT != ''
+        run: |
+          node --input-type=module -e '
+            const { relayBody } = await import(process.cwd() + "/pipeline/src/plan.mjs");
+            process.stdout.write(relayBody(process.env.WHO, process.env.TEXT));' > "$RUNNER_TEMP/answer.md"
+          gh issue comment "$N" --body-file "$RUNNER_TEMP/answer.md"
+      - name: Do it, as the person who clicked
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: node pipeline/bin/pipe.mjs act --number "$N" --by "$WHO" --by-type User --command "$COMMAND"
