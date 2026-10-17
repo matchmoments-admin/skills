@@ -137,7 +137,7 @@ test("vendored libraries (force-app/vendor/): the access check and the context p
   const io = { sourceFiles: ({ dirs } = {}) => (dirs ? { files: [] } : { files: r.files, read: r.read, changed: [] }), sf: () => null, git: () => "" };
   assert.doesNotMatch(pack.packForCheckout(io, { text: "Escalate the Case" }), /fflib/, "a library's classes are not the codebase to extend");
   const cfg = (f) => readFileSync(new URL(`../../${f}`, import.meta.url), "utf8");
-  assert.match(cfg("code-analyzer.yml"), /ignores:\s*\n\s*files:\s*\n\s*- "force-app\/vendor\/\*\*"/);
+  assert.match(cfg("code-analyzer.yml"), /ignores:\s*\n\s*files:\s*\n\s*- "vendor\/\*\*"/, "relative to the workspace: force-app/vendor only");
   assert.match(cfg(".prettierignore"), /^force-app\/vendor\/$/m);
   assert.match(cfg(".github/workflows/ai-review.yml"), /git diff "\$RANGE" -- \. ':\(exclude\)force-app\/vendor'/);
   assert.doesNotMatch(cfg(".github/workflows/ai-review.yml"), /gh pr diff/, "GitHub refuses diffs over 20,000 lines (#353)");

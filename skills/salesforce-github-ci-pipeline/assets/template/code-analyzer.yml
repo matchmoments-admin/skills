@@ -1,8 +1,10 @@
 # Static analysis rules (PMD for Apex, ESLint for LWC). Run: sf code-analyzer run --workspace force-app --severity-threshold 2
 # Vendored libraries (force-app/vendor/: third-party, unmodified; GLOSSARY.md) are not scanned: not ours to fix.
+# Patterns are relative to the scanned workspace (force-app): "vendor/**" is force-app/vendor only, never a "vendor"
+# folder elsewhere ("force-app/vendor/**" matched nothing and FFLib failed the scan: #353).
 ignores:
   files:
-    - "force-app/vendor/**"
+    - "vendor/**"
 engines:
   pmd: { disable_engine: false }
   eslint: { disable_engine: false }
