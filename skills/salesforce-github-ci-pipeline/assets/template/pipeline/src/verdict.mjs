@@ -1,4 +1,4 @@
-import { isPipelineAuthor, isHumanAuthor, setting } from "./conventions.mjs";
+import { isPipelineAuthor, isHumanAuthor, setting, PIPELINE_PATHS } from "./conventions.mjs";
 // What the AI jobs are told to produce, and how the pipeline reads it back. One module owns both sides,
 // so an instruction and its parser cannot drift apart. Pure.
 
@@ -36,7 +36,8 @@ const ANSWERED = " A question a comment has answered is no longer open: record i
 const PIPELINE_NEED = ANSWERED + " If the work needs a pipeline change first (a check's configuration, a CI rule, anything under .github/, pipeline/, config/ or code-analyzer.yml), say so as an open question that begins \"Needs a pipeline change first:\", naming the change: story work cannot make it, a maintainer must. Third-party Apex goes under force-app/vendor/ (CLAUDE.md, Apex), which the code checks already skip.";
 
 export function instructions(role, { key = "N" } = {}) {
-  const common = SHELL_RULE + "\nDo not edit .github/ or pipeline/.";
+  // every pipeline path, not only .github/ and pipeline/ (#353: a fix round edited code-analyzer.yml and CI refused it)
+  const common = SHELL_RULE + `\nNever edit pipeline files (${PIPELINE_PATHS.join(", ")}): CI refuses a story PR that changes one. If a check fails because of the pipeline's own configuration, revert any such edit, change nothing there, and say in your final message which pipeline change a maintainer must make.`;
   switch (role) {
     case "implement":
       return `${common}\nTests per acceptance criterion at a seam (docs/agents/salesforce.md): write a criterion's tests, deploy, run them alone (--tests Class.method), then the code; then everything the change needs.\nCommit as \`${COMMIT.implement(key)}\` and push the branch. ${PR_BODY(key)}`;

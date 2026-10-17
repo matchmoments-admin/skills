@@ -151,5 +151,6 @@ test("vendored libraries (force-app/vendor/): the access check and the context p
   assert.match(run("fflib", "https://github.com/o/r", "master", "why", "src").stderr, /a commit SHA \(pin it; never a branch\)/);
   assert.match(run("fflib", "https://evil.example/o/r", "abcdef1", "why", "src").stderr, /https:\/\/github\.com\/owner\/repo/);
   assert.match(run("fflib", "https://github.com/o/r", "abcdef1", "why", "../etc").stderr, /folder: a path inside the repository/, "checked before anything is fetched");
+  for (const role of ["implement", "fix", "review"]) assert.match(verdict.instructions(role, { key: "7" }), /Never edit pipeline files \(.*code-analyzer\.yml.*\): CI refuses/, `${role}: every pipeline path`);
   for (const role of ["spec", "plan"]) assert.match(verdict.instructions(role), /answered is no longer open: record its answer under Decisions \(a plan: in the Proposed build\) and remove it/, `${role}: answered questions leave Open questions`);
 });
