@@ -211,10 +211,27 @@ test("RunRelevantTests (enterprise C): CI lets Salesforce choose a story's Apex 
   assert.equal(st.apex.ran, 3);
   assert.equal(st.flows.ran, 1);
   assert.ok(!calls.some((c) => c.startsWith("apex run test")));
+  // a cancelled run's tests still queued in the org are aborted first; "already enqueued" clears and retries once (#353)
+  {
+    const calls = [];
+    let refused = false;
+    const sf = (a, o) => {
+      calls.push(a.slice(0, 3).join(" "));
+      if (a[0] === "data" && a[1] === "query") return { records: refused ? [{ Id: "709q2" }] : [{ Id: "709q1" }] };
+      if (a[1] === "run" && !refused) { refused = true; throw new Error("ALREADY_IN_PROCESS: Test already enqueued flowtesting.F"); }
+      if (a[1] === "run") return { testRunId: "f2" };
+      if (a[1] === "get") return { summary: { outcome: "Passed" }, tests: [{ FullName: "F.t", Outcome: "Pass" }] };
+      return {};
+    };
+    const st = tests.runTests({ sf }, { alias: "a", plan: { mode: "relevant", apex: r.chosen, flows: ["F"] }, sleep: () => {}, apexDone: r.state });
+    assert.equal(st.flows.passed, 1);
+    assert.equal(st.flows.cleared, 2, "q1 before, q2 after the refusal");
+    assert.equal(calls.filter((c) => c === "data update record").length, 2);
+  }
   // a run Salesforce reports Skipped (no test passed) or Aborted is finished, not polled for an hour (#353), and fails
   for (const outcome of ["Skipped", "Aborted"]) {
     let polls = 0;
-    const done = tests.runTests({ sf: (a) => (a[1] === "run" ? { testRunId: "f1" } : (polls++, { summary: { outcome }, tests: [] })) },
+    const done = tests.runTests({ sf: (a) => (a[1] === "run" ? { testRunId: "f1" } : a[1] === "get" ? (polls++, { summary: { outcome }, tests: [] }) : {}) },
       { alias: "a", plan: { mode: "relevant", apex: r.chosen, flows: ["F"] }, sleep: () => {}, apexDone: r.state });
     assert.equal(polls, 1, `${outcome}: one look, then done`);
     assert.ok(done.flows.finished);

@@ -182,7 +182,9 @@ jobs:
           mkdir -p delta
           sf sgd source delta --to HEAD --from "origin/$BASE" --output-dir delta --source-dir force-app
           if grep -q '<members>' delta/package/package.xml 2>/dev/null; then
-            DESTRUCTIVE=""; grep -q '<members>' delta/destructiveChanges/destructiveChanges.xml 2>/dev/null && DESTRUCTIVE="--post-destructive-changes delta/destructiveChanges/destructiveChanges.xml"
+            # deletions: a re-run (or a second CI run in the same org) deletes what is already gone, which Salesforce
+            # reports as a warning ("No ApexClass named: X found"); it is not a failure (#353's re-run)
+            DESTRUCTIVE=""; grep -q '<members>' delta/destructiveChanges/destructiveChanges.xml 2>/dev/null && DESTRUCTIVE="--post-destructive-changes delta/destructiveChanges/destructiveChanges.xml --ignore-warnings"
             sf project deploy start -o "$ALIAS" --manifest delta/package/package.xml $DESTRUCTIVE --ignore-conflicts --wait 30
           fi
           node .pipeline/pipeline/bin/pipe.mjs org prepare "$ALIAS"

@@ -362,3 +362,9 @@ test("Standing is the only reader of results: no other module or workflow reads 
     assert.ok(!runs.some((l) => /\/statuses/.test(l)), `${f} reads commit statuses: use pipe gate standing`);
   }
 });
+
+test("CI's deploy with deletions tolerates what is already gone (a re-run in the same org: #353)", () => {
+  const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(ci, /DESTRUCTIVE="--post-destructive-changes delta\/destructiveChanges\/destructiveChanges\.xml --ignore-warnings"/);
+});
+

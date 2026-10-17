@@ -23,6 +23,15 @@ const objectOf = (p) => (p.match(/\/objects\/([^/]+)\//) || [])[1] || null;
 const isPermissionSet = (p) => p.endsWith(".permissionset-meta.xml");
 const FLOW_DONE = ["Passed", "Failed", "Completed", "Aborted", "Skipped"];
 
+/** Abort the test queue items still waiting or running in an org (left by a cancelled run); how many. */
+export function clearTestQueue(io, alias) {
+  let left = [];
+  try { left = (io.sf(["data", "query", "-o", alias, "-q", "SELECT Id FROM ApexTestQueueItem WHERE Status IN ('Holding','Queued','Preparing','Processing')"], { allowFail: true })?.records || []).filter((r) => /^709/.test(r.Id || "")); } catch { return 0; }   // 709: ApexTestQueueItem
+  let n = 0;
+  for (const r of left) { try { io.sf(["data", "update", "record", "-o", alias, "-s", "ApexTestQueueItem", "-i", r.Id, "-v", "Status=Aborted"], { allowFail: true }); n++; } catch { /* best effort: the run below says if it is still refused */ } }
+  return n;
+}
+
 const isRecordTriggered = (xml) => /<triggerType>Record(Before|After)Save<\/triggerType>/.test(xml);
 const isActive = (xml) => /<status>Active<\/status>/.test(xml);
 
@@ -284,7 +293,16 @@ export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs
   }
   if (plan.flows.length) {
     state.phase = "flows"; onProgress(state);
-    const id = io.sf(["flow", "run", "test", "-o", alias, "--test-level", "RunSpecifiedTests", ...plan.flows.flatMap((t) => ["--tests", t])]).testRunId;
+    // a run cancelled on GitHub leaves its tests queued in the org, and Salesforce refuses the same test again
+    // ("ALREADY_IN_PROCESS: Test already enqueued", #353): abort what is left in this org (ours alone: lanes), then run
+    state.flows.cleared = clearTestQueue(io, alias);
+    const start = () => io.sf(["flow", "run", "test", "-o", alias, "--test-level", "RunSpecifiedTests", ...plan.flows.flatMap((t) => ["--tests", t])]).testRunId;
+    let id;
+    try { id = start(); } catch (e) {
+      if (!/ALREADY_IN_PROCESS/.test(String(e.message))) throw e;
+      state.flows.cleared += clearTestQueue(io, alias);
+      id = start();
+    }
     for (let i = 0; i < maxPolls; i++) {
       const r = io.sf(["flow", "get", "test", "-o", alias, "--test-run-id", id, ...(outDir ? ["--output-dir", `${outDir}/flow`] : [])], { allowFail: true });
       const outcome = r?.summary?.outcome;
