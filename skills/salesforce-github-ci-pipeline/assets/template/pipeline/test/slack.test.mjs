@@ -7,7 +7,8 @@ import "./helpers.mjs";   // tests never reach Slack
 import worker, { fromSlack, decide, ACTS } from "../slack/worker.mjs";
 import * as notify from "../src/notify.mjs";
 import * as plans from "../src/plan.mjs";
-import { newStoryCard } from "../src/card.mjs";
+import { newStoryCard, startingCard } from "../src/card.mjs";
+import * as actions from "../src/actions.mjs";
 
 const SECRET = "shh", NOW = 1_800_000_000;
 const sign = (body, ts = NOW) => `v0=${createHmac("sha256", SECRET).update(`v0:${ts}:${body}`).digest("hex")}`;
@@ -117,12 +118,25 @@ test("a story's card follows its build plan (⏳ while Claude plans, then what t
 
 test("a story with no open sprint says to start the sprint first, with its box and its Slack button", () => {
   const card = newStoryCard({ key: "343", ai: { plan: true }, plan: { stage: "ready", questions: [] }, sprintOpen: false });
-  assert.match(card, /\*\*Next:\*\* \*\*No sprint is open\*\*, so it cannot start yet: tick \*\*Start the next sprint\*\* first/);
-  assert.match(card, /act:sprint[\s\S]*act:start/);
+  assert.match(card, /\*\*Next:\*\* \*\*No sprint is open\*\*, so it cannot start yet: tick \*\*Start the next sprint\*\*\. It opens the sprint .* then starts this story by itself\. .*When it is right, tick \*\*Start the next sprint\*\*\./);
+  assert.match(card, /act:sprint/);
+  assert.doesNotMatch(card, /act:start\b/, "Start would refuse with no sprint: not offered");
   assert.match(card, /\| ⬜ \| Sprint \| none open: start one first \|/);
   const els = notify.notice({ before: "", after: card, key: "343", actions: true }).blocks[1].elements;
-  assert.deepEqual(els.map((e) => e.text.text), ["🏁 Start the sprint", "🧭 Rewrite the plan", "▶️ Start"]);
+  assert.deepEqual(els.map((e) => e.text.text), ["🏁 Start the sprint, then this story", "🧭 Rewrite the plan"]);
   assert.equal(decide(click(JSON.parse(els[0].value)), env).dispatch.command, "/sprint");
   assert.doesNotMatch(newStoryCard({ key: "343", ai: { plan: true }, plan: { stage: "ready", questions: [] } }), /act:sprint|No sprint/, "a sprint is open: nothing to say");
   assert.match(readFileSync(new URL("../../.github/workflows/sprint-start.yml", import.meta.url), "utf8"), /Sprint \$\{process\.env\.SPRINT\} is open/);
+});
+
+test("one press: a sprint started from a story starts that story when it opens; while it starts, the card waits (no second 'your turn')", () => {
+  const dispatched = [];
+  const host = { dispatch: (wf, inputs) => dispatched.push([wf, inputs]) };
+  actions.perform("sprint", "", { number: 343, isPr: false, nextSprint: "2027-w02" }, "pat", { host });
+  actions.perform("sprint", "", { number: 296, isPr: true, nextSprint: "2027-w03" }, "pat", { host });
+  assert.deepEqual(dispatched, [["sprint-start.yml", { sprint: "2027-w02", start: "343" }], ["sprint-start.yml", { sprint: "2027-w03" }]]);
+  const wf = readFileSync(new URL("../../.github/workflows/sprint-start.yml", import.meta.url), "utf8");
+  assert.match(wf, /gh issue edit "\$START" --add-label start/);
+  assert.match(wf, /is starting now \(its branch and scratch org\)/);
+  assert.equal(notify.turnOf(startingCard({ key: "343", activity: { state: "running", what: "Creating the branch" } })), null, "starting: Slack waits");
 });

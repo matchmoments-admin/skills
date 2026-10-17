@@ -88,7 +88,8 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprov
     return { done: pass ? `UAT signed off by @${who} on ${pr.headRefOid.slice(0, 7)}` : `UAT marked failed by @${who}` };
   }
   if (!a) return { said: null };
-  if (id === "sprint") { host.dispatch("sprint-start.yml", { sprint: arg || where.nextSprint }); return { done: `starting sprint ${arg || where.nextSprint}` }; }
+  // from a story: the story starts by itself once the sprint is open (one press, not two)
+  if (id === "sprint") { host.dispatch("sprint-start.yml", { sprint: arg || where.nextSprint, ...(where.isPr ? {} : { start: String(where.number) }) }); return { done: `starting sprint ${arg || where.nextSprint}${where.isPr ? "" : `, then #${where.number}`}` }; }
   if (id === "release-cut") { host.dispatch("release-cut.yml"); return { done: "cutting the sprint's release" }; }
   if (a.on === "pr" && !where.isPr) return { said: `\`${id}\` works on a pull request.` };
   if (a.on === "issue" && where.isPr) return { said: `\`${id}\` works on the story (the issue).` };

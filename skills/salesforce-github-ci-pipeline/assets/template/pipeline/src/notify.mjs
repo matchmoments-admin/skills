@@ -33,7 +33,8 @@ export function buttons({ body, key, title = "", url = "", actions = true }) {
   // answering rewrites what asked: the spec, or a story's build plan
   const cmd = boxes.includes("spec") ? "/spec" : boxes.includes("plan") && /Build plan/.test(body) ? "/plan" : null;
   if (/open question/.test(body) && cmd) out.push({ text: "✍️ Answer in Slack", value: { n, act: "answer", cmd, title: title.slice(0, 120), q: asked.slice(0, 1500) }, style: "primary" });
-  for (const id of boxes) out.push({ text: id === "plan" && /Build plan/.test(body) ? "🧭 Rewrite the plan" : BUTTONS[id], value: { n, act: id }, ...(out.length ? {} : { style: "primary" }) });
+  const label = (id) => (id === "plan" && /Build plan/.test(body) ? "🧭 Rewrite the plan" : id === "sprint" && /No sprint is open/.test(body) ? "🏁 Start the sprint, then this story" : BUTTONS[id]);
+  for (const id of boxes) out.push({ text: label(id), value: { n, act: id }, ...(out.length ? {} : { style: "primary" }) });
   const approve = String(body).match(/\[Approve here\]\(([^)]+)\)/)?.[1];
   if (approve) out.push({ text: "✅ Approve on GitHub", url: approve, style: "primary" });
   if (url) out.push({ text: "Open the card", url });

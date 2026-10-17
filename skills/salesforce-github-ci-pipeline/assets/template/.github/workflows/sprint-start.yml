@@ -8,6 +8,10 @@ on:
       sprint:
         description: Sprint name, for example 2026-w43
         required: true
+      start:
+        description: "Optional: a story to start once the sprint is open (set when the sprint is started from that story)"
+        required: false
+        default: ""
   repository_dispatch:
     types: [jira-sprint-start]
 permissions:
@@ -25,9 +29,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       SPRINT: ${{ inputs.sprint || github.event.client_payload.sprint }}
+      START: ${{ inputs.start }}
     steps:
       - name: A valid sprint name
-        run: '[[ "$SPRINT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$ ]] || { echo "::error::Sprint names use letters, digits, dot, dash or underscore"; exit 1; }'
+        run: '[[ "$SPRINT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$ && "$START" =~ ^[0-9]{0,7}$ ]] || { echo "::error::Sprint names use letters, digits, dot, dash or underscore"; exit 1; }'
       - uses: actions/checkout@v4
         with: { ref: main, fetch-depth: 0 }
       - name: Names (is another sprint open?)
@@ -55,6 +60,17 @@ jobs:
         run: |
           node pipeline/bin/pipe.mjs org ready "sprint:$SPRINT"
           node pipeline/bin/pipe.mjs org limits
+      - id: app
+        if: env.START != ''
+        uses: actions/create-github-app-token@v1   # a label the App applies starts issue-start (the Actions token's start nothing)
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+      - name: The story the sprint was started from starts now
+        if: env.START != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: gh issue edit "$START" --add-label start
       - name: Slack hears the sprint is open (stories waiting for it can start)
         if: env.SLACK_WEBHOOK_URL != ''
         env:
@@ -62,4 +78,6 @@ jobs:
         run: |
           node --input-type=module -e '
             const { slackNotifier } = await import(process.cwd() + "/pipeline/src/notify.mjs");
-            await slackNotifier({ log: console.log })({ text: `🏁 *Sprint ${process.env.SPRINT} is open*: stories can start now. Press *Start* on a story (its card, or its last Slack message). <${process.env.LINK}|Open stories>` });'
+            const repo = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`, n = process.env.START;
+            const then = n ? `<${repo}/issues/${n}|#${n}> is starting now (its branch and scratch org); this channel hears when it is ready to build.` : `stories can start now: press *Start* on one (its card, or its last Slack message). <${process.env.LINK}|Open stories>`;
+            await slackNotifier({ log: console.log })({ text: `🏁 *Sprint ${process.env.SPRINT} is open*: ${then}` });'
