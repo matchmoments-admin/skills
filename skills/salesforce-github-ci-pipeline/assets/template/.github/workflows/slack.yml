@@ -30,10 +30,11 @@ jobs:
       WHO: ${{ github.event.client_payload.by }}
       COMMAND: ${{ github.event.client_payload.command }}
       TEXT: ${{ github.event.client_payload.text }}
+      IS_PR: ${{ github.event.client_payload.pr == true }}
     steps:
       - name: A story or spec number, a GitHub login and a command, nothing else
         run: |
-          [[ "$N" =~ ^[0-9]{1,7}$ && "$WHO" =~ ^[A-Za-z0-9-]{1,39}$ && "$COMMAND" =~ ^/(sprint|spec|story|plan|start|build)$ ]] || { echo "::error::refused: number '$N', login '$WHO', command '$COMMAND'"; exit 1; }
+          [[ "$N" =~ ^[0-9]{1,7}$ && "$WHO" =~ ^[A-Za-z0-9-]{1,39}$ && "$COMMAND" =~ ^/(sprint|spec|story|plan|start|build|fix|ci|review|ui-test)$ ]] || { echo "::error::refused: number '$N', login '$WHO', command '$COMMAND'"; exit 1; }
       - uses: actions/checkout@v4
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       - id: app
@@ -51,4 +52,5 @@ jobs:
       - name: Do it, as the person who clicked
         env:
           APP_TOKEN: ${{ steps.app.outputs.token }}
-        run: node pipeline/bin/pipe.mjs act --number "$N" --by "$WHO" --by-type User --command "$COMMAND"
+        # a pull request action (fix, CI, review, UI test) names the PR; pipe act checks the command fits it
+        run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.client_payload.pr == true && '--is-pr' || '' }} --by "$WHO" --by-type User --command "$COMMAND"

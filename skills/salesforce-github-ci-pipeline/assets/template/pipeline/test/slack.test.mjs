@@ -30,10 +30,10 @@ test("Slack actions: a button starts the card's action as the linked person; nev
   assert.match(d.reply, /as @pat: `\/story` on <https:\/\/github\.com\/o\/r\/issues\/333\|#333>/);
   assert.equal(decide(click({ n: "333", act: "story-anyway" }), env).dispatch.command, "/story");
   assert.match(decide(click({ n: "333", act: "story" }, "U9"), env).reply, /not linked[\s\S]*"U9": "<your GitHub login>"/);
-  for (const act of ["approve", "uat-pass", "ship", "review-ok"]) assert.ok(!decide(click({ n: "1", act }), env).dispatch, `${act} is not startable from Slack`);
+  for (const act of ["approve", "uat-pass", "uat-fail", "ship", "review-ok", "gate", "staging"]) assert.ok(!decide(click({ n: "1", act }), env).dispatch, `${act} is not startable from Slack`);
   assert.ok(!decide(click({ n: "1; rm -rf", act: "story" }), env).dispatch, "a number is a number");
   assert.deepEqual(decide({ type: "block_actions", user: { id: "U1" }, actions: [{ url: "https://github.com/o/r/pull/1/files" }] }, env), { ack: "" }, "a link button: Slack opens it");
-  assert.deepEqual(Object.keys(ACTS).sort(), ["build", "plan", "spec", "sprint", "start", "story", "story-anyway"]);
+  assert.deepEqual(Object.keys(ACTS).sort(), ["ai-test", "build", "ci", "fix", "plan", "review", "spec", "sprint", "start", "story", "story-anyway"]);
 });
 
 test("Slack actions: Answer in Slack opens a box; what is typed goes to the issue as the person's words, then the spec is rewritten", () => {
@@ -87,7 +87,7 @@ test("Slack actions: the Worker answers Slack at once, then dispatches; a bad si
   } finally { globalThis.fetch = realFetch; }
   const wf = readFileSync(new URL("../../.github/workflows/slack.yml", import.meta.url), "utf8");
   assert.match(wf, /types: \[slack-act\]/);
-  assert.match(wf, /\^\/\(sprint\|spec\|story\|plan\|start\|build\)\$/, "the workflow refuses anything else, whatever the Worker sends");
+  assert.match(wf, /\^\/\(sprint\|spec\|story\|plan\|start\|build\|fix\|ci\|review\|ui-test\)\$/, "the workflow refuses anything else, whatever the Worker sends");
 });
 
 test("a story's card follows its build plan (⏳ while Claude plans, then what to do), so Slack hears when the plan is ready", () => {
@@ -148,4 +148,16 @@ test("a failed agent run (the card's Now line says ❌ Failed) reaches Slack, wi
   assert.match(m.text, /^❌ \*<https:\/\/github\.com\/o\/r\/issues\/343\|#343 FFLib>\*: something failed\nClaude's build \(<https:\/\/github\.com\/o\/r\/actions\/runs\/9\|see what went wrong>\) · comment \/build to retry\. Build it/);
   assert.deepEqual(m.blocks[1].elements.map((e) => e.text.text), ["🤖 Build it", "Open the card"]);
   assert.equal(notify.notice({ before: card, after: card, key: "343" }), null, "the same failure once");
+});
+
+test("pull request actions from Slack (fix, re-run CI, review, UI test) name the PR; approvals never become buttons", () => {
+  const card = "**Next:** Fix the failing tests ([see what failed](https://github.com/o/r/pull/353/checks)): tick **Fix … with Claude** below.\n\n- [ ] 🛠 Fix <!-- act:fix -->\n- [ ] 🔁 Re-run CI <!-- act:ci -->\n- [ ] 🔍 Review <!-- act:review -->\n- [ ] ✋ review-ok <!-- act:review-ok -->\n\n| ❌ | CI | failed |";
+  const els = notify.notice({ before: "", after: card, key: "343", url: "https://github.com/o/r/issues/343#c", actions: true }).blocks[1].elements;
+  assert.deepEqual(els.map((e) => e.text.text), ["🛠 Fix it with Claude", "🔁 Re-run CI", "🔍 Review again", "Open the card"], "review-ok stays in GitHub");
+  const fix = decide(click(JSON.parse(els[0].value)), env);
+  assert.deepEqual(fix.dispatch, { number: 353, command: "/fix", by: "pat", text: "", pr: true });
+  assert.match(fix.reply, /`\/fix` on <https:\/\/github\.com\/o\/r\/pull\/353\|PR #353>/);
+  assert.match(decide(click({ n: "343", act: "fix" }), env).reply, /needs the story's pull request/);
+  assert.deepEqual(notify.buttons({ body: card.replace(/\/pull\/353/g, ""), key: "343", actions: true }).map((b) => b.text.text), [], "no PR named: no PR buttons");
+  assert.match(readFileSync(new URL("../../.github/workflows/slack.yml", import.meta.url), "utf8"), /client_payload\.pr == true && '--is-pr'/);
 });

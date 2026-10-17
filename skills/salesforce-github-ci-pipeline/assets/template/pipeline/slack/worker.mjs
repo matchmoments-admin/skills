@@ -12,8 +12,10 @@
 //   GITHUB_REPO           owner/name
 //   SLACK_USERS           (secret) JSON {"<Slack user ID>": "<GitHub login>"}: who may act, and as whom
 
-/** The actions a Slack button may start: the card's own boxes, for issues (specs and stories). Never an approval. */
-export const ACTS = { sprint: "/sprint", spec: "/spec", story: "/story", "story-anyway": "/story", plan: "/plan", start: "/start", build: "/build" };
+/** The actions a Slack button may start: the card's own boxes (a story's, a spec's, and its pull request's for fix, CI,
+ *  review and UI test, which name the PR). Never an approval: ship, review-ok and UAT sign-off stay in GitHub. */
+const PR_ACTS = new Set(["fix", "ci", "review", "ai-test"]);
+export const ACTS = { fix: "/fix", ci: "/ci", review: "/review", "ai-test": "/ui-test", sprint: "/sprint", spec: "/spec", story: "/story", "story-anyway": "/story", plan: "/plan", start: "/start", build: "/build" };
 const MAX_AGE = 300;   // seconds: an older signed request is a replay
 
 /** Is this request from Slack? Its v0 signature over the timestamp and the raw body, and not older than 5 minutes. */
@@ -48,7 +50,10 @@ export function decide(payload, env) {
     if (!login) return notLinked;
     if (v.act === "answer") return { ack: "", modal: { trigger_id: payload.trigger_id, view: answerView(n, v.title, v.cmd, v.q) } };
     if (!ACTS[v.act]) return { ack: "", reply: "That action cannot be started from Slack: open the card." };
-    return { ack: "", dispatch: { number: n, command: ACTS[v.act], by: login, text: "" }, reply: `⏳ Done as @${login}: \`${ACTS[v.act]}\` on <https://github.com/${env.GITHUB_REPO}/issues/${n}|#${n}>. The card shows what happens next; this channel hears when it is your turn again.` };
+    const pr = PR_ACTS.has(v.act) ? number(v.pr) : null;
+    if (PR_ACTS.has(v.act) && !pr) return { ack: "", reply: "That needs the story's pull request, and the message did not name one: open the card." };
+    const on = pr ? `<https://github.com/${env.GITHUB_REPO}/pull/${pr}|PR #${pr}>` : `<https://github.com/${env.GITHUB_REPO}/issues/${n}|#${n}>`;
+    return { ack: "", dispatch: { number: pr || n, command: ACTS[v.act], by: login, text: "", ...(pr ? { pr: true } : {}) }, reply: `⏳ Done as @${login}: \`${ACTS[v.act]}\` on ${on}. The card shows what happens next; this channel hears when it is your turn again.` };
   }
   if (payload.type === "view_submission" && payload.view?.callback_id === "answer") {
     const n = number(value(payload.view.private_metadata).n);

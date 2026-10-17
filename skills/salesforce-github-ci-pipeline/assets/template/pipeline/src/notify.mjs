@@ -23,7 +23,9 @@ export const mrkdwn = (s) => String(s).replace(/\*\*([^*]+)\*\*/g, "*$1*").repla
 const HEAD = { you: "your turn", failed: "something failed", shipped: "shipped" };
 
 // the card's boxes a Slack button may start (pipeline/slack/worker.mjs ACTS: never an approval), with short labels
-const BUTTONS = { sprint: "🏁 Start the sprint", spec: "📝 Rewrite the spec", story: "📌 Make it a story", "story-anyway": "📌 Make it a story anyway", plan: "🧭 Plan it", start: "▶️ Start", build: "🤖 Build it" };
+// pull request actions carry the PR's number (the card links it); approvals (ship, review-ok, UAT) never become buttons
+const PR_ACTS = new Set(["fix", "ci", "review", "ai-test"]);
+const BUTTONS = { fix: "🛠 Fix it with Claude", ci: "🔁 Re-run CI", review: "🔍 Review again", "ai-test": "🧪 UI test with Claude", sprint: "🏁 Start the sprint", spec: "📝 Rewrite the spec", story: "📌 Make it a story", "story-anyway": "📌 Make it a story anyway", plan: "🧭 Plan it", start: "▶️ Start", build: "🤖 Build it" };
 
 /** The buttons for a card: its tick boxes (unticked), "Answer in Slack" while a spec has open questions, an approval
  *  link (approving stays in GitHub), and the card itself. Slack runs the action buttons through the Worker. Pure. */
@@ -37,7 +39,8 @@ export function buttons({ body, key, title = "", url = "", actions = true }) {
   const cmd = boxes.includes("spec") ? "/spec" : boxes.includes("plan") && /Build plan/.test(body) ? "/plan" : null;
   if (/open question/.test(body) && cmd) out.push({ text: "✍️ Answer in Slack", value: { n, act: "answer", cmd, title: title.slice(0, 120), q: asked.slice(0, 1500) }, style: "primary" });
   const label = (id) => (id === "plan" && /Build plan/.test(body) ? "🧭 Rewrite the plan" : id === "sprint" && /No sprint is open/.test(body) ? "🏁 Start the sprint, then this story" : BUTTONS[id]);
-  for (const id of boxes) out.push({ text: label(id), value: { n, act: id }, ...(out.length ? {} : { style: "primary" }) });
+  const pr = String(body).match(/\/pull\/(\d+)/)?.[1];
+  for (const id of boxes.filter((b) => !PR_ACTS.has(b) || pr)) out.push({ text: label(id), value: { n, act: id, ...(PR_ACTS.has(id) ? { pr } : {}) }, ...(out.length ? {} : { style: "primary" }) });
   const approve = String(body).match(/\[Approve here\]\(([^)]+)\)/)?.[1];
   if (approve) out.push({ text: "✅ Approve on GitHub", url: approve, style: "primary" });
   if (url) out.push({ text: "Open the card", url });

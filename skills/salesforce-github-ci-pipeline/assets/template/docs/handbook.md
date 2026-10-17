@@ -502,7 +502,8 @@ Set it up once (about five minutes):
 4. **Actions › slack-test › Run workflow** sends one test message to check it.
 
 **Acting from Slack (optional).** With the Slack actions Worker set up, each notice carries the card's next options
-as buttons (**Make it a story**, **Rewrite the spec**, **Plan it**, **Start**, **Build it**) and, while a spec has
+as buttons (**Start the sprint**, **Make it a story**, **Rewrite the spec**, **Plan it**, **Start**, **Build it**, and on its
+pull request **Fix it**, **Re-run CI**, **Review again**, **UI test**) and, while a spec has
 open questions, **✍️ Answer in Slack**: a box whose text lands on the issue as your words, then the spec is rewritten.
 A button does exactly what the card's tick box does, as you: the Worker (`pipeline/slack/worker.mjs`, a Cloudflare
 Worker) checks Slack's signature, maps your Slack user to your GitHub login (`SLACK_USERS`) and sends a
