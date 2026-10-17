@@ -139,7 +139,8 @@ test("vendored libraries (force-app/vendor/): the access check and the context p
   const cfg = (f) => readFileSync(new URL(`../../${f}`, import.meta.url), "utf8");
   assert.match(cfg("code-analyzer.yml"), /ignores:\s*\n\s*files:\s*\n\s*- "force-app\/vendor\/\*\*"/);
   assert.match(cfg(".prettierignore"), /^force-app\/vendor\/$/m);
-  assert.match(cfg(".github/workflows/ai-review.yml"), /force-app\\\/vendor/);
+  assert.match(cfg(".github/workflows/ai-review.yml"), /git diff "\$RANGE" -- \. ':\(exclude\)force-app\/vendor'/);
+  assert.doesNotMatch(cfg(".github/workflows/ai-review.yml"), /gh pr diff/, "GitHub refuses diffs over 20,000 lines (#353)");
   assert.ok(names.touchesPipeline([".prettierignore"]).length, "what the checks skip is a pipeline decision");
   assert.match(verdict.instructions("spec"), /Needs a pipeline change first:/);
   assert.match(verdict.instructions("plan"), /force-app\/vendor\//);
