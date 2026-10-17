@@ -32,7 +32,8 @@ built outside this pipeline, in every scratch org and in production.
 Third-party source kept unmodified; the diff you are given leaves it out (its last line says how many files). Do not
 review it line by line, and never ask for it to follow our Apex rules.
 - **major**: our own code (a class written for this story, a test of our code) under `force-app/vendor/`; a vendored
-  library missing from `docs/vendor.md` (repository, pinned commit, why); vendored code edited beyond its API version.
+  library missing from `docs/vendor.md` (repository, pinned commit, why); vendored code that differs from upstream at the recorded commit (`scripts/vendor.sh` with the same arguments
+  reproduces it exactly).
 
 ## Flows
 - **blocker**: a Get, Create, Update or Delete element inside a Loop; a recursive trigger (a flow updating the record that

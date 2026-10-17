@@ -15,10 +15,12 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
   and has a short test plan.
 
 ## Apex
-- Third-party Apex libraries (FFLib and the like) are **vendored**: unmodified, under `force-app/vendor/<library>/`, with
-  `docs/vendor.md` naming each one's repository, pinned commit and why it is here. Never edit vendored code (an
-  API-version bump in its `-meta.xml` files is the only change) and never put our own code there: the access check,
-  Code Analyzer and Prettier skip that folder. Our code that uses the library follows every rule below.
+- Third-party Apex libraries (FFLib and the like) are **vendored**: unmodified, under `force-app/vendor/<library>/`, and
+  listed in `docs/vendor.md`. Add or update one only with `scripts/vendor.sh <name> <https://github.com/owner/repo>
+  <commit SHA> "<why>" <folder>...` (for example the repo's `sfdx-source/<x>/main` and `.../test`): it copies upstream
+  byte for byte at that commit and writes the docs row. Never copy, retype or edit vendored files yourself (keep
+  upstream's API versions; they deploy as they are), and never put our own code there: the access check, Code
+  Analyzer and Prettier skip that folder. Our code that uses the library follows every rule below.
 - One trigger per object, logic in a handler class, `with sharing` by default.
 - Bulk-safe: no SOQL or DML in loops; handle 200 records.
 - Use `WITH USER_MODE` or `Security.stripInaccessible` on user-facing queries.

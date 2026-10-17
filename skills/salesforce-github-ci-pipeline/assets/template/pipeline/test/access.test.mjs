@@ -143,5 +143,12 @@ test("vendored libraries (force-app/vendor/): the access check and the context p
   assert.ok(names.touchesPipeline([".prettierignore"]).length, "what the checks skip is a pipeline decision");
   assert.match(verdict.instructions("spec"), /Needs a pipeline change first:/);
   assert.match(verdict.instructions("plan"), /force-app\/vendor\//);
+  // the agents vendor through the script (they may not copy files), and the script refuses anything but a pinned commit
+  for (const wf of ["ai-implement", "ai-fix"]) assert.match(cfg(`.github/workflows/${wf}.yml`), /Bash\(scripts\/vendor\.sh:\*\)/, wf);
+  const { spawnSync } = createRequire(import.meta.url)("node:child_process");
+  const run = (...a) => spawnSync(new URL("../../scripts/vendor.sh", import.meta.url).pathname, a, { encoding: "utf8" });
+  assert.match(run("fflib", "https://github.com/o/r", "master", "why", "src").stderr, /a commit SHA \(pin it; never a branch\)/);
+  assert.match(run("fflib", "https://evil.example/o/r", "abcdef1", "why", "src").stderr, /https:\/\/github\.com\/owner\/repo/);
+  assert.match(run("fflib", "https://github.com/o/r", "abcdef1", "why", "../etc").stderr, /folder: a path inside the repository/, "checked before anything is fetched");
   for (const role of ["spec", "plan"]) assert.match(verdict.instructions(role), /answered is no longer open: record its answer under Decisions \(a plan: in the Proposed build\) and remove it/, `${role}: answered questions leave Open questions`);
 });
