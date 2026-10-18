@@ -73,7 +73,7 @@ import { finish, reconcile, STAGE } from "../src/finish.mjs";
 import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
-const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "level",
+const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "floor", "level",
   "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
@@ -365,7 +365,7 @@ const commands = {
     // the card says it once, when testing starts; progress lives on the live check run (cards change on start and end only)
     if (story) await cards.refresh(story, { activity: { state: "running", what: "CI is testing the change in its scratch org (progress: the Salesforce tests check)", url: host.runUrl } }).catch(() => {});
     const r = orgs().asProductionUser(alias, () => tests.runForCheckout(io, {
-      host, alias, base: flag("base", "origin/main"), sha: flag("sha"), all: has("all"), level: names.setting("CI_TEST_LEVEL") || "RunRelevantTests", min: Number(flag("min", "75")), outDir: flag("out", "test-results"), sleep, log,
+      host, alias, base: flag("base", "origin/main"), sha: flag("sha"), all: has("all"), level: names.setting("CI_TEST_LEVEL") || "RunRelevantTests", min: Number(flag("min", names.setting("COVERAGE_MIN"))), floor: Number(flag("floor", String(names.COVERAGE_MIN))), outDir: flag("out", "test-results"), sleep, log,
     }));
     if (!r.result) return say("no Salesforce changes");
     const src = io.sourceFiles({ base: flag("base", "origin/main") });

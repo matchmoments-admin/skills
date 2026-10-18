@@ -50,7 +50,9 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
 - Tests run as production's CI user does: no story permission set. Set up and read data in system mode
   (`AccessLevel.SYSTEM_MODE`, `WITH SYSTEM_MODE`); test access only inside `System.runAs`.
 - Every class: positive, negative, permission (refused without the permission set) and bulk (200 records) cases.
-- Mocks: `Test.setMock` for callouts, `Test.loadData` or small factories for data; never mock the database.
+- Mocks: `fflib_ApexMocks` for the logic's collaborators (selectors, services, the unit of work), `Test.setMock` for
+  callouts, builders for data; seam tests still use the database. Structure, the 85% minimum and the builder pattern:
+  `docs/agents/apex-testing.md`.
 - Flows: a Flow test per path whose triggering record meets the entry criteria; "the Flow does not run" is an Apex test.
   **A Flow test sets only the triggering record's fields: it cannot create or point at related records.** A Flow that
   reads or writes another record it needs (the parent Account, its owner) faults in a Flow test ("Error", no message).

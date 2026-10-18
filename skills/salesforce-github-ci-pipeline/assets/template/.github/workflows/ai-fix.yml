@@ -152,7 +152,7 @@ jobs:
             Fix the review findings and any failed CI checks on pull request #${{ env.PR }}. All feedback (review comments, inline comments, and the errors of a failed CI run, if any) is in ${{ runner.temp }}/review-feedback.md.
             Failed CI checks come first: they block the merge. Then address every [blocker] and [major]; ignore [minor] unless trivial. The latest comments win if they disagree.
             If your fix changes what the PR does, make its title and description say what is built now: write the description to a file with the Write tool and run `gh pr edit ${{ env.PR }} --title "<title>" --body-file <file>` (release notes are made from PR titles).
-            The story (the scope; do not build beyond it) and "The codebase today" are in ${{ runner.temp }}/story.md. Follow CLAUDE.md, including its Access rules.
+            The story (the scope; do not build beyond it) and "The codebase today" are in ${{ runner.temp }}/story.md. Follow CLAUDE.md, including its Access rules. A class "below 85%" in the failed tests needs the missing cases written as docs/agents/apex-testing.md says (the branch no test reaches), never padding.
             The scratch org alias is ${{ steps.org.outputs.alias }}: deploy with `sf project deploy start -o ${{ steps.org.outputs.alias }} -d force-app --ignore-conflicts`, run the Apex tests until they pass, and run `npm run format` before committing.
       - name: Let the next job into the org's lane
         if: always()

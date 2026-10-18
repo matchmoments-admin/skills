@@ -17,7 +17,14 @@ finding. Comments on the story and its spec since they were written win over the
   is only picked by Salesforce's own dependency analysis, which can miss it. Sharing and access tests also say `critical=true`.
   `testFor` names only Apex classes and triggers: a test class whose subject is a Flow (or other metadata) with no
   class or trigger to name uses `@IsTest(critical=true)` instead, and that is correct (never ask for `testFor='Flow:...'`).
-- **minor**: naming, duplication, comment quality, small clarity issues.
+- **blocker**: a test that only covers lines: no `Assert` or `mocks.verify`, asserting a value the test or a mock just
+  set, an empty `catch`. Coverage itself (85% per changed class) is CI's job; never re-measure it here
+  (`docs/agents/apex-testing.md`).
+- **major**: new logic (a domain, service or invocable) with no DML-free unit test; a selector or domain mock without its
+  `sObjectType()` stub; matchers mixed with plain values in one `when`/`verify`; a permission tested with a mock instead
+  of `System.runAs`.
+- **minor**: naming, duplication, comment quality, small clarity issues; an `Assert` without a message; record fields
+  listed inline in a test where an `<Object>Builder` exists (or none was added for a new object under test).
 
 ## What already exists (the story file's "The codebase today")
 Check the change against what is already there, including names marked **(production)**: production's own components,

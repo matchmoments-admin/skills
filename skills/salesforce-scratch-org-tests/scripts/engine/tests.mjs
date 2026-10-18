@@ -151,9 +151,10 @@ export function selectTests({ changed, deleted = [], files, read, mode = "releva
   return { mode: "relevant", apex: [...apex].sort(), flows: [...flows].sort(), why: `${changed.length} changed file(s)` };
 }
 
-/** Changed non-test Apex classes and triggers: in a relevant run, each must reach the coverage minimum. */
+/** Changed non-test Apex classes and triggers: each must reach the coverage minimum. A vendored library's classes
+ *  (force-app/vendor/, kept unmodified) are upstream's: their coverage is not ours to raise (#371: fflib 73.99%). */
 export const changedCode = (changed, files, read) =>
-  [...new Set(changed.filter((p) => /\.(cls|trigger)$/.test(p)).filter((p) => !(p.endsWith(".cls") && files.includes(p) && /@istest/i.test(read(p))))
+  [...new Set(changed.filter((p) => /\.(cls|trigger)$/.test(p) && !p.startsWith("force-app/vendor/")).filter((p) => !(p.endsWith(".cls") && files.includes(p) && /@istest/i.test(read(p))))
     .map((p) => base(p).replace(/\.(cls|trigger)$/, "")))];
 
 /**
@@ -166,7 +167,7 @@ export const changedCode = (changed, files, read) =>
  * onProgress(state, title) is for the story card. Returns { plan, state, result, seconds }; result is null when there
  * was nothing to run.
  */
-export function runForCheckout(io, { host, alias, base, sha, all = false, min = 75, outDir, sleep, level = "RunRelevantTests", onProgress = () => {}, log = () => {} }) {
+export function runForCheckout(io, { host, alias, base, sha, all = false, min = 85, floor = 75, outDir, sleep, level = "RunRelevantTests", onProgress = () => {}, log = () => {} }) {
   const src = io.sourceFiles({ base });
   const plan = selectTests({ changed: src.changed, deleted: src.deleted, files: src.files, read: src.read, mode: all ? "all" : "relevant" });
   log(`tests: ${plan.mode} (${plan.why})${plan.mode === "relevant" ? `: ${[...plan.apex, ...plan.flows].join(", ")}` : ""}`);
@@ -193,7 +194,7 @@ export function runForCheckout(io, { host, alias, base, sha, all = false, min = 
     const more = runTests(io, { alias, plan: { mode: "relevant", apex: changedTests, flows: [] }, sleep, outDir, onProgress: (st) => progress(merged(state, st)) });
     state = merged(state, more);
   }
-  const result = verdict(state, { plan, changedCode: code, min });
+  const result = verdict(state, { plan, changedCode: code, min, floor });
   check.update(checkOutput(state, { plan, result, classPath }), result.ok ? "success" : "failure");
   for (const f of [...state.apex.failures, ...state.flows.failures]) log(`  FAIL ${f.test}: ${f.message}`);
   return { plan, state, result, seconds: Math.round((Date.now() - started) / 1000) };
@@ -325,8 +326,9 @@ export function runTests(io, { alias, plan, onProgress = () => {}, sleep, pollMs
   return state;
 }
 
-/** Pass or fail, and why. Relevant runs gate the changed code's own coverage; full runs gate the coverage of this repo's code (plan.code; org-wide when unknown). */
-export function verdict(state, { plan, changedCode = [], min = 75 }) {
+/** Pass or fail, and why. Each changed class or trigger must reach `min` (COVERAGE_MIN, docs/agents/apex-testing.md),
+ *  in any mode; a full run also gates the coverage of this repo's code at `floor` (plan.code; org-wide when unknown). */
+export function verdict(state, { plan, changedCode = [], min = 85, floor = 75 }) {
   const reasons = [];
   const apexPlanned = plan.mode === "all" || plan.apex.length > 0;
   if (apexPlanned && !state.apex.finished) reasons.push("the Apex tests did not finish in time");
@@ -337,13 +339,11 @@ export function verdict(state, { plan, changedCode = [], min = 75 }) {
   if (state.flows.failed) reasons.push(`${state.flows.failed} Flow test(s) failed`);
   // a run Salesforce aborted, or one where no Flow test passed, proves nothing: say so instead of passing it
   else if (plan.flows.length && state.flows.outcome) reasons.push(`the Flow tests did not run: Salesforce reported the run ${state.flows.outcome} (${state.flows.ran} test(s) reported)`);
-  if (plan.mode === "all" && state.orgWide !== null && state.orgWide < min) reasons.push(`coverage of this repo's code ${state.orgWide}% is below ${min}%`);
-  if (plan.mode === "relevant") {
-    for (const c of changedCode) {
-      const pct = state.coverage[c];
-      if (pct === undefined) reasons.push(`${c} has no coverage from the selected tests`);
-      else if (pct < min) reasons.push(`${c} coverage ${pct}% is below ${min}%`);
-    }
+  if (plan.mode === "all" && state.orgWide !== null && state.orgWide < floor) reasons.push(`coverage of this repo's code ${state.orgWide}% is below ${floor}%`);
+  for (const c of changedCode) {
+    const pct = state.coverage[c];
+    if (pct === undefined) reasons.push(`${c} has no coverage from the selected tests`);
+    else if (pct < min) reasons.push(`${c} coverage ${pct}% is below ${min}%`);
   }
   return { ok: reasons.length === 0, reasons };
 }

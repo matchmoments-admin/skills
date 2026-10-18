@@ -46,6 +46,7 @@ export const SETTINGS = [
   ["UI_REGRESSION", "release", "the staging UI regression: once per release, or every merge"],
   ["CI_TEST_LEVEL", "RunRelevantTests", "a story's Apex tests: RunRelevantTests or selector"],
   ["PROD_TEST_LEVEL", "RunRelevantTests", "production validation's Apex tests"],
+  ["COVERAGE_MIN", "85", "minimum coverage (percent) of each Apex class or trigger a change touches (docs/agents/apex-testing.md)"],
   ["FLOW_COVERAGE_MIN", "0", "minimum Flow coverage (percent) a story's tests must reach"],
 ];
 const BY_NAME = new Map(SETTINGS.map(([n, d]) => [n, d]));
