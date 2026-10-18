@@ -21,3 +21,8 @@ rules:
     ApexInsecureEndpoint: { severity: 2 }
     ApexBadCrypto: { severity: 2 }
     ApexSuggestUsingNamedCred: { severity: 2 }
+    # Test quality (docs/agents/apex-testing.md): a test method with no assert, or one that reads org data, fails the
+    # build; an assert without a message is reported only (most existing tests predate the rule).
+    ApexUnitTestClassShouldHaveAsserts: { severity: 2 }
+    ApexUnitTestShouldNotUseSeeAllDataTrue: { severity: 2 }
+    ApexAssertionsShouldIncludeMessage: { severity: 3 }

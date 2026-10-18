@@ -73,7 +73,7 @@ test("test run: polls with live progress, collects failures and coverage; verdic
   assert.equal(st.apex.failed, 1);
   assert.equal(st.flows.passed, 1);
   const r = tests.verdict(st, { plan, changedCode: ["CaseHandler"] });
-  assert.deepEqual(r.reasons, ["1 Apex test(s) failed", "CaseHandler coverage 60% is below 75%"]);
+  assert.deepEqual(r.reasons, ["1 Apex test(s) failed", "CaseHandler coverage 60% is below 85%"]);
   const out = tests.checkOutput(st, { plan, result: r, classPath: (c) => `force-app/c/${c}.cls` });
   assert.equal(out.title, "Failed: Apex 1/2 (1/1 classes) · Flow 1/1");
   assert.deepEqual(out.annotations[0], { path: "force-app/c/CaseHandlerTest.cls", start_line: 12, end_line: 12, annotation_level: "failure", title: "CaseHandlerTest.b", message: "Expected Medium" });
@@ -278,6 +278,20 @@ test("full runs in a scratch org (story #166): this repo's tests and coverage, n
   assert.match(calls[0], /apex run test -o issue-166 --test-level RunSpecifiedTests --tests AccountSelectorTest --tests RegionalReportingTest --code-coverage/);
   assert.equal(st.orgWide, 80, "16 of 20 repo lines, not 10% of the org");
   assert.equal(tests.verdict(st, { plan: all }).ok, true);
+});
+
+test("coverage: each changed class reaches COVERAGE_MIN (85) in any mode; the repo's code a 75% floor; vendored classes are upstream's", () => {
+  const done = { apex: { ran: 5, failed: 0, finished: true, failures: [] }, flows: { ran: 0, failed: 0, finished: true, failures: [] } };
+  const relevant = { mode: "relevant", apex: ["CasesTest"], flows: [] };
+  assert.deepEqual(tests.verdict({ ...done, coverage: { Cases: 84 } }, { plan: relevant, changedCode: ["Cases"] }).reasons, ["Cases coverage 84% is below 85%"]);
+  assert.equal(tests.verdict({ ...done, coverage: { Cases: 85 } }, { plan: relevant, changedCode: ["Cases"] }).ok, true);
+  assert.equal(tests.verdict({ ...done, coverage: { Cases: 80 } }, { plan: relevant, changedCode: ["Cases"], min: 75 }).ok, true, "COVERAGE_MIN lowers it");
+  const all = { mode: "all", apex: [], flows: [] };
+  assert.equal(tests.verdict({ ...done, coverage: {}, orgWide: 76 }, { plan: all }).ok, true, "the repo as a whole keeps the 75% floor");
+  assert.deepEqual(tests.verdict({ ...done, coverage: { Cases: 70 }, orgWide: 90 }, { plan: all, changedCode: ["Cases"] }).reasons, ["Cases coverage 70% is below 85%"], "a story's full run still gates what it changed");
+  assert.match(tests.verdict({ ...done, coverage: {}, orgWide: 74 }, { plan: all }).reasons.join(), /below 75%/);
+  const files = ["force-app/vendor/fflib-apex-common/sfdx-source/apex-common/main/classes/fflib_SObjectSelector.cls", "force-app/main/default/classes/Cases.cls"];
+  assert.deepEqual(tests.changedCode(files, files, () => "public class X {}"), ["Cases"], "#371: fflib_SObjectSelector 73.99% is upstream's");
 });
 
 test("RunRelevantTests never skips a changed test class (live, story #166: Salesforce chose 2 of 9 changed tests)", () => {

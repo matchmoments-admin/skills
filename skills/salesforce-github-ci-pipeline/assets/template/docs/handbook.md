@@ -166,12 +166,13 @@ who does each step for any combination.
 | `VOLUME_RECORDS` | volume records (accounts and opportunities) loaded into the staging org | 5000 |
 | `SF_UAT_LOGIN_URL` | the UAT sandbox's login URL, with the secret `SF_UAT_USERNAME` (UAT on a sandbox, not a scratch org) | `https://test.salesforce.com` |
 | `TRACKER` | `jira`: stories come from Jira (the skill's `references/jira.md`) | `github`: GitHub Issues |
+| `COVERAGE_MIN` (not AI) | the coverage (percent) each Apex class or trigger a change touches must reach in CI; vendored classes are exempt, and the repo's code as a whole keeps a 75% floor ([`docs/agents/apex-testing.md`](agents/apex-testing.md)) | 85 |
 | `FLOW_COVERAGE_MIN` (not AI) | a minimum Flow coverage (percent) a story's Apex tests must reach | 0: reported, not enforced |
 | `UI_REGRESSION` | `every`: the staging UI regression runs after every merge into the sprint (the way it was before #273) | `release`: once per release, when the release PR opens |
 | `BOARD_PROJECT` | the delivery board (a Project number) follows each story | no board |
 | `PIPELINE_BOTS` | the pipeline's own identities (`github-actions,<app>`): trusted for verdicts and back-merges | `github-actions` |
 | `CI_TEST_LEVEL` (not AI) | `selector`: CI runs only the pipeline's own test selection | `RunRelevantTests`: Salesforce chooses a story's Apex tests (validating just the changed components in the story org); 0 tests or an org without the beta falls back to the pipeline's selection. Staging always runs every test |
-| `PROD_TEST_LEVEL` (not AI) | `RunLocalTests` or `all` instead of `RunRelevantTests` | `RunRelevantTests`, falling back to every test class |
+| `PROD_TEST_LEVEL` (not AI) | `RunLocalTests` or `all` instead of `RunRelevantTests`. Use `RunLocalTests` once the repo vendors a library: `RunRelevantTests` needs 75% on **each** deployed class, upstream's included (#371: `fflib_SObjectSelector` 73.99%), and cannot see FFLib's factory dependencies | `RunRelevantTests`, falling back to every test class |
 
 **Current state: every switch is on** (since 2026-10-04, after both the no-AI and the full-AI paths shipped to
 production). To go back to manual, delete the variables on the
