@@ -28,6 +28,7 @@ permissions:
   issues: write
   statuses: write
   checks: read          # the card reads the PR's checks (the gate's facts)
+  actions: write        # finish uat re-runs the gate (without it: HTTP 403 on gate.yml, release 2027-w02)
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
