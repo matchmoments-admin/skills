@@ -12,7 +12,8 @@ copy() { for p in "$@"; do [ -e "$SRC/$p" ] || continue; mkdir -p "$T/$(dirname 
 copy pipeline .github scripts/ci scripts/skills-sync.sh scripts/vendor.sh config e2e/support playwright.config.ts \
      devhub-setup/main/default/settings \
      CLAUDE.md REVIEW.md GLOSSARY.md package.json package-lock.json .prettierrc .prettierignore .eslintrc.json jest.config.js .forceignore \
-     sfdx-project.json code-analyzer.yml .gitignore docs/agents docs/handbook.md GLOSSARY-MAP.md   # .github, copied whole, holds the issue forms
+     sfdx-project.json code-analyzer.yml .gitignore docs/agents docs/handbook.md GLOSSARY-MAP.md \
+     .claude/skills/apex-testing   # the Apex test standard as a project skill (it points at docs/agents/apex-testing.md)   # .github, copied whole, holds the issue forms
 # the test data: the template ships it with standard fields only (custom fields are the business's own) and no story data
 if [ -d "$SRC/data/seed" ]; then
   rm -f "$T/config/packages.json"   # production's managed packages are per org: each team lists its own
