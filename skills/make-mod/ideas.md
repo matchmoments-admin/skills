@@ -1,7 +1,7 @@
 # Mod ideas (ranked for this user's workflow)
 
 1. **auto-handoff** (built: dev-mods/auto-handoff) — at 60% context, fork a handoff note, compact, continue.
-2. **branch-guard** — `tool.call` on Bash `git commit/push/rebase/reset`: re-read the branch pointer first, deny if it moved since the last read (safeverify has concurrent agents).
+2. **branch-guard** — `tool.call` on Bash `git commit/push/rebase/reset`: re-read the branch pointer first, deny if it moved since the last read (for repos where several agents work at once).
 3. **context-gauge** — AbovePrompt band: context %, session cost, 5h/7d rate-limit bars; turns amber at 50%, red at 60%.
 4. **memory-tap** — `/remember <line>` appends a `[src: <session-id>]` entry to the repo's `memory/MEMORY.md`, no turn spent; secret/PII regex refuses.
 5. **deploy-gate** — hold `vercel --prod`, `wrangler deploy`, Neon destructive MCP tools; show a diff/target summary pane with Proceed/Cancel.

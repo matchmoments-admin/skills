@@ -376,7 +376,7 @@ is one CLI, so the Salesforce steps can run on Buildkite agents if a company alr
 - [`CLAUDE.md`](../CLAUDE.md) conventions · [`REVIEW.md`](../REVIEW.md) review rubric · [`GLOSSARY.md`](../GLOSSARY.md) domain
   words · `HANDOFF.md` current state · `docs/e2e-test-2026-10-04.md`
   every end-to-end finding and its fix.
-- Set this up in another repo: the `salesforce-github-ci-pipeline` skill (also in `.claude/skills/`).
+- Set this up in another repo: the `salesforce-github-ci-pipeline` skill (also in [`.claude/skills/`](../.claude/skills)).
 
 ## One job at a time in an org (lanes)
 
