@@ -1,0 +1,90 @@
+# Feature orgs: a production-like scratch org per feature branch. Phase 0's decision record (docs/scratch-orgs.md)
+# picks the trigger; keep the steps it chose and delete the rest. Upload it from the pipeline's first step:
+#   - command: buildkite-agent pipeline upload .buildkite/pipeline.feature-org.yml
+# ($BUILDKITE_BRANCH is interpolated at upload, so each branch gets its own concurrency group: one job per org at a time)
+env:
+  SCRATCH: scripts/scratch-org/scratch-org-step.sh
+  # settings (references/settings.md); the secrets SF_DEVHUB_CLIENT_ID, SF_DEVHUB_USERNAME, SF_DEVHUB_JWT_KEY come from
+  # Buildkite Secrets or the agent's environment hook, never from this file
+  BASELINE: soft
+  SEED: "on"
+  ORG_DAYS: "7"
+
+steps:
+  # ---- A: automatic. Every push to a feature branch brings its org up to date (created on the first push) ----------
+  - label: ":salesforce: feature org"
+    key: feature-org
+    if: build.branch != pipeline.default_branch && build.source != "schedule"
+    # optional: only branches that look like work, e.g. build.branch =~ /^(feature|bugfix)\//
+    command: $SCRATCH ready
+    concurrency: 1
+    concurrency_group: "scratch-org/$BUILDKITE_BRANCH"
+    timeout_in_minutes: 75          # a new org from the shape, baseline and seed: 15 to 40 minutes; from a snapshot: 5 to 10
+    soft_fail:
+      - exit_status: 3              # no free scratch org today: a warning, not a red build
+    retry:
+      automatic:
+        - exit_status: -1           # agent lost: ready() finishes a half-made org on the retry
+          limit: 1
+
+  # ---- B: on request. A person clicks "Create or update my org" instead of every push doing it ----------------------
+  # - block: ":salesforce: Create or update my org"
+  #   key: want-org
+  #   if: build.branch != pipeline.default_branch
+  # - label: ":salesforce: feature org"
+  #   key: feature-org
+  #   depends_on: want-org
+  #   command: $SCRATCH ready
+  #   concurrency: 1
+  #   concurrency_group: "scratch-org/$BUILDKITE_BRANCH"
+  #   timeout_in_minutes: 75
+  #   soft_fail: [{ exit_status: 3 }]
+
+  # ---- Getting in: a login for whoever asks (Salesforce emails a set-password link) ----------------------------------
+  - block: ":key: Send me a login"
+    key: want-login
+    if: build.branch != pipeline.default_branch && build.source != "schedule"
+    depends_on: feature-org
+    allow_dependency_failure: false
+    fields:
+      - text: "Your work email"
+        key: login-email
+        required: true
+      - select: "Profile"
+        key: login-admin
+        default: "no"
+        options:
+          - { label: "Standard User with every permission set in the code", value: "no" }
+          - { label: "System Administrator (to build in Setup)", value: "yes" }
+  - label: ":key: login"
+    depends_on: want-login
+    command: $SCRATCH login
+    concurrency: 1
+    concurrency_group: "scratch-org/$BUILDKITE_BRANCH"
+
+  # ---- Building in Setup: pull what people changed in the org back into the branch -----------------------------------
+  - block: ":inbox_tray: Pull my Setup changes into the branch"
+    key: want-changes
+    if: build.branch != pipeline.default_branch && build.source != "schedule"
+    depends_on: feature-org
+  - label: ":inbox_tray: Setup changes"
+    depends_on: want-changes
+    command: $SCRATCH changes
+    concurrency: 1
+    concurrency_group: "scratch-org/$BUILDKITE_BRANCH"
+
+  # ---- Scheduled builds (Pipeline settings > Schedules), each with an env var naming its job -------------------------
+  - label: ":broom: sweep feature orgs"
+    if: build.source == "schedule" && build.env("SCRATCH_JOB") == "sweep"     # e.g. every 6 hours
+    command: $SCRATCH sweep
+  - label: ":salesforce: production baseline"
+    if: build.source == "schedule" && build.env("SCRATCH_JOB") == "baseline"  # e.g. nightly, and after each release
+    command: $SCRATCH baseline
+    concurrency: 1
+    concurrency_group: scratch-org/baseline
+    # env: { BASELINE_PR_COMMAND: "..." }   the VCS call that opens the drift PR from branch baseline-refresh (references/buildkite.md)
+  # - label: ":camera: snapshot"
+  #   if: build.source == "schedule" && build.env("SCRATCH_JOB") == "snapshot" # optional: faster new orgs (costs one daily org)
+  #   command: $SCRATCH snapshot
+  #   concurrency: 1
+  #   concurrency_group: scratch-org/snapshot

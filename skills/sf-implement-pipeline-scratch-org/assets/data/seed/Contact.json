@@ -1,0 +1,7 @@
+{
+  "records": [
+    { "attributes": { "type": "Contact", "referenceId": "Con01" }, "FirstName": "Liam", "LastName": "Brown (seed)", "Email": "liam.brown01@example.invalid", "AccountId": "@Acc01" },
+    { "attributes": { "type": "Contact", "referenceId": "Con02" }, "FirstName": "Mia", "LastName": "Wilson (seed)", "Email": "mia.wilson02@example.invalid", "AccountId": "@Acc02" },
+    { "attributes": { "type": "Contact", "referenceId": "Con03" }, "FirstName": "Noah", "LastName": "Singh (seed)", "Email": "noah.singh03@example.invalid", "AccountId": "@Acc03" }
+  ]
+}

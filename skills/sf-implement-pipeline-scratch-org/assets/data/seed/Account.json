@@ -1,0 +1,7 @@
+{
+  "records": [
+    { "attributes": { "type": "Account", "referenceId": "Acc01" }, "Name": "Seed Account 01 Ltd", "Industry": "Finance", "BillingCountryCode": "GB", "NumberOfEmployees": 10 },
+    { "attributes": { "type": "Account", "referenceId": "Acc02" }, "Name": "Seed Account 02 Ltd", "Industry": "Healthcare", "BillingCountryCode": "US", "NumberOfEmployees": 250 },
+    { "attributes": { "type": "Account", "referenceId": "Acc03" }, "Name": "Seed Account 03 Ltd", "Industry": "Technology", "BillingCountryCode": "AU", "NumberOfEmployees": 1200 }
+  ]
+}
