@@ -89,11 +89,14 @@ The rules that bite:
 - Every test method has at least one `Assert` as well as any `mocks.verify`: Code Analyzer's
   `ApexUnitTestClassShouldHaveAsserts` fails CI on a method that only verifies.
 - A mock cannot prove sharing or field access: permission tests are always seam tests.
+- Logic that reads the running user's permissions (`FeatureManagement.checkPermission`, a describe) runs inside
+  `System.runAs` a persona even in a mock unit test: production's CI user holds permission sets a scratch org's user
+  does not, so the same test takes a different path there (story #381).
 
 ## Seam tests
 
 - Set up data in **system mode** (`Database.insert(records, AccessLevel.SYSTEM_MODE)`, `[SELECT ... WITH SYSTEM_MODE]`):
-  CI's user has none of the story's permission sets (CLAUDE.md, Access).
+  CI's user has none of the story's permission sets, but does have production's own (CLAUDE.md, Access).
 - Act inside `System.runAs(persona)`, then read back and assert what was **stored**.
 - `@TestSetup` only in seam test classes, and only for data several methods share; each method re-queries it.
 - Async: enqueue between `Test.startTest()` and `Test.stopTest()`. Callouts: `Test.setMock(HttpCalloutMock.class, ...)`.
