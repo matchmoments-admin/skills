@@ -36,6 +36,9 @@ export function findings({ changed: all = [], added = [], files = [], read, exce
   };
   const permsets = files.filter((p) => p.endsWith(".permissionset-meta.xml")).map((p) => read(p));
   const granted = (re) => permsets.some((x) => re.test(x));
+  // users hold permission set groups (one per persona: a business role or process), never loose permission sets
+  const grouped = new Set(files.filter((p) => p.endsWith(".permissionsetgroup-meta.xml")).flatMap((p) => blocks(read(p), "permissionSets").map((n) => n.trim())));
+  const isNew = new Set(added);
 
   for (const p of changed) {
     const src = read(p);
@@ -54,6 +57,13 @@ export function findings({ changed: all = [], added = [], files = [], read, exce
         for (const wide of ["viewAllRecords", "modifyAllRecords", "viewAllFields"]) {
           if (val(b, wide) === "true") say("blocker", "view-all", p, lineOf(src, new RegExp(`<${wide}>true`)), `Grants ${wide} on ${val(b, "object")}, which ignores the sharing model. Share the records the user needs (sharing rules, teams) instead.`);
         }
+      }
+    }
+
+    if (p.endsWith(".permissionset-meta.xml")) {
+      const name = p.split("/").pop().replace(/\.permissionset-meta\.xml$/, "");
+      if (!grouped.has(name)) {
+        say(isNew.has(p) ? "blocker" : "warning", "permset-group", p, 1, `No permission set group lists ${name}, so a user would have to be given it on its own. Add it to the group of each persona that needs it (permissionsetgroups/<Persona>.permissionsetgroup-meta.xml): users are assigned groups, and a deploy that adds a set to a group reaches everyone who holds the group.`);
       }
     }
 

@@ -22,9 +22,9 @@ Who wants what, and why (one or two sentences, from the user's side).
 - One line per testable outcome, in the user's words: what a tester sees or what the record holds afterwards.
 
 ### Access
-Who may see or change it (the permission set to add or extend), the org-wide default of each object it touches if it
+Who may see or change it (the permission set to add or extend, and the persona group it goes in), the org-wide default of each object it touches if it
 matters, and whether automation runs as the user or the system. "No change" is a valid answer.
-Add a line `Persona: <RoleDeveloperName> role, <PermissionSet>, ...` when the feature is for a particular user (shared by
+Add a line `Persona: <RoleDeveloperName> role, <PermissionSetGroup>` (or loose `<PermissionSet>, ...` where no group exists yet) when the feature is for a particular user (shared by
 role, or behind a permission set): **Send me a login** makes the tester as that user, so they see what that user sees.
 
 ### Where to see it in the UI

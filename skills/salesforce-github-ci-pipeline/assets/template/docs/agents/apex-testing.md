@@ -44,7 +44,9 @@ One test method per acceptance criterion and case, named for the behaviour (`hig
 - **Boundary**: threshold −1, at, +1; `null` and empty lists.
 - **Bulk**: 200 records in one DML (seam), or 200 in memory (unit).
 - **Permission**: a persona **without** the story's permission set is refused, one **with** it succeeds
-  (`TestDataFactory.personaWithAccess`). Never grant the running user more access to make a test pass.
+  (`TestDataFactory.personaWithAccess`). Where the persona has a permission set group, the "with" user holds the
+  group, as production's users will, so the test also proves the set is in the group. Never grant the running user more
+  access to make a test pass.
 
 Every `Assert` carries a message saying the business expectation: `Assert.isTrue(c.Escalated__c, 'High + Phone is
 escalated')`.

@@ -16,7 +16,7 @@ import { setupChangesMethods } from "./org/setup-changes.mjs";
 /** A Salesforce login or network failure: worth one more try, and no fault of a snapshot. */
 export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB } from "./org/fleet.mjs";
 export { expandSeed, seedReplaceApex, VOLUME_MARKER, volumeApex, foldSeeds } from "./org/data.mjs";
-export { roleRebuild, personaOf, permissionSets } from "./org/users.mjs";
+export { roleRebuild, personaOf, permissionSets, permissionSetGroups, assignAccess } from "./org/users.mjs";
 
 // Scratch definitions come from the trusted pipeline checkout, so a PR cannot change its own org's shape.
 const definitionPath = (d) => join(PIPELINE_ROOT, d);

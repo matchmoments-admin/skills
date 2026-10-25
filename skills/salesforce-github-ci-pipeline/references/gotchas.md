@@ -501,3 +501,10 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **The approver's own push dead-ends four eyes**: the gate ignores an approval from the newest human pusher, so an
   agent working under the approver's account must leave story code to `/build` or `/fix`. With one approver, the way
   out is an audited admin merge.
+- **Permission set assignments are data, and nobody held the story's set in production**: `Case_Escalated_Access`
+  shipped with #343 but no production user could see the field. Users now hold a **persona permission set group** (one per
+  business role or process); the access check fails a new permission set no group lists, tester and UI-test logins
+  assign groups (waiting for `Status = 'Updated'`: a deploy leaves a changed group recalculating), Apex tests use
+  `PermissionSetGroupId` with `Test.calculatePermissionSetGroup`, and the baseline captures `PermissionSetGroup` and
+  `MutingPermissionSet` (Salesforce's own `force__` groups are filtered by namespace). Assigning a group to people stays
+  an admin step, or a User Access Policy (deployable metadata, switched on once per org).

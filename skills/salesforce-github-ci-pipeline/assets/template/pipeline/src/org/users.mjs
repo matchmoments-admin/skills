@@ -37,17 +37,47 @@ export function personaOf(body) {
 }
 
 /** Permission set names in a source folder (scratch orgs get all of them; production never does). */
-export function permissionSets(dir = "force-app") {
+export function permissionSets(dir = "force-app", suffix = ".permissionset-meta.xml") {
   const out = [];
   const walk = (d) => {
     for (const f of readdirSync(d)) {
       const p = join(d, f);
       if (statSync(p).isDirectory()) walk(p);
-      else if (f.endsWith(".permissionset-meta.xml")) out.push(basename(f, ".permissionset-meta.xml"));
+      else if (f.endsWith(suffix)) out.push(basename(f, suffix));
     }
   };
   try { walk(dir); } catch { /* no source folder */ }
   return out.sort();
+}
+
+/** Permission set group names in a source folder: a persona's access (one group per business role or process). */
+export const permissionSetGroups = (dir = "force-app") => permissionSets(dir, ".permissionsetgroup-meta.xml");
+
+/**
+ * Give a user each named permission set or permission set group (a persona line may name either). A group is assigned
+ * only once Salesforce has recalculated it (Status 'Updated'; a deploy that changes a group leaves it 'Outdated' or
+ * 'Updating' for a while, and an assignment then fails), so wait up to `waitMs`. Returns the names assigned.
+ */
+export function assignAccess({ sf, sleep = () => {}, log = () => {} }, alias, { id: userId, username }, names, waitMs = 120_000) {
+  const safe = names.filter((n) => /^[A-Za-z][A-Za-z0-9_]*$/.test(n));
+  if (!safe.length) return [];
+  const q = (soql) => sf(["data", "query", "-o", alias, "-q", soql], { allowFail: true })?.records || [];
+  const list = safe.map((n) => `'${n}'`).join(",");
+  const done = [];
+  let groups = q(`SELECT Id, DeveloperName, Status FROM PermissionSetGroup WHERE DeveloperName IN (${list})`);
+  for (let waited = 0; groups.some((g) => g.Status !== "Updated" && g.Status !== "Failed") && waited < waitMs; waited += 10_000) {
+    sleep(10_000);
+    groups = q(`SELECT Id, DeveloperName, Status FROM PermissionSetGroup WHERE DeveloperName IN (${list})`);
+  }
+  for (const g of groups) {
+    if (g.Status !== "Updated") { log(`::warning::permission set group ${g.DeveloperName} is ${g.Status} in ${alias}: not assigned (Setup > Permission Set Groups > Recalculate)`); continue; }
+    if (sf(["data", "create", "record", "-o", alias, "-s", "PermissionSetAssignment", "-v", `AssigneeId=${userId} PermissionSetGroupId=${g.Id}`], { allowFail: true })) done.push(g.DeveloperName);
+  }
+  const isGroup = new Set(groups.map((g) => g.DeveloperName));
+  for (const p of safe.filter((n) => !isGroup.has(n))) {
+    if (sf(["org", "assign", "permset", "--name", p, "-o", alias, "--on-behalf-of", username], { allowFail: true })) done.push(p);
+  }
+  return done;
 }
 
 /** The registry's users methods. ctx: orgRegistry's shared context (sf, log, env, ...). */
@@ -101,10 +131,11 @@ export function usersMethods({ sf, sleep, log, keyFile, packages, env, baselineD
      * permission set), so a test that depends on the running user's field access fails here, not at the release.
      */
     asProductionUser(alias, fn, dir = "force-app") {
-      const names = permissionSets(dir);
-      if (!names.length) return fn();
+      const names = permissionSets(dir), groups = permissionSetGroups(dir);
+      if (!names.length && !groups.length) return fn();
       const username = sf(["org", "display", "-o", alias]).username;
-      const rows = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM PermissionSetAssignment WHERE Assignee.Username = '${username}' AND PermissionSet.Name IN (${names.map((n) => `'${n}'`).join(",")})`], { allowFail: true })?.records || [];
+      const inList = (xs) => xs.length ? xs.map((n) => `'${n}'`).join(",") : "''";
+      const rows = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM PermissionSetAssignment WHERE Assignee.Username = '${username}' AND (PermissionSet.Name IN (${inList(names)}) OR PermissionSetGroup.DeveloperName IN (${inList(groups)}))`], { allowFail: true })?.records || [];
       for (const r of rows) sf(["data", "delete", "record", "-o", alias, "-s", "PermissionSetAssignment", "-i", r.Id], { allowFail: true });
       log(`tests run as production's CI user would: ${rows.length} permission set(s) taken from ${username} for the run`);
       try { return fn(); } finally { this.prepare(alias, dir); }   // prepare gives them back (UI tests and people need them)
@@ -138,7 +169,7 @@ export function usersMethods({ sf, sleep, log, keyFile, packages, env, baselineD
         id = withLicence(() => sf(["data", "create", "record", "-o", alias, "-s", "User", "-v", [`Username='${username}'`, `Email='${email}'`, `LastName='${String(login).slice(0, 70)}'`,
           `Alias='t${Date.now() % 1e6}'`, `ProfileId=${profile}`, "TimeZoneSidKey='Australia/Sydney'", "LocaleSidKey='en_AU'", "EmailEncodingKey='UTF-8'", "LanguageLocaleKey='en_US'"].join(" ")]).id);
       } else if (!found.IsActive) withLicence(() => sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", id, "-v", "IsActive=true"]));
-      for (const p of sets) sf(["org", "assign", "permset", "--name", p, "-o", alias, "--on-behalf-of", username], { allowFail: true });
+      assignAccess({ sf, sleep, log }, alias, { id, username }, sets);   // a persona names permission set groups (or, before them, loose sets)
       const roleId = persona?.role && !admin ? q(`SELECT Id FROM UserRole WHERE DeveloperName = '${String(persona.role).replace(/[^A-Za-z0-9_]/g, "")}'`)[0]?.Id : null;
       if (persona?.role && !admin && !roleId) log(`::warning::role ${persona.role} not found in ${alias}: the tester has no role`);
       sf(["data", "update", "record", "-o", alias, "-s", "User", "-i", id, "-v", `Email=${email} CountryCode=AU UserPreferencesLightningExperiencePreferred=true${roleId ? ` UserRoleId=${roleId}` : ""}`], { allowFail: true });

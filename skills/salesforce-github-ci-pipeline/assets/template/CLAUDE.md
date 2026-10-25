@@ -44,7 +44,13 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
 ## Access (permissions, sharing, org-wide defaults)
 Least privilege: a user gets exactly the access the story needs, and every grant can be reviewed. CI's **access check**
 (`pipe access check`) fails the build on the blockers below; the review checks the rest.
-- Grant access with **permission sets** (grouped in permission set groups for a persona), never by editing profiles.
+- Grant access with **permission sets**, never by editing profiles. A permission set is one capability
+  (`<Thing>_Access`), and it is listed in the **permission set group** of every persona that needs it
+  (`permissionsetgroups/<Persona>.permissionsetgroup-meta.xml`, one group per business role or process, such as
+  `Support_Agent`). Users hold groups, never loose sets, so a deploy that adds a set to a group reaches everyone in that
+  role. CI fails a new permission set that no group lists. Assigning a group to people is an admin's job in each org (or
+  a User Access Policy), never a deploy step. To take a permission away from one persona, use the group's muting
+  permission set rather than a second, narrower set.
 - No administrator permissions in a story's permission set (Modify All Data, View All Data, Manage Users, Author Apex,
   Customize Application...), and no View All / Modify All on an object: they ignore the sharing model.
 - New custom objects start with org-wide default **Private** (internal and external); open access with sharing rules or

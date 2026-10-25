@@ -13,7 +13,7 @@ import * as capacity from "../src/capacity.mjs";
 import * as settings from "../src/settings.mjs";
 import { plan } from "../src/closeout.mjs";
 import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
-import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed, sameSourceVia } from "../src/org.mjs";
+import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed, sameSourceVia, assignAccess, permissionSetGroups } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
 import * as plans from "../src/plan.mjs";
@@ -157,6 +157,42 @@ test("Apex tests run as production's CI user would: the story permission sets ar
   assert.ok(at("data delete record") < at("RUN TESTS") && at("RUN TESTS") < at("org assign permset"), calls.join(" | "));
   assert.throws(() => r.asProductionUser("issue-1", () => { throw new Error("tests failed"); }, dir), /tests failed/);
   assert.equal(calls.filter((c) => c === "org assign permset").length, 2, "given back even when the tests fail");
+});
+
+test("a persona's permission set group is assigned once Salesforce has recalculated it; loose sets still work; groups leave for the test run", async () => {
+  const made = [], queries = [];
+  let status = "Updating";
+  const sf = (args) => {
+    if (args[1] === "query") {
+      queries.push(args[5]);
+      if (/FROM PermissionSetGroup/.test(args[5])) { const r = [{ Id: "0PG1", DeveloperName: "Support_Agent", Status: status }]; status = "Updated"; return { records: r }; }
+    }
+    if (args[1] === "create" || args[1] === "assign") { made.push(args.slice(1).join(" ")); return { id: "0Pa" }; }
+    return {};
+  };
+  const slept = [];
+  const done = assignAccess({ sf, sleep: (ms) => slept.push(ms) }, "issue-1", { id: "005U", username: "t@x" }, ["Support_Agent", "Case_Escalated_Access", "bad name'"]);
+  assert.deepEqual(done, ["Support_Agent", "Case_Escalated_Access"]);
+  assert.deepEqual(made, ["create record -o issue-1 -s PermissionSetAssignment -v AssigneeId=005U PermissionSetGroupId=0PG1",
+    "assign permset --name Case_Escalated_Access -o issue-1 --on-behalf-of t@x"]);
+  assert.equal(slept.length, 1, "waited for the recalculation once");
+  assert.ok(!queries.some((q) => /bad name/.test(q)), "only API names reach SOQL");
+  const warned = [];
+  status = "Failed";
+  const sfFailed = (args) => (args[1] === "query" ? { records: [{ Id: "0PG1", DeveloperName: "Support_Agent", Status: "Failed" }] } : {});
+  assert.deepEqual(assignAccess({ sf: sfFailed, log: (m) => warned.push(m) }, "issue-1", { id: "005U", username: "t@x" }, ["Support_Agent"]), []);
+  assert.match(warned[0], /Support_Agent is Failed/);
+
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(`${tmpdir()}/psg-`);
+  mkdirSync(`${dir}/permissionsetgroups`, { recursive: true });
+  writeFileSync(`${dir}/permissionsetgroups/Support_Agent.permissionsetgroup-meta.xml`, "<PermissionSetGroup/>");
+  assert.deepEqual(permissionSetGroups(dir), ["Support_Agent"]);
+  const soql = [];
+  const r = orgRegistry({ sf: (args) => { if (args[1] === "display") return { username: "admin@scratch" }; if (args[1] === "query") soql.push(args[5]); return { records: [] }; }, log: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } });
+  r.asProductionUser("issue-1", () => 1, dir);
+  assert.match(soql[0], /PermissionSetGroup\.DeveloperName IN \('Support_Agent'\)/, "a group assignment is taken away for the run too");
 });
 
 test("UAT access from GitHub: the card links UAT; a stand-in offers 'Send me a UAT login'; the tester gets an email, never a secret", async () => {
