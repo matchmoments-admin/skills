@@ -488,3 +488,11 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **The fix round edited code-analyzer.yml in the story**, and CI refused the PR. The agents were told only "not
   .github/ or pipeline/"; they now get the full `PIPELINE_PATHS` list and report a pipeline-config failure instead.
 
+
+## Artifacts (26 Oct)
+
+- **The staging regression uploaded Playwright traces with the org's session**: `staging-results` excluded
+  `test-results/**/trace.zip` but not the HTML report's copies (`playwright-report/data/*.zip`), about 28 MB per failed
+  run, each with the front-door URL and the `sid` cookie, kept 90 days. CI now records no traces or videos at all
+  (`playwright.config.ts`), the uploads exclude them as well, and report artifacts keep 14 days. UI evidence is
+  unaffected: WebP, at most 100 KB a shot, on the squashed `evidence` branch.
