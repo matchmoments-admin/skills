@@ -54,7 +54,7 @@ export const COVERAGE_MIN = 75;
 export const VENDOR_DIR = "force-app/vendor/";
 export const isVendored = (p) => String(p).startsWith(VENDOR_DIR);
 
-export const PIPELINE_PATHS = [".github/", "pipeline/", "scripts/", "config/", "devhub-setup/", "baseline/", "package.json", "package-lock.json",
+export const PIPELINE_PATHS = [".github/", "pipeline/", "scripts/", "config/", "devhub-setup/", "baseline/", "baseline-facts/", "package.json", "package-lock.json",
   "code-analyzer.yml", ".prettierignore", "CLAUDE.md", "REVIEW.md", "docs/agents/"];
 
 /** Is this login one of the pipeline's own identities (PIPELINE_BOTS: bare names, e.g. "github-actions,acme-pipeline")?

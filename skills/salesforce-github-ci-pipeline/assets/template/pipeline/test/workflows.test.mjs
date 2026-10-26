@@ -101,6 +101,8 @@ test("shipping wiring: the gate passes the SHA and the validated tree; nothing q
   assert.match(wf("reconcile"), /pipe\.mjs reconcile/);
   assert.doesNotMatch(wf("reconcile"), /SF_CI_|sf-auth/, "reconcile is GitHub only: no Salesforce key");
   assert.doesNotMatch(wf("scratch-janitor"), /ship watchdog|pipe\.mjs reconcile/, "the janitor keeps only what needs the Dev Hub");
+  for (const w of ["ai-plan", "ai-spec", "ai-review"]) assert.doesNotMatch(wf(w), /SF_CI_|sf-auth/, `${w}: the context pack reads baseline-facts/, no production login`);
+  assert.match(wf("prod-baseline"), /git add -A baseline baseline-facts/);
   assert.match(readFileSync(new URL("../src/actions.mjs", import.meta.url), "utf8"), /standing\(host\.prFacts\(pr\.number\)\)\.uat/, "in UAT: Standing's reading, the card's too");
   assert.match(wf("uat-deploy"), /pipe\.mjs gate standing --pr "\$PR" --result uat/, "is UAT already on this commit: Standing, not the statuses");
   assert.match(wf("commands"), /pipe.mjs act /);

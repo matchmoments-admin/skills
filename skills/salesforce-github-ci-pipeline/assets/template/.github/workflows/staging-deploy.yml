@@ -30,7 +30,7 @@ jobs:
       ui-planned: ${{ steps.fresh.outputs.ui }}   # run: it was due, so a skipped outcome means its setup failed
     steps:
       - uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - name: The open sprint
         id: ctx
         working-directory: .pipeline

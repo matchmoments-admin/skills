@@ -107,10 +107,16 @@ test("context pack: what exists per object and production's sharing model, so th
     [`${O}/classes/CaseHandlerTest.cls`]: "@IsTest class CaseHandlerTest { Case c; }",
     [`${O}/permissionsets/Esc.permissionset-meta.xml`]: "<fieldPermissions><field>Case.Escalated__c</field></fieldPermissions>",
   });
-  const md = pack.pack({ ...r, objects: ["Case"], owd: pack.owdFrom([{ QualifiedApiName: "Case", InternalSharingModel: "ReadWrite", ExternalSharingModel: "Private" }]) });
+  const md = pack.pack({ ...r, objects: ["Case"], owd: { Case: { internal: "ReadWrite", external: "Private" } } });
   for (const want of ["internal **ReadWrite**", "must not rely on this", "Escalated__c", "Triggers: CaseTrigger", "Case_Prio (RecordBeforeSave Create, runs as system)",
     "CaseHandler (with sharing)", "Tests that name it: CaseHandlerTest", "grant it: Esc"]) assert.ok(md.includes(want), want);
-  assert.match(pack.owdQuery(["Case", "Bad'; DROP"]), /IN \('Case','BadDROP'\)/);
+  // the defaults come from the baseline refresh's capture: no production login in the agents' jobs
+  const io = { sourceFiles: ({ dirs } = {}) => (dirs ? { files: [] } : { files: r.files, read: r.read, changed: [] }), sf: () => { throw new Error("no production query"); }, git: () => "" };
+  assert.match(pack.packForCheckout(io, { text: "Escalate the Case", sharing: { Case: { internal: "Private", external: "Private" } } }), /internal \*\*Private\*\*, external \*\*Private\*\*/);
+  assert.match(pack.packForCheckout(io, { text: "Escalate the Case", sharing: {} }), /unknown \(not in baseline-facts\/sharing\.json/);
+  assert.deepEqual(baselineMod.sharingFacts([{ QualifiedApiName: "Case", InternalSharingModel: "ReadWriteTransfer", ExternalSharingModel: "Private" },
+    { QualifiedApiName: "Account", InternalSharingModel: "ReadWrite", ExternalSharingModel: "Private" }, { QualifiedApiName: "Feed", InternalSharingModel: null }]),
+  { Account: { internal: "ReadWrite", external: "Private" }, Case: { internal: "ReadWriteTransfer", external: "Private" } }, "sorted; objects without a sharing model left out");
 });
 
 test("context pack: production's own components (baseline/) are listed and marked, with validation, workflow, sharing and duplicate rules and every Flow that touches the object", () => {

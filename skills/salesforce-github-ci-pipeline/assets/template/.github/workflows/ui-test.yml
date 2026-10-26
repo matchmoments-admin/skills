@@ -82,7 +82,7 @@ jobs:
         with: { ref: "${{ steps.pr.outputs.branch }}", fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
       - id: id
         uses: ./.pipeline/.github/actions/pipeline-identity
@@ -202,7 +202,7 @@ jobs:
         with: { ref: "${{ steps.head.outputs.sha }}", persist-credentials: false }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\ne2e/support\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - name: Which spec?
         id: spec
         run: |

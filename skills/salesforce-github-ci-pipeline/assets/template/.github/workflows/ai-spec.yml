@@ -53,17 +53,12 @@ jobs:
         with: { ref: main, fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
       - name: The code the story will be built on (the open sprint, else main), as /plan reads it
         run: |
           REL=$(node .pipeline/pipeline/bin/pipe.mjs context | sed -n 's/^RELEASE_BRANCH=//p')
           if [ -n "$REL" ] && git fetch -q origin "$REL"; then git checkout -q "origin/$REL"; echo "reading $REL"; else echo "no open sprint: reading main"; fi
-      - uses: ./.pipeline/.github/actions/sf-auth   # read-only use: production's org-wide defaults for the context pack
-        with:
-          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
-          username: ${{ secrets.SF_CI_USERNAME }}
-          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Show that Claude is on it, with a link
         run: node .pipeline/pipeline/bin/pipe.mjs spec pending "$KEY" --now "Claude is writing the spec (3 to 6 minutes)"
       - name: The issue, the spec so far, the comments, and the context pack

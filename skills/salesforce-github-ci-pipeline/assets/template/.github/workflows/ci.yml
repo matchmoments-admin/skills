@@ -47,7 +47,7 @@ jobs:
         with: { ref: "${{ inputs.ref || github.ref }}", fetch-depth: 0, persist-credentials: false }   # no token left in .git/config
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
@@ -139,7 +139,7 @@ jobs:
           fetch-depth: 0
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
       - name: What does this merge into?
         id: delta
