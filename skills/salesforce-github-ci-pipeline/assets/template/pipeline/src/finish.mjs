@@ -31,6 +31,7 @@ export function verdictOf(stage, { outcome = "", detail = "", weak = "", kind = 
     if (outcome === "pass") return { state: "success", description: "AI review passed", label: true };
     if (outcome === "changes") return { state: "failure", description: "AI review asks for changes", label: true };
     if (outcome === "not-needed") return { state: "success", description: `not needed: ${detail}` };
+    if (outcome === "budget") return { state: "error", description: "the story's AI budget is spent: an approver's /budget-ok, then Run the AI review again" };
     return { state: "error", description: "the review posted no verdict: tick Run the AI review again" };
   }
   if (stage === "ui-test") {

@@ -319,6 +319,19 @@ test("the UI regression runs once per release (#273): Apex on every staging run,
   assert.deepEqual([plan({ releaseOpen: true, apexPassed: true }).apex, plan({ releaseOpen: true, apexPassed: true }).ui], ["skip", "run"], "the release's UI run on a head staging already tested");
   assert.equal(plan({ releaseOpen: true, apexPassed: true, uiPassed: true }).done, true);
   assert.equal(plan({ policy: "every" }).ui, "run", "the flag turns it back on for every run");
+  // scope: a merge mid-sprint tests what changed since the last tested commit; the release PR, or nothing tested yet, everything
+  assert.deepEqual([plan({ tested: "abc1234def" }).scope, plan({ tested: "abc1234def" }).base], ["relevant", "abc1234def"]);
+  assert.match(plan({ tested: "abc1234def" }).why, /changed since abc1234/);
+  assert.deepEqual([plan({}).scope, plan({ releaseOpen: true, tested: "abc1234def" }).scope], ["all", "all"]);
+  // a pass of only a merge's tests never carries to the release's own regression
+  const runs = { s1: { conclusion: "success", status: "completed", started_at: "1", output: { summary: "**Scope:** tests for this change (x)." } },
+    s2: { conclusion: "success", status: "completed", started_at: "1", output: { summary: "**Scope:** all local tests (x)." } } };
+  const host = { repo: "o/r", api: (m, path) => ({ check_runs: [runs[path.split("/")[4]]].filter(Boolean) }) };
+  const git = (args) => (args[0] === "rev-list" ? "s1\ns2" : args[0] === "rev-parse" ? "s1" : "");
+  assert.equal(start.lastStagingTested({ git, host }), "s1", "the newest tested commit, whatever its scope");
+  assert.equal(Boolean(start.stagingCarry({ git, host })), true);
+  const onlyRelevant = { repo: "o/r", api: (m, path) => ({ check_runs: path.includes("/s1/") ? [runs.s1] : [] }) };
+  assert.equal(start.stagingCarry({ git, host: onlyRelevant, all: true }), null, "the release needs every test");
   // the journey starts it when the release PR is open, beside UAT; a pass or a failure on the head stops it
   const rel = (statuses = []) => gate.standing({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: "success", started_at: "t" }], statuses, reviews: [] });
   const ui = (state) => ({ sha: "h", context: gate.STATUS.uiRegression, state, created_at: "t", creator: { login: "github-actions[bot]" } });
@@ -336,6 +349,8 @@ test("the UI regression runs once per release (#273): Apex on every staging run,
   // the workflow: the plan decides, the UI step's outcome travels out, and the agent-free nudge job records it
   const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   assert.match(wf, /id: uirun\n\s+if: steps\.fresh\.outputs\.ui == 'run'/);
+  assert.match(wf, /concurrency:\n\s+group: staging-\$\{\{ github\.ref \}\}\n\s+cancel-in-progress: false/, "merges queue without a runner; a newer one replaces the waiting run");
+  assert.match(wf, /SCOPE: \$\{\{ steps\.fresh\.outputs\.scope \}\}/);
   assert.match(wf, /ui: \$\{\{ steps\.uirun\.outcome \}\}/);
   const nudge = wf.slice(wf.indexOf("  nudge:"));
   assert.match(nudge, /pipe\.mjs finish staging --branch "\$REL" --sha "\$GITHUB_SHA" --outcome "\$\{\{ needs\.staging\.outputs\.ui \}\}"/, "one finish: the verdict before the journey asks what is owed (finish.mjs's order)");
