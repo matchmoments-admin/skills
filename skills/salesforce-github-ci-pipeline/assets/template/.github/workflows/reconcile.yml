@@ -34,7 +34,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
-        with: { ref: main, fetch-depth: 0, persist-credentials: false }   # pipeline code from main; history and tags for the watchdog
+        with: { ref: main, fetch-depth: 0 }   # pipeline code from main; history and tags for the watchdog (it fetches: a private repo needs the token)
       - name: Reconcile (re-run what never started; start what is owed on every idle open PR)
         continue-on-error: true
         run: node pipeline/bin/pipe.mjs reconcile
