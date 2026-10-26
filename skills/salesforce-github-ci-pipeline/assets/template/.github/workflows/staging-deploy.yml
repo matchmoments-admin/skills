@@ -107,11 +107,14 @@ jobs:
         if: always() && steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
         with:
           name: staging-results
+          # failures only need the log and the report; never a trace (it holds the org's session: playwright.config.ts)
+          retention-days: 14
           path: |
             candidate/test-results
             candidate/playwright-report
             !candidate/**/trace.zip
             !candidate/**/*.webm
+            !candidate/playwright-report/data/*.zip
   nudge:
     # Separate job: the write permissions never sit next to the release branch's code. Runs after a failed regression
     # too, so the release card says it failed and offers a fix.

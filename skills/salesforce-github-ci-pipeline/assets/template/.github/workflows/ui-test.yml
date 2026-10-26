@@ -265,6 +265,7 @@ jobs:
         if: (always() && steps.spec.outputs.exists == 'true') && steps.lane.outputs.parked != 'true'
         with:
           name: playwright-report
+          retention-days: 14   # ai-fix reads ui-out/playwright.log from the latest run only
           path: |
             ui-out
             playwright-report

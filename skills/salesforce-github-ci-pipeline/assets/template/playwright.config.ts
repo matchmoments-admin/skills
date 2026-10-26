@@ -11,8 +11,10 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     headless: true,
-    trace: "retain-on-failure",
-    video: "retain-on-failure",
+    // traces and videos carry the org's session (the front-door URL, the sid cookie), so CI never records them: an
+    // artifact is readable by everyone with access to the repo for its whole retention. Local runs keep them.
+    trace: process.env.CI ? "off" : "retain-on-failure",
+    video: process.env.CI ? "off" : "retain-on-failure",
     screenshot: "only-on-failure"
   }
 });
