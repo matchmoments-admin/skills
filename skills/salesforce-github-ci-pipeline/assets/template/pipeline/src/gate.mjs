@@ -209,8 +209,12 @@ export const humanApproval = (ctx) => reviewApprovers(ctx).length > 0;
 export { approverOf, approverList, lastPusherOf, approvalProblem } from "./approval.mjs";
 import { approverOf, approverList, lastPusherOf, approvalProblem, isSolo } from "./approval.mjs";
 
-/** approvalProblem() with what solo mode needs from the statuses: did the AI review pass on this code? */
-export const approvalProblemFor = (ctx, login) => approvalProblem({ ...ctx, aiReviewPassed: verdictFor(STATUS.review, ctx).state === "success" }, login);
+/** approvalProblem() with what solo mode needs from the statuses: did a real AI review pass on this code? "not needed"
+ *  (nothing reviewable changed, or Jev judged it low risk) is a success no AI looked at: it is not a second pair of eyes. */
+export function approvalProblemFor(ctx, login) {
+  const r = verdictFor(STATUS.review, ctx);
+  return approvalProblem({ ...ctx, aiReviewOn: Boolean(ctx.ai?.review), aiReviewPassed: r.state === "success" && !/^not needed/i.test(r.description || "") }, login);
+}
 
 /**
  * Does a person's approval cover the code as it is now (Sign-off)? Reviews on the head; with signOff, also a ticked

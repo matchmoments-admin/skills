@@ -33,11 +33,12 @@ export const isSolo = (ctx, login) => is(login, ctx.lastPusher) && soloAllowed(c
  * hotfix without one), or when the approver pushed the latest change themselves, anyone in APPROVERS. Solo mode: the one
  * approver's own push counts once the AI review passed on it (aiReviewPassed). Pure.
  */
-export function approvalProblem({ approvers = [], storyApprover = null, lastPusher = null, approvalMode = "team", aiReviewPassed = false }, login) {
+export function approvalProblem({ approvers = [], storyApprover = null, lastPusher = null, approvalMode = "team", aiReviewPassed = false, aiReviewOn = true }, login) {
   if (!approvers.length || !login) return null;
   const inTeam = approvers.some((a) => is(a, login));
   if (is(login, lastPusher) && soloAllowed({ approvers, approvalMode }, login)) {
-    return aiReviewPassed ? null : `@${login} pushed the latest change: solo approval (APPROVAL_MODE=solo) needs the AI review to pass on it first`;
+    if (!aiReviewOn) return `@${login} pushed the latest change: solo approval needs the AI review as the second pair of eyes (turn on AI_REVIEW)`;
+    return aiReviewPassed ? null : `@${login} pushed the latest change: solo approval (APPROVAL_MODE=solo) needs a real AI review to pass on it first ("not needed" is not one: comment /review to run it)`;
   }
   if (is(login, lastPusher)) return `@${login} pushed the latest change, so ${storyApprover && !is(storyApprover, login) ? `@${storyApprover} (the approver)` : "another approver"} needs to approve`;
   if (storyApprover && !is(storyApprover, login) && !(is(storyApprover, lastPusher) && inTeam)) return `@${storyApprover} is this story's approver (change the story's Approver line to hand it over)`;
