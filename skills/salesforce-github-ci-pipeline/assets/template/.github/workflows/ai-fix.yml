@@ -58,6 +58,7 @@ jobs:
       is-app: ${{ steps.id.outputs.is-app }}
       branch: ${{ steps.pr.outputs.branch }}
       before: ${{ steps.lane.outputs.parked != 'true' && steps.head.outputs.before || '' }}   # parked: no follow-up
+      budget: ${{ steps.budget.outputs.stopped }}   # the story's AI budget stopped the agent: its own comment says so
     timeout-minutes: 75   # 45 of them may be waiting for the story org's lane (when it cannot park)
     env:
       GH_TOKEN: ${{ github.token }}
@@ -162,11 +163,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
+      - name: Did the story's AI budget stop the agent? (the follow-up says so instead of "changed nothing")
+        id: budget
+        if: always()
+        run: echo "stopped=${AI_BUDGET_STOPPED:-false}" >> "$GITHUB_OUTPUT"
       - name: Remove the button label
         if: always()
         run: gh pr edit "$PR" --remove-label ai:fix || true
       - name: The story card says the fix failed, and where to look
-        if: failure() && env.STORY_KEY != ''
+        if: failure() && env.STORY_KEY != '' && env.AI_BUDGET_STOPPED != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$STORY_KEY" --now "Claude's fix" --failed --retry "comment /fix to retry, or push a fix yourself"
@@ -174,7 +179,7 @@ jobs:
     # Fresh runner, no agent: the review again (and CI without the App), only if the fix pushed a new head. A fix that
     # pushed nothing starts nothing (that was an endless review/fix loop); the round limit stops it before it starts.
     needs: fix
-    if: always() && needs.fix.result != 'skipped' && needs.fix.outputs.before != ''
+    if: always() && needs.fix.result != 'skipped' && needs.fix.outputs.before != '' && needs.fix.outputs.budget != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:

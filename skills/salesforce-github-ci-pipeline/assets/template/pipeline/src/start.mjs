@@ -66,7 +66,7 @@ export function ciCarry({ ref, base, git, host }) {
 export const stagingCarry = ({ git, host, all = false }) => testsCarry("staging", { shas: history(git, ["HEAD"], 16), git, host, all });
 
 /** The newest commit before the head whose staging tests passed: a merge's run tests only what changed since. */
-export const lastStagingTested = ({ git, host }) => passedTests("staging", { shas: history(git, ["HEAD~1"], 15), host })[0] || null;
+export const lastStagingTested = ({ git, host }) => passedTests("staging", { shas: history(git, ["--first-parent", "HEAD~1"], 15), host })[0] || null;   // the release branch's own commits, not what a back-merge brought
 
 /**
  * What a staging run does (#273). Apex and Flow on every run, unless they passed on this code (or one it carries to).
