@@ -108,7 +108,8 @@ export function stepOutput(log) {
 
 /** A run whose jobs never started (each failed with no steps): GitHub refused to run it (billing, a spending limit, a
  *  runner outage), not a fault in the pipeline or the story. Reconcile re-runs it once; no ticket. */
-export const notStarted = (jobs = []) => jobs.length > 0 && jobs.every((j) => j.conclusion === "failure" && !(j.steps || []).length);
+export const notStarted = (jobs = []) => jobs.some((j) => j.conclusion === "failure")
+  && jobs.every((j) => ["failure", "skipped"].includes(j.conclusion) && !(j.steps || []).length);   // jobs that `needs:` it end skipped
 
 /** A failed run → its first failed step's fault, classified. `logOf(jobId)` is the seam (the job's log text). */
 export function faultOf(run, jobs, logOf) {

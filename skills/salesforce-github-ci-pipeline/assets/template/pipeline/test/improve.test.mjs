@@ -174,6 +174,8 @@ test("a run GitHub never started (billing, 22-24 Oct) opens no ticket, and recon
   assert.equal(notStarted(blocked), true);
   assert.equal(notStarted([{ ...blocked[0], steps: [{ name: "Run", conclusion: "failure" }] }]), false, "a step ran: a real failure");
   assert.equal(notStarted([]), false);
+  assert.equal(notStarted([...blocked, { id: 2, name: "nudge", conclusion: "skipped", steps: [] }]), true, "a job that needs it ends skipped");
+  assert.equal(notStarted([{ id: 2, name: "nudge", conclusion: "skipped", steps: [] }]), false, "nothing failed");
   assert.equal(faultOf({ name: "ci", conclusion: "failure", head_branch: "issue-9" }, blocked, () => "").whose, "ignore");
   const runs = [
     { id: 11, name: "ci", run_attempt: 1, event: "pull_request" },          // never started: re-run
@@ -192,6 +194,6 @@ test("a run GitHub never started (billing, 22-24 Oct) opens no ticket, and recon
   const events = [];
   assert.deepEqual(rerunNotStarted({ host, record: (k, d) => events.push([k, d]), now: Date.parse("2026-10-27T00:00:00Z") }), [11]);
   assert.ok(calls.includes("POST repos/o/r/actions/runs/11/rerun"));
-  assert.ok(calls.some((c) => /created=>=2026-10-26T00:00:00/.test(c)), "the last day only");
+  assert.ok(calls.some((c) => /created=>=2026-10-24T00:00:00/.test(c)), "the last three days only");
   assert.deepEqual(events, [["reconcile", { rerun: 11, rerunOf: "ci" }]]);
 });

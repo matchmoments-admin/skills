@@ -110,18 +110,19 @@ export async function reconcile({ host, gh, cards, next, record = () => {}, log 
 
 /**
  * Runs GitHub never started (every job failed with no steps: a failed payment, the spending limit, a runner outage)
- * in the last day, re-run once each (first attempts only), so a billing stop does not leave CI red on every open PR
+ * in the last three days, re-run once each (first attempts only), so a billing stop does not leave CI red on every open PR
  * (22-24 Oct). Scheduled runs are left to their next tick. Returns the runs it re-ran.
  */
 export function rerunNotStarted({ host, record = () => {}, log = () => {}, now = Date.now(), max = 10 }) {
-  const since = new Date(now - 24 * 3600e3).toISOString().slice(0, 19);
+  const since = new Date(now - 72 * 3600e3).toISOString().slice(0, 19);   // a stop can last days (22-24 Oct)
   const runs = host.api("GET", `repos/${host.repo}/actions/runs?status=failure&created=>=${since}&per_page=100`)?.workflow_runs || [];
   const out = [];
   for (const r of runs.filter((x) => x.run_attempt === 1 && x.event !== "schedule")) {
     if (out.length >= max) break;
     const jobs = host.api("GET", `repos/${host.repo}/actions/runs/${r.id}/jobs?per_page=100`)?.jobs || [];
     if (!notStarted(jobs)) continue;
-    host.api("POST", `repos/${host.repo}/actions/runs/${r.id}/rerun`);
+    const res = host.api("POST", `repos/${host.repo}/actions/runs/${r.id}/rerun`);
+    if (res?.status >= 400) { log(`::warning::could not re-run ${r.name} run ${r.id}: ${res.message || res.status}`); continue; }
     record("reconcile", { rerun: r.id, rerunOf: r.name });
     log(`re-ran ${r.name} run ${r.id} (its jobs never started)`);
     out.push(r.id);
