@@ -7,7 +7,7 @@
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
 //   next      --after review|ci|staging|release-pr|org-freed|any [--pr N]   what the journey owes next, started (journey.mjs)
 //   finish    review|ui-test|ci|staging|uat --pr N|--branch B --sha S --outcome O [--detail D]   end a stage (finish.mjs)
-//   reconcile [--pr N]                                    start what is owed on every idle open PR (the janitor's sweep)
+//   reconcile [--pr N]                                    re-run runs GitHub never started; start what is owed on every idle open PR
 //   lane      acquire|release <org target> [--minutes M] [--no-card] [--park KIND] · wake   one job at a time per org; parked jobs re-run
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
@@ -69,7 +69,7 @@ import * as baseline from "../src/baseline.mjs";
 import * as start from "../src/start.mjs";
 import * as harness from "../src/harness.mjs";
 import * as journey from "../src/journey.mjs";
-import { finish, reconcile, STAGE } from "../src/finish.mjs";
+import { finish, reconcile, rerunNotStarted, STAGE } from "../src/finish.mjs";
 import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
@@ -238,9 +238,11 @@ const commands = {
       { host, gh: io.gh, cards, next: nextAfter, record, log });
     return say(r.said);
   }])),
-  "reconcile ": async () => {   // the sweep (janitor): what is owed on every idle open PR, started; a dropped event costs one tick
+  "reconcile ": async () => {   // the hourly sweep (reconcile.yml): what is owed on every idle open PR, started; a dropped event costs one tick
+    const rerun = flag("pr") ? [] : rerunNotStarted({ host, record, log });
     const r = await reconcile({ host, gh: io.gh, cards, next: nextAfter, record, log, only: flag("pr") });
-    return say(r.map((x) => `#${x.pr}: ${x.skipped || (x.started.length ? `started ${x.started.join(", ")}` : "nothing owed")}`).join("\n") || "no open pull request");
+    return say([...rerun.map((id) => `re-ran run ${id}: GitHub never started its jobs`),
+      ...r.map((x) => `#${x.pr}: ${x.skipped || (x.started.length ? `started ${x.started.join(", ")}` : "nothing owed")}`)].join("\n") || "no open pull request");
   },
   "next ": async () => { const r = await nextAfter(flag("after"), flag("pr")); output({ next: r.steps.map((x) => x.start || x.dispatch).join(" ") }); return say(r.said); },
   "ci results": () => { const t = roles.ciResults(io.ghPages(`repos/${host.repo}/commits/${arg(0)}/check-runs?per_page=100`, "check_runs")); if (flag("out")) writeFileSync(flag("out"), t); return say(t); },   // for an agent or Jev

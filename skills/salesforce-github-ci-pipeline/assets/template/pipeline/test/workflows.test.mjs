@@ -97,7 +97,10 @@ test("shipping wiring: the gate passes the SHA and the validated tree; nothing q
   assert.match(wf("release"), /run-name: release \$\{\{ inputs.sha/);
   assert.match(wf("release"), /closeout run --tag "\$TAG" --sha "\$SHA"/);
   assert.match(wf("merged"), /--sha "\$MERGED_SHA"/);
-  assert.match(wf("scratch-janitor"), /ship watchdog/);
+  assert.match(wf("reconcile"), /ship watchdog/);
+  assert.match(wf("reconcile"), /pipe\.mjs reconcile/);
+  assert.doesNotMatch(wf("reconcile"), /SF_CI_|sf-auth/, "reconcile is GitHub only: no Salesforce key");
+  assert.doesNotMatch(wf("scratch-janitor"), /ship watchdog|pipe\.mjs reconcile/, "the janitor keeps only what needs the Dev Hub");
   assert.match(readFileSync(new URL("../src/actions.mjs", import.meta.url), "utf8"), /standing\(host\.prFacts\(pr\.number\)\)\.uat/, "in UAT: Standing's reading, the card's too");
   assert.match(wf("uat-deploy"), /pipe\.mjs gate standing --pr "\$PR" --result uat/, "is UAT already on this commit: Standing, not the statuses");
   assert.match(wf("commands"), /pipe.mjs act /);

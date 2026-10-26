@@ -106,10 +106,15 @@ export function stepOutput(log) {
   return body.slice(Math.max(0, at - 30), at + 1).join("\n");   // what follows is post-job cleanup
 }
 
+/** A run whose jobs never started (each failed with no steps): GitHub refused to run it (billing, a spending limit, a
+ *  runner outage), not a fault in the pipeline or the story. Reconcile re-runs it once; no ticket. */
+export const notStarted = (jobs = []) => jobs.length > 0 && jobs.every((j) => j.conclusion === "failure" && !(j.steps || []).length);
+
 /** A failed run → its first failed step's fault, classified. `logOf(jobId)` is the seam (the job's log text). */
 export function faultOf(run, jobs, logOf) {
   const base = { workflow: run.name, runUrl: run.html_url, branch: run.head_branch || "", pr: run.pull_requests?.[0]?.number || null };
   base.story = (base.branch.match(/^issue-(\d+)$/) || [])[1] || null;
+  if (run.conclusion === "failure" && notStarted(jobs)) return { ...base, job: jobs[0].name, step: "(not started)", logTail: "", error: "GitHub did not start the jobs (billing or runners): reconcile re-runs it", whose: "ignore" };
   const job = jobs.find((j) => j.conclusion === "failure");
   if (!job) return run.conclusion === "startup_failure"
     ? { ...base, job: "(none)", step: "(the workflow file)", logTail: "", error: "the workflow did not start: GitHub could not run its file", whose: "pipeline" } : null;

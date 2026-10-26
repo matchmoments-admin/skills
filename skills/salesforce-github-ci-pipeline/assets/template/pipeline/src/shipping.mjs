@@ -84,7 +84,7 @@ export function watchdogFacts({ git, gh }, host) {
   const mainSha = git(["rev-parse", "origin/main"]);
   const previous = lastRelease(git, mainSha);
   const runs = host.workflowRuns("release.yml", "", 20);
-  const last = runs.find((r) => r.status === "completed");
+  const last = runs.find((r) => r.status === "completed" && r.conclusion !== "cancelled");   // a cancelled run hides nothing
   return {
     mainSha, previous,
     forceAppChanged: Boolean(previous) && git(["diff", "--quiet", previous, mainSha, "--", "force-app"], { allowFail: true }) === null,

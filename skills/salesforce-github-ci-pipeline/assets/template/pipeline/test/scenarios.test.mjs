@@ -7,7 +7,7 @@ import { world, rng } from "./sim.mjs";
 import { violations, finish, observe, actAs, nextDeps } from "./invariants.mjs";
 import { next } from "../src/journey.mjs";
 import { finish as finishStage, reconcile } from "../src/finish.mjs";
-import { STATUS } from "../src/gate.mjs";
+import { STATUS, GATE_STATUS } from "../src/gate.mjs";
 
 process.env.PIPELINE_BOTS = "github-actions,__owner__-pipeline";
 process.env.APPROVERS = "boss,deputy";
@@ -180,6 +180,24 @@ test("finish: the verdict first, then the gate, the card and what is owed next, 
   assert.deepEqual(order, ["card"]);
   assert.equal(w.state.inflight.at(-1).workflow, "ui-test.yml", "then what is owed: Claude's UI test (the change is UI-facing)");
   assert.deepEqual(await violations(w, 31, AI), []);
+});
+
+test("reconcile: a gate production rejected is not re-validated on the same head; another failed gate is re-run", async () => {
+  const w = sprint(), REL = 296;
+  w.push("release/2027-w01", ["force-app/main/default/lwc/a/a.js"], { by: "github-actions" });
+  await all(w);
+  w.pr(REL, { head: "release/2027-w01", base: "main", author: "__owner__-pipeline" });
+  await next("release-pr", REL, nextDeps(w, ENV));
+  await all(w);
+  assert.ok((await actAs(w, REL, "tester", "/uat-pass")).done);
+  w.approve(REL, "boss");
+  await all(w);
+  const head = w.state.branches["release/2027-w01"];
+  const gateRun = { runId: w.acting({ workflow: "gate.yml", branch: "release/2027-w01" }) };
+  w.status(head, GATE_STATUS, "failure", "Production rejected it: see the Production validation check", gateRun);
+  assert.deepEqual((await reconcile(stageDeps(w))).find((x) => x.pr === REL).started, [], "the same code would fail again: wait for a fix");
+  w.status(head, GATE_STATUS, "failure", "Waiting for the approval", gateRun);
+  assert.deepEqual((await reconcile(stageDeps(w))).find((x) => x.pr === REL).started, ["gate"], "a dropped approval event is still caught");
 });
 
 test("reconcile: a dropped workflow_run is caught on the next tick, once; a PR with a run going is left alone", async () => {

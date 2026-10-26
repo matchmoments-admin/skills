@@ -1,0 +1,46 @@
+name: reconcile
+# Every hour, with no Salesforce credential (GitHub only):
+# - Runs GitHub never started (a failed payment or the spending limit: 22-24 Oct) are re-run once.
+# - The reconcile sweep: on every open PR nothing is running for, whatever is owed (a gate re-run, Claude's UI test, the
+#   UI regression, UAT) is started, so a dropped workflow_run costs one tick, not a stalled story (GitHub lost them for
+#   half an hour on 13 Oct).
+# - The release watchdog: Salesforce changes on main that never shipped (a lost or failed release dispatch) start a
+#   release, unless production was rolled back.
+# - The UI evidence branch, squashed to open stories.
+# Split from scratch-janitor (which keeps the Dev Hub key for the org sweep) so one failing part cannot hide the others.
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write       # main and tags for the watchdog; the evidence branch; the event log
+  issues: write         # an open "Production rolled back" issue; rewrite closed stories' evidence comments
+  actions: write        # re-run runs that never started; the watchdog starts a release; reconcile starts what is owed
+  pull-requests: write  # a freed slot: is a release PR waiting for UAT (journey.mjs); labels and cards
+  checks: read
+  statuses: write       # a UI test it starts is pending on the head first (start.startJob)
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: reconcile
+      cancel-in-progress: false
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0, persist-credentials: false }   # pipeline code from main; history and tags for the watchdog
+      - name: Reconcile (re-run what never started; start what is owed on every idle open PR)
+        continue-on-error: true
+        run: node pipeline/bin/pipe.mjs reconcile
+      - name: Release watchdog (main's Salesforce changes that never shipped)
+        continue-on-error: true
+        run: node pipeline/bin/pipe.mjs ship watchdog
+      - name: UI evidence of closed stories (the evidence branch, squashed to open stories only; runs even with UI_EVIDENCE off)
+        continue-on-error: true
+        run: node pipeline/bin/pipe.mjs evidence squash
