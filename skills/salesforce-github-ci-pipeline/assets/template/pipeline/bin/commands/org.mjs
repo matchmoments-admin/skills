@@ -65,10 +65,14 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
     // every orphan: CI orgs whose run died, merged or closed stories' orgs, staging and UAT orgs of sprints no longer open
     const live = io.sf(["data", "query", "-o", "devhub", "-q", "SELECT Description, CreatedDate FROM ScratchOrgInfo WHERE Status = 'Active'"]).records || [];
     const done = await doneStoryOrgs(live, { tracker, gh: io.gh, log });
-    const gone = orgs().sweep({ isStoryDone: (d) => done.has(d), openSprint: names.sprintOf(host.openRelease() || "") });
+    const gone = orgs().sweep({ isStoryDone: (d) => done.has(d), openSprint: names.sprintOf(host.openRelease() || ""), poolSize: Number(names.setting("ORG_POOL")) || 0 });
     for (const g of gone) record("org", { action: "deleted", org: g.description, why: g.why });
     await freed();   // every run, not only after a delete: a slot also frees by expiry or by hand
     return say(`deleted ${gone.length} orphan org(s)${gone.length ? `: ${gone.map((o) => `${o.description} (${o.why})`).join(", ")}` : ""}`);
+  },
+  "org pool": () => {   // the warm pool (ORG_POOL): make what is missing while a slot stays free beyond ORG_RESERVE
+    const made = orgs().topUpPool(Number(names.setting("ORG_POOL")) || 0);
+    return say(made.length ? `made ${made.join(", ")}` : "the warm pool is full (or off, or no slot to spare)");
   },
   "uat tester": async () => {   // a person's login, emailed by Salesforce, as the story's persona (or UAT_TESTER_ROLE); never a secret
     const story = names.storyOf(flag("alias", "")); const body = story ? (await tracker.story(story).catch(() => ({}))).body : "";

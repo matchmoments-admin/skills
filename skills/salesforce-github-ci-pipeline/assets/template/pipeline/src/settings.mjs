@@ -51,6 +51,7 @@ export const SETTINGS = [
   ["SEED", "on", "synthetic test data in every scratch org: on or off"],
   ["VOLUME_RECORDS", "5000", "volume records in the staging org"],
   ["ORG_RESERVE", "0", "scratch-org slots a new story org leaves free"],
+  ["ORG_POOL", "0", "warm scratch orgs kept ready from the snapshot for the next stories (each holds a slot)"],
   // tests
   ["UI_REGRESSION", "release", "the staging UI regression: once per release, or every merge"],
   ["CI_TEST_LEVEL", "RunRelevantTests", "a story's Apex tests: RunRelevantTests or selector"],
@@ -70,7 +71,7 @@ export function setting(name, env = process.env) {
 }
 
 /** The settings org provisioning reads (orgRegistry's env): resolved here, so a repository variable reaches it. */
-export const ORG_SETTINGS = ["SCRATCH_SNAPSHOT", "BASELINE", "SEED", "VOLUME_RECORDS", "ORG_RESERVE"];
+export const ORG_SETTINGS = ["SCRATCH_SNAPSHOT", "BASELINE", "SEED", "VOLUME_RECORDS", "ORG_RESERVE", "ORG_POOL"];
 export const orgSettings = (env = process.env) => Object.fromEntries(ORG_SETTINGS.map((n) => [n, setting(n, env)]));
 
 /** Every setting with its value now, for `pipe settings`. */
