@@ -550,6 +550,14 @@ Every entry happened in a real run. Search this file for the error text you see.
   failed open (spend 0, never stopped). It now uses the checkout's credentials and warns when the log cannot be read.
   A stop sets `AI_BUDGET_STOPPED`, so the callers say "budget spent" rather than "build failed" or "changed nothing".
 
+## Staging per merge (27 Oct)
+
+- **Every merge into the sprint ran every Apex and Flow test on staging, one at a time**, and each waiting run polled
+  on a paid runner for up to 45 minutes (a third of all runner minutes). Staging now has a concurrency group per
+  release branch (one running, one waiting without a runner; GitHub cancels an older waiting run), a merge runs the
+  tests for what changed since the last tested commit, and the release PR runs every test. A merge's pass never carries
+  to the release's own regression: the check's summary says its scope ("all local tests"). The workflow file runs from
+  the release branch (workflow_dispatch on that ref), so it reaches an open sprint only through a back-merge.
 ## Org fleet (27 Oct)
 
 - **Allocation was spread over three places** (`ready()`'s capacity check and create, the fleet's limits, the janitor)
