@@ -7,7 +7,7 @@
 // path each time, so writers never conflict on a file. Readers fetch the branch once.
 
 export const BRANCH = "metrics";
-const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile", "overrule"];
+const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile", "overrule", "budget-ok"];
 
 /** The envelope's own fields: a payload never sets them (Jev's `run` was silently replaced by the Actions run id). */
 export const RESERVED = ["v", "at", "kind", "run", "workflow", "job"];
@@ -33,6 +33,7 @@ export function recorder({ api, repo, env = process.env, log = () => {}, sleep =
     try {
       const e = event(kind, data, env);
       for (let i = 0; i < 6; i++) {
+        if (i) e.retries = i;   // how often writers collide on the one branch (measure before redesigning the log)
         const r = api("PUT", `repos/${repo}/contents/${pathOf(e)}`, { message: `event: ${kind}${e.story ? ` ${e.story}` : ""}`, content: Buffer.from(JSON.stringify(e) + "\n").toString("base64"), branch: BRANCH });
         if (!r?.status) return true;
         if (r.status === 403 || r.status === 404) { broken = true; log(`::notice::events not recorded (${r.status}): this job's token cannot write the ${BRANCH} branch`); return false; }
@@ -118,6 +119,16 @@ export function summarize(events, { days = 28 } = {}) {
   // the first real review per PR ("not needed" verdicts are not reviews)
   for (const v of of("verdict").filter((x) => x.context === "pipeline/ai-review" && !/^not needed/.test(x.why || "")).sort((a, b) => a.at.localeCompare(b.at))) firstReview[v.pr || v.story || v.sha] ??= v.state;
   const reviewed = Object.values(firstReview);
+  // each model (and experiment arm) per role, so a team can compare: cost, and how its reviews fared (overruled by a person)
+  const models = {};
+  for (const a of agents) {
+    const k = `${a.role}|${a.provider || "anthropic"}|${a.model || "?"}|${a.arm || ""}`;
+    const m = (models[k] ||= { role: a.role, provider: a.provider || "anthropic", model: a.model || "?", arm: a.arm || "", runs: 0, usd: 0, failed: 0, prs: new Set() });
+    m.runs++; m.usd += Number(a.usd) || 0; if (a.ok === false) m.failed++; if (a.pr) m.prs.add(a.pr);
+  }
+  const overruled = new Set(of("overrule").map((o) => o.pr));
+  const spend = {};
+  for (const a of agents.filter((x) => x.story)) spend[a.story] = (spend[a.story] || 0) + (Number(a.usd) || 0);
 
   return {
     days, events: events.length,
@@ -143,6 +154,12 @@ export function summarize(events, { days = 28 } = {}) {
       totalUsd: Math.round(agents.reduce((a, x) => a + (Number(x.usd) || 0), 0) * 100) / 100,
       medianFixRounds: median(Object.values(fixRounds)),
       passedFirstReview: pct(reviewed.filter((s) => s === "success").length, reviewed.length),
+      byModel: Object.values(models).sort((a, b) => a.role.localeCompare(b.role) || b.runs - a.runs).map((m) => ({ role: m.role, provider: m.provider, model: m.model, arm: m.arm, runs: m.runs,
+        usd: Math.round(m.usd * 100) / 100, perRunUsd: Math.round((m.usd / m.runs) * 100) / 100, failed: m.failed, overruled: m.role === "review" ? [...m.prs].filter((p) => overruled.has(p)).length : null })),
+      medianStoryUsd: r1(median(Object.values(spend))),
+      byStory: Object.entries(spend).map(([story, usd]) => ({ story, usd: Math.round(usd * 100) / 100 })).sort((a, b) => b.usd - a.usd).slice(0, 5),
+      budgetExtensions: of("budget-ok").length,
+      logRetries: events.reduce((t, e) => t + (Number(e.retries) || 0), 0),
       jev: { decisions: of("jev").length, skippedReviews: of("jev").filter((j) => j.decision === "review" && j.skipped).length, skippedFixes: of("jev").filter((j) => j.decision === "fix" && j.skipped).length },
     },
   };
@@ -171,6 +188,9 @@ export function toMarkdown(s) {
     "| AI role | runs | cost (API-equivalent) | per run | median turns | median minutes |", "|---|---|---|---|---|---|",
     ...Object.entries(s.ai.byRole).map(([n, r]) => `| ${n} | ${r.runs} | $${r.usd.toFixed(2)} | $${r.perRunUsd.toFixed(2)} | ${v(r.medianTurns)} | ${v(r.medianMinutes)} |`),
     `| **total** | | **$${s.ai.totalUsd.toFixed(2)}** | | | |`, "",
+    "| Role | provider | model | arm | runs | cost | per run | failed runs | reviews overruled |", "|---|---|---|---|---|---|---|---|---|",
+    ...s.ai.byModel.map((m) => `| ${m.role} | ${m.provider} | ${m.model} | ${m.arm || "-"} | ${m.runs} | $${m.usd.toFixed(2)} | $${m.perRunUsd.toFixed(2)} | ${m.failed} | ${m.overruled ?? "-"} |`), "",
+    `Most AI spend by story: ${s.ai.byStory.map((x) => `#${x.story} $${x.usd.toFixed(2)}`).join(", ") || "none"}; ${s.ai.budgetExtensions} budget extension(s) (/budget-ok). Event log write collisions retried: ${s.ai.logRetries}.`,
     `AI review passed first time on ${v(s.ai.passedFirstReview, "%")} of PRs; median AI fix rounds ${v(s.ai.medianFixRounds)}.`,
     `Jev (AI_TRIAGE) made ${s.ai.jev.decisions} decisions: ${s.ai.jev.skippedReviews} reviews and ${s.ai.jev.skippedFixes} fix rounds not needed.`,
   ].join("\n");

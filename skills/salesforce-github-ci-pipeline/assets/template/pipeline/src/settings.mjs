@@ -21,6 +21,7 @@ export const SETTINGS = [
   ["AI_MODEL_SPEC", "", "the spec role's model, to trial one role (empty: AI_MODEL, then the role's default)"],
   ["AI_MODEL_REVIEW", "", "the review role's model, to trial one role (empty: AI_MODEL, then the role's default)"],
   ["AI_MODEL_UI_TEST", "", "the ui-test role's model, to trial one role (empty: AI_MODEL, then the role's default)"],
+  ["AI_STORY_BUDGET_USD", "5", "what one story's AI agents may spend before they stop (each /budget-ok adds as much again; 0: no limit)"],
   // AI providers other than the subscription (config/ai-models.json providers); never secrets: keys stay in secrets
   ["AI_GATEWAY_URL", "", "the gateway provider's Anthropic-compatible URL (LiteLLM and the like)"],
   ["AWS_ROLE_ARN", "", "the bedrock provider: the AWS role GitHub's OIDC identity assumes"],

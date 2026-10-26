@@ -250,6 +250,11 @@ const commands = {
     const files = flag("changed") && existsSync(flag("changed")) ? readFileSync(flag("changed"), "utf8").split("\n").filter(Boolean) : null;
     const b = roles.budget(arg(0), undefined, { story: flag("key") && flag("key") !== "N" ? flag("key") : "", declarative: Boolean(files) && isDeclarativeOnly(files) });
     const p = roles.providerSetup(b.provider);
+    // the story's AI budget (AI_STORY_BUDGET_USD): spent so far from the event log, read before the agent starts
+    const story = flag("key") && flag("key") !== "N" ? flag("key") : "";
+    const base = Number(names.setting("AI_STORY_BUDGET_USD"));
+    const sb = story && base > 0 ? roles.storyBudget(events.readLog(io, { days: 120 }), story, base) : null;
+    if (sb?.over) output({ stop: "true", spent: sb.spent.toFixed(2), cap: sb.cap.toFixed(2) });
     output({ ...b, auth: p.auth, ...p.with });
     for (const [k, v] of Object.entries(p.env)) if (/[\r\n]/.test(v)) throw new Error(`${k} holds a line break: fix that repository variable`);
     if (process.env.GITHUB_ENV) for (const [k, v] of Object.entries(p.env)) appendFileSync(process.env.GITHUB_ENV, `${k}=${v}\n`);

@@ -95,6 +95,18 @@ export function providerSetup(provider, policy = POLICY) {
   return { auth: auth || "oauth", env: {}, with: {} };
 }
 
+/**
+ * A story's AI spend against its budget: the agents' own cost reports (agent events) and each /budget-ok (budget-ok
+ * events), from the event log. cap = base x (1 + extensions); base 0 means no limit. Pure.
+ */
+export function storyBudget(events, story, base) {
+  const mine = events.filter((e) => String(e.story || "") === String(story));
+  const spent = Math.round(mine.filter((e) => e.kind === "agent").reduce((t, e) => t + (Number(e.usd) || 0), 0) * 100) / 100;
+  const extensions = mine.filter((e) => e.kind === "budget-ok").length;
+  const cap = Number(base) * (1 + extensions);
+  return { spent, cap, extensions, over: Number(base) > 0 && spent >= cap };
+}
+
 // kept for callers that want only the id
 export const modelFor = (role, override, ctx) => choose(role, override, ctx).model;
 

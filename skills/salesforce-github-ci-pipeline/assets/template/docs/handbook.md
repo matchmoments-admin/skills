@@ -150,6 +150,7 @@ who does each step for any combination.
 | `AI_MODEL_SPEC` | the spec role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
 | `AI_MODEL_REVIEW` | the review role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
 | `AI_MODEL_UI_TEST` | the ui-test role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
+| `AI_STORY_BUDGET_USD` | what one story's AI agents may spend, in US dollars from the agents' own cost reports (the event log), before no agent starts on it: the PR or story is labelled `blocked` and says why. An approver's `/budget-ok <why>` adds as much again | `5` (`0`: no limit) |
 | `AI_GATEWAY_URL` | the `gateway` provider's Anthropic-compatible URL (its key is the secret `ANTHROPIC_API_KEY`) | no gateway |
 | `AWS_ROLE_ARN` | the `bedrock` provider: the AWS role GitHub's OIDC identity assumes (no stored AWS key) | no Bedrock |
 | `AWS_REGION` | the `bedrock` provider: the AWS region | no Bedrock |
