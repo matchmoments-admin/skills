@@ -1,0 +1,47 @@
+{
+  "$about": "Which model each AI role uses, and through which provider (pipeline/src/roles.mjs reads this; GLOSSARY.md: Model policy). Repository variables AI_MODEL_<ROLE> and AI_MODEL override it for a trial ('model', 'alias' or 'provider:model'); empty them to roll back.",
+  "default": { "provider": "anthropic", "model": "sonnet" },
+  "providers": {
+    "anthropic": {
+      "$about": "Claude through the subscription token (secret CLAUDE_CODE_OAUTH_TOKEN). The default.",
+      "auth": "oauth",
+      "models": { "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5", "opus": "claude-opus-5-5" }
+    },
+    "anthropic-api": {
+      "$about": "Claude through an API key (secret ANTHROPIC_API_KEY, passed to claude-agent as api-key): pay per token, separate from the subscription.",
+      "auth": "api-key",
+      "models": { "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5", "opus": "claude-opus-5-5" }
+    },
+    "bedrock": {
+      "$about": "Claude on Amazon Bedrock through GitHub's OIDC identity (no stored AWS key): variables AWS_ROLE_ARN and AWS_REGION. Add Bedrock's model ids (or inference profile ids) for the aliases you use before choosing it.",
+      "auth": "aws-oidc",
+      "models": {}
+    },
+    "vertex": {
+      "$about": "Claude on Google Vertex AI through workload identity federation: variables GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT, ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION. Add Vertex's model ids for the aliases you use before choosing it.",
+      "auth": "gcp-wif",
+      "models": {}
+    },
+    "gateway": {
+      "$about": "An Anthropic-compatible gateway (LiteLLM and the like): variable AI_GATEWAY_URL, its key as secret ANTHROPIC_API_KEY. Anthropic does not support Claude Code on other vendors' models: a model whose id does not name Claude is allowed only for the review and plan roles.",
+      "auth": "gateway",
+      "models": { "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5", "opus": "claude-opus-5-5" }
+    }
+  },
+  "roles": {
+    "implement": { "model": "sonnet", "turns": 100 },
+    "fix": { "model": "sonnet", "turns": 40 },
+    "plan": { "model": "sonnet", "turns": 25 },
+    "spec": { "model": "sonnet", "turns": 30 },
+    "review": {
+      "model": "sonnet", "turns": 15,
+      "declarative": "haiku",
+      "$why": "Haiku made confident false Salesforce blockers on PR #144 (Apex), each costing a round: Sonnet reviews code, access and automation; Haiku only a change with none of them (jev.mjs isDeclarativeOnly)."
+    },
+    "ui-test": {
+      "model": "sonnet", "turns": 30, "turnLimitOk": true,
+      "$why": "Sonnet, not Haiku: both of story #200's Haiku runs used every turn, and a failed writer run costs ~15 Actions minutes (a runner holding the org's lane), far more than the price difference. The UI writer's 40 turns ran out on story #193 without it looking at its failure screenshot: 30, and it is told to stop and report before the end."
+    }
+  },
+  "experiments": []
+}

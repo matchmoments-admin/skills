@@ -526,3 +526,12 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Reconcile re-validated a release production had rejected, every 6 hours**: it re-ran the gate whenever the gate
   status was not success, and production validation leaves it failed on the same head. A gate "Production rejected it"
   now waits for a new head; any other failed gate (a dropped approval event) is still re-run.
+
+## Model policy (27 Oct)
+
+- **Every role ran Sonnet through the subscription token, with no way to try another provider.** The model policy is
+  now `config/ai-models.json`: providers (`anthropic` token, `anthropic-api` key, `bedrock` and `vertex` through
+  GitHub's OIDC identity with no stored cloud key, a `gateway` such as LiteLLM), aliases per provider, each role's
+  model and turns, experiments by a stable hash of the story key, and Haiku for a review of a change with no code,
+  access or automation (Haiku's false blockers on PR #144 were on Apex). Bedrock and Vertex start with no model ids:
+  the policy refuses an alias it cannot map rather than guessing an id. Only review and plan may run a non-Claude model.

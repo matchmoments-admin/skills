@@ -215,6 +215,19 @@ test("an agent run that finished successfully past its turn cap counts as succes
   assert.match(a, /if \[ "\$R" = "success false" \]; then echo "::warning::/);
   assert.match(a, /\\\(\.is_error \| tostring\)/, "false must print as false, not vanish under //");
   assert.equal(roles.budget("implement", "").turns, 100);
+  // the provider decides the login: one secret or cloud identity per provider, never two (config/ai-models.json)
+  assert.match(a, /claude_code_oauth_token: \$\{\{ steps\.rules\.outputs\.auth == 'oauth' && inputs\.oauth-token \|\| '' \}\}/);
+  assert.match(a, /use_bedrock: \$\{\{ steps\.rules\.outputs\.auth == 'aws-oidc' \}\}/);
+  assert.match(a, /if: steps\.rules\.outputs\.auth == 'aws-oidc'\n\s+uses: aws-actions\/configure-aws-credentials@v4/);
+  assert.match(a, /if: steps\.rules\.outputs\.auth == 'gcp-wif'\n\s+uses: google-github-actions\/auth@v2/);
+  assert.match(a, /--provider "\$PROVIDER"/, "the event log records the provider");
+  for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((x) => x.endsWith(".yml"))) {
+    const y = readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8");
+    if (!y.includes("actions/claude-agent")) continue;
+    assert.doesNotMatch(y, /model: \$\{\{ vars\.AI_MODEL \}\}/, `${f}: AI_MODEL arrives with PIPELINE_VARS`);
+    assert.match(y, /api-key: \$\{\{ secrets\.ANTHROPIC_API_KEY \}\}/, `${f}: the api-key and gateway providers' key`);
+  }
+  assert.match(readFileSync(new URL("../../.github/workflows/ai-review.yml", import.meta.url), "utf8"), /changed-files: \$\{\{ runner\.temp \}\}\/changed\.txt/, "a declarative-only review may use the cheaper model");
   assert.match(a, /--max-turns \$\{\{ steps.rules.outputs.turns \}\}/, "the role's budget from roles.mjs");
   for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url))) assert.doesNotMatch(readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8"), /max-turns:/, `${f}: turn caps live in roles.mjs`);
   const plan = plans.storyFile({ key: "143", title: "Story: Regional reporting", url: "u", body: "b" }, { plan: null, answers: [] });
@@ -327,7 +340,7 @@ test("every workflow file parses as YAML (an unquoted ': ' in a step name broke 
 });
 
 test("agent roles: one table for model and turns; the UI writer reads its failure screenshot and stops to report; triage sees CI (E9, E10)", async () => {
-  assert.deepEqual(roles.budget("ui-test", ""), { model: "claude-sonnet-5-5", turns: 30, turnLimitOk: true }, "the spec run judges the writer's work");
+  assert.deepEqual(roles.budget("ui-test", ""), { model: "claude-sonnet-5-5", turns: 30, turnLimitOk: true, provider: "anthropic", arm: "" }, "the spec run judges the writer's work");
   assert.equal(roles.budget("implement", "").turnLimitOk, false);
   assert.equal(roles.budget("review", "claude-opus-5-5").model, "claude-opus-5-5");
   assert.throws(() => roles.modelFor("poet", "x"), /Unknown AI role/, "an unknown role fails even with an override");

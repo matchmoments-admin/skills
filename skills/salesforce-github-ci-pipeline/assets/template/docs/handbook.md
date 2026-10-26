@@ -143,13 +143,20 @@ who does each step for any combination.
 | `UI_EVIDENCE` | a passing UI test posts its screenshots (one per criterion, WebP, under 100 KB each, at most 6) as one **UI evidence** comment on the story; the card links it | no screenshots taken, stored or posted |
 | `AI_AUTO_CHAIN` | review changes -> `ai:fix`; pass + UI-facing -> `ai:test`, into switches that are on | people add the labels |
 | `AI_TRIAGE` | Jev triages review risk, UI failures and chained fixes ([below](#jev-triage)) | no triage |
-| `AI_MODEL` | one model for every role | Sonnet 5.5 for every role (Haiku cost more in extra rounds and failed runs) |
+| `AI_MODEL` | one model for every role (`model`, an alias such as `haiku`, or `provider:model`) | each role's model in `config/ai-models.json`: Sonnet 5.5, and Haiku 5.5 for a review of a change with no code, access or automation |
 | `AI_MODEL_IMPLEMENT` | the implement role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
 | `AI_MODEL_FIX` | the fix role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
 | `AI_MODEL_PLAN` | the plan role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
 | `AI_MODEL_SPEC` | the spec role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
 | `AI_MODEL_REVIEW` | the review role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
 | `AI_MODEL_UI_TEST` | the ui-test role's model only, to trial and roll back one role | empty: `AI_MODEL`, then Sonnet 5.5 |
+| `AI_GATEWAY_URL` | the `gateway` provider's Anthropic-compatible URL (its key is the secret `ANTHROPIC_API_KEY`) | no gateway |
+| `AWS_ROLE_ARN` | the `bedrock` provider: the AWS role GitHub's OIDC identity assumes (no stored AWS key) | no Bedrock |
+| `AWS_REGION` | the `bedrock` provider: the AWS region | no Bedrock |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | the `vertex` provider: the workload identity provider for GitHub's OIDC identity | no Vertex |
+| `GCP_SERVICE_ACCOUNT` | the `vertex` provider: the service account it impersonates | no Vertex |
+| `ANTHROPIC_VERTEX_PROJECT_ID` | the `vertex` provider: the Google Cloud project | no Vertex |
+| `CLOUD_ML_REGION` | the `vertex` provider: the Vertex AI region | no Vertex |
 
 | `APPROVERS` | the team's approvers (`@lead,@senior1`), default first: stories name an **Approver**; only that person (or another approver when none is named, or when the approver pushed the latest change) can approve, sign off or `/review-ok`, and never whoever pushed the latest change. The card says who must approve | anyone with write access approves |
 | `SLACK_ACTIONS` | Slack notices carry the card's next options as buttons, run by the Slack actions Worker (`pipeline/slack/`; see "Slack notices") | notices carry links only |

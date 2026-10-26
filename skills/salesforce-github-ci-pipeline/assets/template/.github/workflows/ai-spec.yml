@@ -72,8 +72,8 @@ jobs:
         with:
           role: spec
           key: ${{ env.KEY }}
-          model: ${{ vars.AI_MODEL }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           github-token: ${{ github.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}
           allowed-tools: "Read,Glob,Grep,Write"

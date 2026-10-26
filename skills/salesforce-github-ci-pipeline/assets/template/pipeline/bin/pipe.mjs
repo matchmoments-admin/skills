@@ -16,7 +16,7 @@
 //   start     review|fix|ui-test --pr N [--mode ai|run] [--before S --after S]   run the job, or say why not (no runner)
 //             followups --after "a b" --pr N --base B --sha S [--job J --tree T] [--story K]   what starts after a merge
 //   ci        plan --ref R --base B (kind, sf, org, ui, target, all, carried) · results <sha> [--out f]   CI's results for agents
-//   agent     budget <role>                             the role's model and turns (pipeline/src/roles.mjs)
+//   agent     budget <role> [--key K] [--changed F]     the role's provider, model and turns (config/ai-models.json)
 //   harness   overlay implement|fix|ui-test|staging [--from DIR]   main's rules and harness over the checkout, hidden
 //   tracker   story <key> [--out file] [--pack [--base B]] · comment <key> <text> · open-sprint <sprint> · assign <key> --sprint S
 //   story     card <key> | --branch B [--base B] [--tag T] [--now "what" [--failed] [--retry "how"]] [--starting]
@@ -49,7 +49,7 @@ import * as gate from "../src/gate.mjs";
 import * as verdict from "../src/verdict.mjs";
 import * as closeout from "../src/closeout.mjs";
 import * as metrics from "../src/metrics.mjs";
-import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
+import { typesafeJev, triageUiFailure, triageReview, storyReadiness, isDeclarativeOnly } from "../src/jev.mjs";
 import * as plans from "../src/plan.mjs";
 import { storyCards } from "../src/card.mjs";
 import * as tests from "../src/tests.mjs";
@@ -74,7 +74,7 @@ import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "floor", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind", "changed", "provider", "arm"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -246,7 +246,14 @@ const commands = {
   },
   "next ": async () => { const r = await nextAfter(flag("after"), flag("pr")); output({ next: r.steps.map((x) => x.start || x.dispatch).join(" ") }); return say(r.said); },
   "ci results": () => { const t = roles.ciResults(io.ghPages(`repos/${host.repo}/commits/${arg(0)}/check-runs?per_page=100`, "check_runs")); if (flag("out")) writeFileSync(flag("out"), t); return say(t); },   // for an agent or Jev
-  "agent budget": () => { const b = roles.budget(arg(0)); output(b); return say(`${arg(0)}: ${b.model}, ${b.turns} turns`); },
+  "agent budget": () => {   // the role's provider, model and turns (config/ai-models.json); --changed: the PR's paths, one a line
+    const files = flag("changed") && existsSync(flag("changed")) ? readFileSync(flag("changed"), "utf8").split("\n").filter(Boolean) : null;
+    const b = roles.budget(arg(0), undefined, { story: flag("key") && flag("key") !== "N" ? flag("key") : "", declarative: Boolean(files) && isDeclarativeOnly(files) });
+    const p = roles.providerSetup(b.provider);
+    output({ ...b, auth: p.auth, ...p.with });
+    if (process.env.GITHUB_ENV) for (const [k, v] of Object.entries(p.env)) appendFileSync(process.env.GITHUB_ENV, `${k}=${v}\n`);
+    return say(`${arg(0)}: ${b.provider} ${b.model}${b.arm ? ` (${b.arm})` : ""}, ${b.turns} turns`);
+  },
   "harness overlay": () => say(`main's ${harness.overlay(arg(0), { git: io.git, from: flag("from", ".pipeline") }).join(", ")} over the checkout, hidden from git`),
   "triage ui": async () => {
     const read = (f) => (f && existsSync(f) ? readFileSync(f, "utf8") : "");
@@ -446,7 +453,7 @@ const commands = {
     try { r = [...JSON.parse(readFileSync(flag("file"), "utf8"))].reverse().find((m) => m.type === "result"); } catch { /* no transcript */ }
     if (!r) return say("no agent result to record");
     record("agent", { role: flag("role"), story: flag("key") && flag("key") !== "N" ? flag("key") : undefined, pr: flag("pr") ? Number(flag("pr")) : undefined,
-      usd: Math.round((Number(r.total_cost_usd) || 0) * 1e4) / 1e4, turns: r.num_turns, minutes: Math.round((Number(r.duration_ms) || 0) / 6e3) / 10, ok: !r.is_error, model: flag("model") });
+      usd: Math.round((Number(r.total_cost_usd) || 0) * 1e4) / 1e4, turns: r.num_turns, minutes: Math.round((Number(r.duration_ms) || 0) / 6e3) / 10, ok: !r.is_error, model: flag("model"), provider: flag("provider") || undefined, arm: flag("arm") || undefined });
     return say(`recorded ${flag("role")}: $${(Number(r.total_cost_usd) || 0).toFixed(2)}, ${r.num_turns} turns`);
   },
   "event rollback": () => { record("rollback", { tag: flag("tag"), sha: flag("sha") }); return say(`recorded rollback to ${flag("tag")}`); },

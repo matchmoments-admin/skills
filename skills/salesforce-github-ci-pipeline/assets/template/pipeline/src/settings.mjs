@@ -21,6 +21,14 @@ export const SETTINGS = [
   ["AI_MODEL_SPEC", "", "the spec role's model, to trial one role (empty: AI_MODEL, then the role's default)"],
   ["AI_MODEL_REVIEW", "", "the review role's model, to trial one role (empty: AI_MODEL, then the role's default)"],
   ["AI_MODEL_UI_TEST", "", "the ui-test role's model, to trial one role (empty: AI_MODEL, then the role's default)"],
+  // AI providers other than the subscription (config/ai-models.json providers); never secrets: keys stay in secrets
+  ["AI_GATEWAY_URL", "", "the gateway provider's Anthropic-compatible URL (LiteLLM and the like)"],
+  ["AWS_ROLE_ARN", "", "the bedrock provider: the AWS role GitHub's OIDC identity assumes"],
+  ["AWS_REGION", "", "the bedrock provider: the AWS region"],
+  ["GCP_WORKLOAD_IDENTITY_PROVIDER", "", "the vertex provider: the workload identity provider GitHub's OIDC identity uses"],
+  ["GCP_SERVICE_ACCOUNT", "", "the vertex provider: the service account it impersonates"],
+  ["ANTHROPIC_VERTEX_PROJECT_ID", "", "the vertex provider: the Google Cloud project"],
+  ["CLOUD_ML_REGION", "", "the vertex provider: the Vertex AI region"],
   ["UI_EVIDENCE", "false", "a passing UI test posts one screenshot per criterion"],
   // people and identities
   ["APPROVERS", "", "who approves stories (empty: anyone with write access, never the last pusher)"],

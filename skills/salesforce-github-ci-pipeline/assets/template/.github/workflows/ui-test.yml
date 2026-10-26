@@ -132,8 +132,8 @@ jobs:
           role: ui-test
           key: ${{ steps.org.outputs.key }}
           pr: ${{ env.PR }}
-          model: ${{ vars.AI_MODEL }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           github-token: ${{ steps.id.outputs.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots (auto-chain labels as the App); empty = none
           allowed-tools: "Read,Glob,Grep,Edit,Write,Bash(npx playwright test:*),Bash(git:*)"
