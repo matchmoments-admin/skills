@@ -122,8 +122,10 @@ jobs:
               --jq "([.[] | select(.conclusion==\"failure\" and .headSha==\"$HEAD_SHA\")] + [.[] | select(.conclusion==\"failure\")])[0].databaseId // empty")
             # the newest failed UI test of this PR: its Playwright error (the fixer cannot see the report otherwise)
             UI=$(GH_TOKEN="$READ_TOKEN" gh run list --workflow ui-test.yml --limit 20 --json databaseId,displayTitle,conclusion --jq "[.[] | select(.displayTitle | startswith(\"ui-test PR #$PR \")) | select(.conclusion==\"success\")][0].databaseId // empty")
-            if [ -n "$UI" ] && GH_TOKEN="$READ_TOKEN" gh run download "$UI" -n playwright-report -D "$RUNNER_TEMP/ui" >/dev/null 2>&1 && grep -qiE "failed|error" "$RUNNER_TEMP/ui/ui-out/playwright.log" 2>/dev/null; then
-              echo; echo "## Failed UI test (run $UI): the Playwright error"; tail -60 "$RUNNER_TEMP/ui/ui-out/playwright.log"
+            if [ -n "$UI" ] && GH_TOKEN="$READ_TOKEN" gh run download "$UI" -n playwright-report -D "$RUNNER_TEMP/ui" >/dev/null 2>&1 \
+              && LOG=$(find "$RUNNER_TEMP/ui" -name playwright.log | head -1) && grep -qiE "failed|error" "$LOG" 2>/dev/null; then
+              # the artifact's root shifts when ui-out is the only folder uploaded, so find the log (as ui-test.yml does)
+              echo; echo "## Failed UI test (run $UI): the Playwright error"; tail -60 "$LOG"
             fi
             if [ -n "$RUN" ]; then
               echo; echo "## Failed CI checks (run $RUN): fix these first"

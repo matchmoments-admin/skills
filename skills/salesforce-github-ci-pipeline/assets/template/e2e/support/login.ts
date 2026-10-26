@@ -216,57 +216,73 @@ export async function loginAs(
           values.join(" ")
         ]).id
     ) as string;
-    // a persona names permission set groups (one per business role or process) or, before them, loose sets
-    const list = sets.map((n) => `'${n}'`).join(",");
-    let groups: { Id: string; DeveloperName: string; Status: string }[] =
-      sets.length
-        ? q(
-            `SELECT Id, DeveloperName, Status FROM PermissionSetGroup WHERE DeveloperName IN (${list})`
-          )
-        : [];
-    // a deploy that changes a group leaves it Outdated or Updating, and an assignment then fails: wait for Updated
-    for (
-      let i = 0;
-      i < 12 && groups.some((g) => !["Updated", "Failed"].includes(g.Status));
-      i++
-    ) {
-      await new Promise((r) => setTimeout(r, 10_000));
-      groups = q(
-        `SELECT Id, DeveloperName, Status FROM PermissionSetGroup WHERE DeveloperName IN (${list})`
-      );
-    }
-    for (const g of groups)
-      sfJson([
-        "data",
-        "create",
-        "record",
-        "-o",
-        alias,
-        "-s",
-        "PermissionSetAssignment",
-        "-v",
-        `AssigneeId=${id} PermissionSetGroupId=${g.Id}`
-      ]);
-    const loose = sets.filter(
-      (n) => !groups.some((g) => g.DeveloperName === n)
-    );
-    for (const ps of loose.length
-      ? q(
-          `SELECT Id FROM PermissionSet WHERE Name IN (${loose.map((n) => `'${n}'`).join(",")})`
-        )
-      : [])
-      sfJson([
-        "data",
-        "create",
-        "record",
-        "-o",
-        alias,
-        "-s",
-        "PermissionSetAssignment",
-        "-v",
-        `AssigneeId=${id} PermissionSetId=${ps.Id}`
-      ]);
   }
+  // assigned on every call, not only when the user is made: a run that stopped part-way (a timeout while a group
+  // recalculates) must not leave the persona with no access, or its "cannot see" tests pass for the wrong reason
+  // a persona names permission set groups (one per business role or process) or, before them, loose sets
+  const list = sets.map((n) => `'${n}'`).join(",");
+  const groupsNow = (): {
+    Id: string;
+    DeveloperName: string;
+    Status: string;
+  }[] =>
+    sets.length
+      ? q(
+          `SELECT Id, DeveloperName, Status FROM PermissionSetGroup WHERE DeveloperName IN (${list})`
+        )
+      : [];
+  let groups = groupsNow();
+  // a deploy that changes a group leaves it Outdated or Updating, and an assignment then fails: wait for Updated
+  for (
+    let i = 0;
+    i < 12 && groups.some((g) => !["Updated", "Failed"].includes(g.Status));
+    i++
+  ) {
+    await new Promise((r) => setTimeout(r, 10_000));
+    groups = groupsNow();
+  }
+  const stuck = groups.filter((g) => g.Status !== "Updated");
+  if (stuck.length)
+    throw new Error(
+      `permission set group ${stuck.map((g) => `${g.DeveloperName} (${g.Status})`).join(", ")} cannot be assigned in ${alias}`
+    );
+  const loose = sets.filter((n) => !groups.some((g) => g.DeveloperName === n));
+  const permsets: { Id: string; Name: string }[] = loose.length
+    ? q(
+        `SELECT Id, Name FROM PermissionSet WHERE Name IN (${loose.map((n) => `'${n}'`).join(",")})`
+      )
+    : [];
+  const unknown = loose.filter((n) => !permsets.some((ps) => ps.Name === n));
+  if (unknown.length)
+    throw new Error(
+      `${unknown.join(", ")}: no permission set group or permission set of that name in ${alias}`
+    );
+  const held = new Set<string>(
+    q(
+      `SELECT PermissionSetId, PermissionSetGroupId FROM PermissionSetAssignment WHERE AssigneeId = '${id}'`
+    ).flatMap(
+      (a: { PermissionSetId: string; PermissionSetGroupId: string | null }) => [
+        a.PermissionSetId,
+        a.PermissionSetGroupId || ""
+      ]
+    )
+  );
+  for (const [field, recordId] of [
+    ...groups.map((g) => ["PermissionSetGroupId", g.Id]),
+    ...permsets.map((ps) => ["PermissionSetId", ps.Id])
+  ])
+    if (!held.has(recordId))
+      sfJson([
+        "data",
+        "create",
+        "record",
+        "-o",
+        alias,
+        "-s",
+        "PermissionSetAssignment",
+        "-v",
+        `AssigneeId=${id} ${field}=${recordId}`
+      ]);
   await login(page);
   // "Log in as" lives on the classic domain (the org's instance URL), not the Lightning one; it redirects a few times
   const su = `${String(org.instanceUrl).replace(/\/$/, "")}/servlet/servlet.su?oid=${org.id}&suorgadminid=${id}&retURL=%2F&targetURL=%2Flightning%2Fpage%2Fhome`;

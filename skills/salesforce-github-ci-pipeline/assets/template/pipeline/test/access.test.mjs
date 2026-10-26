@@ -80,6 +80,8 @@ test("access check: a permission set belongs to a persona's group: a new one is 
   const f = access.findings({ ...r, changed: [ps("Case_Access"), ps("Visit_Access"), ps("Old_Access")], added: [ps("Case_Access"), ps("Visit_Access")] });
   assert.deepEqual(f.map((x) => `${x.level} ${x.rule} ${x.file.split("/").pop()}`), ["blocker permset-group Visit_Access.permissionset-meta.xml", "warning permset-group Old_Access.permissionset-meta.xml"]);
   assert.match(f[0].message, /Add it to the group of each persona/);
+  const sw = repo({ [ps("Feature_Escalation")]: "<PermissionSet/>" });
+  assert.deepEqual(access.findings({ ...sw, changed: [ps("Feature_Escalation")], added: [ps("Feature_Escalation")] }), [], "a Feature_ switch is held by chosen users, not a persona");
 });
 
 test("access check: user-facing queries in user mode, and a permission test that runs as a limited user", () => {
