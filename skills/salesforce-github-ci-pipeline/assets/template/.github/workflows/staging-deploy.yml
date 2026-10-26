@@ -1,17 +1,11 @@
 name: staging-deploy
 # After a story merges into the release branch (started by the gate): deploy the whole release branch to the
-# staging org and run its tests: a story merge, the tests for what changed since the last tested commit; the release
-# PR, every Apex and Flow test (and the UI regression). The job name is the "staging regression" check the gate needs.
+# staging org and run the full regression. The job name is the "staging regression" check the release gate needs.
 # Pipeline code comes from main (.pipeline/); the release branch's own specs run only after production access is gone.
 on:
   workflow_dispatch:
 permissions:
   contents: read
-# One run at a time per release branch, and one waiting: a merge during a regression queues without a runner, and a
-# newer merge replaces it (GitHub cancels the older pending run), so a burst of merges costs two runs, not one each.
-concurrency:
-  group: staging-${{ github.ref }}
-  cancel-in-progress: false
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
@@ -70,15 +64,10 @@ jobs:
         working-directory: candidate
         run: |
           node ../.pipeline/pipeline/bin/pipe.mjs org ready "sprint:${{ steps.ctx.outputs.SPRINT }}"   # this candidate, deployed and prepared
-      - name: Regression (every Apex and Flow test for the release; a story merge's own tests otherwise), live on the release head as "Salesforce tests"
+      - name: Full regression (every Apex and Flow test), live on the release head as "Salesforce tests"
         if: steps.fresh.outputs.apex == 'run' && steps.current.outputs.superseded != 'true'
         working-directory: candidate
-        env:
-          BASE: ${{ steps.fresh.outputs.base }}     # a story merge: the tests for what changed since the last tested commit
-          SCOPE: ${{ steps.fresh.outputs.scope }}   # the release PR (or nothing tested yet): every test
-        run: |
-          if [ "$SCOPE" = relevant ] && [ -n "$BASE" ]; then ARGS=(--base "$BASE"); else ARGS=(--all --base HEAD); fi
-          node ../.pipeline/pipeline/bin/pipe.mjs tests run staging "${ARGS[@]}" --sha "$(git rev-parse HEAD)" --out test-results
+        run: node ../.pipeline/pipeline/bin/pipe.mjs tests run staging --all --base HEAD --sha "$(git rev-parse HEAD)" --out test-results
       - name: Drop production access before running the branch's specs
         if: steps.fresh.outputs.ui == 'run' && steps.current.outputs.superseded != 'true'
         run: |

@@ -5,7 +5,7 @@
 //
 // Effects: a label (applied as the pipeline App, so its workflow starts), a trusted commit status from an agent-free job
 // (the sign-off and UAT verdicts the gate reads), or a workflow dispatch.
-import { STATUS, approvalProblem, standing, approverList } from "./gate.mjs";
+import { STATUS, approvalProblemFor, standing, approverList } from "./gate.mjs";
 import { setting } from "./settings.mjs";
 import { storyOf, storyBranch, nextSprint, sprintOfMilestoneTitle } from "./conventions.mjs";
 
@@ -76,7 +76,7 @@ export function mayAct({ login, type, permission }) {
 /**
  * Do it. where: { number, isPr, pr?: { headRefName, headRefOid, baseRefName } }; who: the login (for the record).
  * deps: { host, appGh (gh as the pipeline App), gh (gh with the Actions token), inUat(sha), mayApprove(login): why not, or
- * null (gate.approvalProblem on the PR's facts) }. Returns what was done.
+ * null (gate.approvalProblemFor on the PR's facts) }. Returns what was done.
  */
 export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprove = () => null }) {
   const a = ACTIONS[id];
@@ -210,7 +210,7 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
       const open = host.storyPr?.(storyBranch(String(number)));
       if (open?.state === "OPEN") at = { number: open.number, isPr: true, pr: io.gh(["pr", "view", String(open.number), "--json", "number,headRefName,headRefOid,baseRefName,state"]) };
     }
-    const mayApprove = (login) => (at.pr ? approvalProblem(host.prFacts(at.pr.number), login) : null);
+    const mayApprove = (login) => (at.pr ? approvalProblemFor(host.prFacts(at.pr.number), login) : null);
     const r = perform(id, arg, { ...at, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat: at.pr ? inUatOf(at.pr) : () => false, mayApprove });
     if (r.said) io.gh(["issue", "comment", String(number), "--body", r.said]);
     if (r.done) { log(r.done); host.record("stage", { story: storyOf(pr?.headRefName || "") || (isPr ? undefined : String(number)), pr: isPr ? Number(number) : undefined, what: `${id} by @${who}`, state: "running" }); }

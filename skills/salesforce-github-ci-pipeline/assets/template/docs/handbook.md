@@ -80,15 +80,14 @@ flowchart LR
 | Stage | Which tests | Watch it live |
 | --- | --- | --- |
 | Story PR (its scratch org) | **only what the change needs**: a changed class runs the tests that name it; a trigger or Flow runs the tests that touch its object plus its Flow tests; any other metadata, a deletion, or untested code runs everything | the **Salesforce tests** check on the PR (*Checks* tab): progress while it runs, then every test, failures annotated on their line; the story card shows it too |
-| Staging regression (the sprint combined) | after each merge into the sprint, the Apex and Flow tests for what changed since the last tested commit; when the release PR opens, every Apex test and every Flow test. Merges during a run wait without a runner, and a newer merge replaces the waiting one, so a burst of merges costs two runs. The **UI regression** (every UI spec, one browser) runs **once per release**: it starts when the release PR opens, beside UAT, and the release needs it (`pipeline/ui-regression`) before production. Each story's own UI test already ran in its own org before it merged. `UI_REGRESSION=every` runs it after every merge instead | **Salesforce tests** on the release PR's commit |
+| Staging regression (the sprint combined) | every Apex test and every Flow test, after each merge into the sprint. The **UI regression** (every UI spec, one browser) runs **once per release**: it starts when the release PR opens, beside UAT, and the release needs it (`pipeline/ui-regression`) before production. Each story's own UI test already ran in its own org before it merged. `UI_REGRESSION=every` runs it after every merge instead | **Salesforce tests** on the release PR's commit |
 | UAT (optional, `UAT_ENABLED`) | people test the release candidate; `/uat-pass` or `/uat-fail <why>` on the release PR. Its scratch org is built when the release PR opens, alongside staging, and asks for the sign-off once staging passes | the UAT comment and the `pipeline/uat` status on the release PR |
 | Production validation (check-only) | `RunRelevantTests` (Salesforce beta: the platform picks the Apex tests the deploy affects; 75% per deployed class still applies), falling back to every test class if the org refuses it. `PROD_TEST_LEVEL` overrides. Flow tests never run in a deploy | the **Production validation** check (components and tests as they go) and Salesforce **Setup › Deployment Status** |
 | Production quick deploy | none: it reuses the validation | the release run's graph |
 
 Example: a story changing 5 unrelated classes (each with its test) and 2 Flows (each with a Flow test) runs those 5
 test classes, the tests that touch the 2 Flows' objects, and the 2 Flow tests, not the whole org. The sprint's
-staging regression then tests each merge's changes in the combined org, every test once the release PR opens, and
-production validation runs the release's tests again.
+staging regression then runs everything together, and production runs what the platform judges relevant.
 
 CI's choice follows the same two rules production's `RunRelevantTests` does: a test marked `@IsTest(critical=true)`
 always runs, and `@IsTest(testFor='ApexClass:X')` names X. Where the platform's choice is unknown (layouts, settings),
@@ -124,8 +123,7 @@ see any of this: they build their own data.
 
 **Ten developers at once:** each story has its own scratch org, CI and AI jobs, so feature work runs in parallel and
 independently (an Enterprise Dev Hub allows 40 active and 80 new scratch orgs a day). Their work combines on the
-sprint branch; staging tests each merge in the combined org (one run at a time, a newer merge replacing a waiting one)
-and everything for the release, UAT signs it off, and the release
+sprint branch; staging re-tests it all together (one at a time: one staging org), UAT signs it off, and the release
 ships it to production in one validated deploy.
 
 ## AI switches
@@ -162,6 +160,7 @@ who does each step for any combination.
 | `CLOUD_ML_REGION` | the `vertex` provider: the Vertex AI region | no Vertex |
 
 | `APPROVERS` | the team's approvers (`@lead,@senior1`), default first: stories name an **Approver**; only that person (or another approver when none is named, or when the approver pushed the latest change) can approve, sign off or `/review-ok`, and never whoever pushed the latest change. The card says who must approve | anyone with write access approves |
+| `APPROVAL_MODE` | `solo`: with one name in `APPROVERS`, that person may approve (or sign off) a change they pushed themselves once the AI review passed on that exact commit; the approval record and the delivery record say "solo". GitHub itself never lets a PR's author approve it, so a maintenance PR into main that you opened still needs another person or an audited admin merge | `team`: nobody approves a change they pushed |
 | `SLACK_ACTIONS` | Slack notices carry the card's next options as buttons, run by the Slack actions Worker (`pipeline/slack/`; see "Slack notices") | notices carry links only |
 | `UAT_ENABLED` | releases go to UAT and need **UAT passed** | staging is the last stop before production |
 | `UAT_TESTERS` | `{"github-login": "email"}`: where **Send me a login** emails the set-password link | the person's public GitHub email |

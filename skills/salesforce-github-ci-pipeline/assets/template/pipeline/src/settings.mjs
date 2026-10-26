@@ -32,7 +32,8 @@ export const SETTINGS = [
   ["CLOUD_ML_REGION", "", "the vertex provider: the Vertex AI region"],
   ["UI_EVIDENCE", "false", "a passing UI test posts one screenshot per criterion"],
   // people and identities
-  ["APPROVERS", "", "who approves stories (empty: anyone with write access, never the last pusher)"],
+  ["APPROVERS", "", "who approves stories (empty: anyone with write access)"],
+  ["APPROVAL_MODE", "team", "team: nobody approves a change they pushed; solo: the one approver may, once the AI review passed on it"],
   ["PIPELINE_BOTS", "github-actions", "the pipeline's own bot logins, trusted to start agents"],
   ["BOARD_PROJECT", "", "a GitHub Project number for the delivery board"],
   ["TRACKER", "github", "github or jira"],

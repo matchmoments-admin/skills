@@ -558,3 +558,12 @@ Every entry happened in a real run. Search this file for the error text you see.
   tests for what changed since the last tested commit, and the release PR runs every test. A merge's pass never carries
   to the release's own regression: the check's summary says its scope ("all local tests"). The workflow file runs from
   the release branch (workflow_dispatch on that ref), so it reaches an open sprint only through a back-merge.
+
+## Solo approval (27 Oct)
+
+- **With one name in `APPROVERS`, the approver could never approve a change they pushed** (the gate's four-eyes rule),
+  so a solo developer needed an admin merge each time (#371, #382, #384-#390). `APPROVAL_MODE=solo` lets that one
+  approver's approval of their own push count once the AI review passed on that exact commit; the approval and delivery
+  records say "solo". It fixes the gate's own rule (story PRs, sign-offs, releases). GitHub itself never lets a PR's
+  author approve it, so a maintenance PR into main that you opened still needs another reviewer or an audited admin
+  merge. The approval policy moved to `pipeline/src/approval.mjs` (pure; the gate passes it the AI review's verdict).

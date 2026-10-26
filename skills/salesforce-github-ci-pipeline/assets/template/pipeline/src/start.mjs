@@ -38,19 +38,12 @@ export function ciPlan({ ref, base, files, carried = null }) {
  * really ran) succeeded on its latest completed run, with none of the result's inputs changed from it to the checkout.
  * One walker for CI and staging. io: git, host.
  */
-export function testsCarry(result, { shas, git, host, all = false }) {
-  const passed = passedTests(result, { shas, host, all });
-  const changedSince = (sha) => { const d = git(["diff", "--name-only", sha, "HEAD"], { allowFail: true }); return d === null ? null : d.split("\n").filter(Boolean); };
-  return carriedFrom(result, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed, changedSince });
-}
-/** The commits among `shas` whose tests passed (all: only a run of every local test, as the check's summary says). */
-function passedTests(result, { shas, host, all = false }) {
+export function testsCarry(result, { shas, git, host }) {
   const name = RESULTS[result].proof;
   const latest = (runs) => [...runs].filter((r) => r.status === "completed").sort((a, b) => String(a.started_at).localeCompare(String(b.started_at))).pop();
-  return shas.filter((sha) => {
-    const run = latest(host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}`)?.check_runs || []);
-    return run?.conclusion === "success" && (!all || /all local tests/.test(run.output?.summary || ""));
-  });
+  const passed = shas.filter((sha) => latest(host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}`)?.check_runs || [])?.conclusion === "success");
+  const changedSince = (sha) => { const d = git(["diff", "--name-only", sha, "HEAD"], { allowFail: true }); return d === null ? null : d.split("\n").filter(Boolean); };
+  return carriedFrom(result, { head: git(["rev-parse", "HEAD"], { allowFail: true }), passed, changedSince });
 }
 const history = (git, range, n) => (git(["rev-list", ...range, `--max-count=${n}`], { allowFail: true }) || "").split("\n").filter(Boolean);
 
@@ -61,28 +54,21 @@ export function ciCarry({ ref, base, git, host }) {
   return testsCarry("apex", { shas: history(git, ["--no-merges", `origin/${base}..HEAD`], 15), git, host });
 }
 
-/** The staging regression's Apex and Flow run (#237): the release branch's own last 16 commits, the head included.
- *  all: only a run of every test counts (the release's own regression). */
-export const stagingCarry = ({ git, host, all = false }) => testsCarry("staging", { shas: history(git, ["HEAD"], 16), git, host, all });
-
-/** The newest commit before the head whose staging tests passed: a merge's run tests only what changed since. */
-export const lastStagingTested = ({ git, host }) => passedTests("staging", { shas: history(git, ["--first-parent", "HEAD~1"], 15), host })[0] || null;   // the release branch's own commits, not what a back-merge brought
+/** The staging regression's Apex and Flow run (#237): the release branch's own last 16 commits, the head included. */
+export const stagingCarry = ({ git, host }) => testsCarry("staging", { shas: history(git, ["HEAD"], 16), git, host });
 
 /**
  * What a staging run does (#273). Apex and Flow on every run, unless they passed on this code (or one it carries to).
  * The UI regression (every UI spec) only when it is due, UI_REGRESSION: "release" (the default) once the release PR is
  * open, so once per release; "every" on every run. And not if it already passed on this code. superseded: the release
- * PR's head moved on since this run started (its own run tests that). Scope: a story merge mid-sprint runs the tests
- * for what changed since the last tested commit (`tested`), the release PR every local test; no tested commit, every
- * test. Pure.
+ * PR's head moved on since this run started (its own run tests that). Pure.
  */
-export function stagingPlan({ policy = "release", releaseOpen = false, apexPassed = false, uiPassed = false, superseded = false, tested = null }) {
+export function stagingPlan({ policy = "release", releaseOpen = false, apexPassed = false, uiPassed = false, superseded = false }) {
   if (superseded) return { apex: "skip", ui: "skip", done: true, why: "superseded: the release PR's head moved on; its own run tests it" };
   const due = policy === "every" || releaseOpen;
   const apex = apexPassed ? "skip" : "run", ui = due && !uiPassed ? "run" : "skip";
-  const scope = releaseOpen || !tested ? "all" : "relevant";
-  const why = `Apex and Flow: ${apexPassed ? "already passed on this code" : scope === "all" ? "every test" : `the tests for what changed since ${tested.slice(0, 7)}`}; UI regression: ${ui === "run" ? "run" : !due ? "not yet (it runs once per release, when the release PR opens)" : "already passed on this code"}`;
-  return { apex, ui, scope, base: scope === "relevant" ? tested : "", done: apex === "skip" && ui === "skip", why };
+  const why = `Apex and Flow: ${apexPassed ? "already passed on this code" : "run"}; UI regression: ${ui === "run" ? "run" : !due ? "not yet (it runs once per release, when the release PR opens)" : "already passed on this code"}`;
+  return { apex, ui, done: apex === "skip" && ui === "skip", why };
 }
 
 /**
@@ -96,9 +82,7 @@ export function stagingPlanFor({ git, host, gh, branch, policy }) {
   const st = pr ? standing(host.prFacts(pr)) : null;
   const head = git(["rev-parse", "HEAD"], { allowFail: true })?.trim();
   const superseded = Boolean(st?.ctx?.pr?.headRefOid && head && st.ctx.pr.headRefOid !== head);
-  // the release's own regression is every test: a pass of only a merge's tests does not carry to it
-  return stagingPlan({ policy, releaseOpen: Boolean(pr), superseded, apexPassed: Boolean(stagingCarry({ git, host, all: Boolean(pr) })), uiPassed: st?.uiRegression?.state === "success",
-    tested: pr ? null : lastStagingTested({ git, host }) });
+  return stagingPlan({ policy, releaseOpen: Boolean(pr), superseded, apexPassed: Boolean(stagingCarry({ git, host })), uiPassed: st?.uiRegression?.state === "success" });
 }
 
 /**
