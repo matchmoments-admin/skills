@@ -49,7 +49,7 @@ test("settings are declared once: every name the code and the workflows read is 
   for (const n of declared) assert.match(handbook, new RegExp(`^\\| \`${n}\``, "m"), `${n} has a row in the handbook's settings table`);
   // org provisioning gets every setting it reads, resolved: SEED=off as a repository variable once never reached it
   assert.equal(settings.orgSettings({ PIPELINE_VARS: JSON.stringify({ SEED: "off" }) }).SEED, "off");
-  assert.deepEqual(settings.orgSettings({}), { SCRATCH_SNAPSHOT: "", BASELINE: "soft", SEED: "on", VOLUME_RECORDS: "5000", ORG_RESERVE: "0" });
+  assert.deepEqual(settings.orgSettings({}), { SCRATCH_SNAPSHOT: "", BASELINE: "soft", SEED: "on", VOLUME_RECORDS: "5000", ORG_RESERVE: "0", ORG_POOL: "0" });
   assert.match(pipeSources(), /\.\.\.orgSettings\(\)/, "orgRegistry's env carries them");
 });
 

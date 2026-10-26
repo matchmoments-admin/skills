@@ -89,8 +89,8 @@ export function aiFeatures(env = process.env) {
 /** The story's own Playwright spec, which a person (or the AI tester) commits with the change. */
 export const storySpec = (key) => `e2e/story-${key}.spec.ts`;
 
-const ORG_LIFETIME_DAYS = { story: 7, sprint: 30 };   // a story often takes longer than 3 days; ensure() rebuilds an expired one
-const DEFINITION = { story: "config/scratch-dev.json", hotfix: "config/scratch-hotfix.json", sprint: "config/scratch-qa.json" };
+export const ORG_LIFETIME_DAYS = { story: 7, sprint: 30 };   // a story often takes longer than 3 days; ensure() rebuilds an expired one
+export const DEFINITION = { story: "config/scratch-dev.json", hotfix: "config/scratch-hotfix.json", sprint: "config/scratch-qa.json" };
 
 // ---- story keys and branches ---------------------------------------------------------------------------
 // GitHub key "12" -> branch "issue-12". Jira key "LIFE-123" -> branch "LIFE-123".

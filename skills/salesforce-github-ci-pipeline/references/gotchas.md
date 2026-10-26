@@ -558,6 +558,16 @@ Every entry happened in a real run. Search this file for the error text you see.
   tests for what changed since the last tested commit, and the release PR runs every test. A merge's pass never carries
   to the release's own regression: the check's summary says its scope ("all local tests"). The workflow file runs from
   the release branch (workflow_dispatch on that ref), so it reaches an open sprint only through a back-merge.
+## Org fleet (27 Oct)
+
+- **Allocation was spread over three places** (`ready()`'s capacity check and create, the fleet's limits, the janitor)
+  and a closed, unmerged story PR held its org until the 6-hour sweep. `allocate()` is now the one place an org is
+  allocated: a warm pool org when `ORG_POOL` keeps some (made ahead from the snapshot by the janitor, only while a slot
+  stays free beyond `ORG_RESERVE`, from the snapshot only, refreshed after 72 h since an org's expiry cannot be
+  extended; the story claims the newest by rewriting the Dev Hub's `ScratchOrgInfo.Description` and re-reads it, since two
+  stories may race for one), else
+  a new org. `merged.yml` gives a closed story PR's org back at once unless another PR on the branch is open. The pool
+  is off by default: each pool org holds an active slot.
 
 ## Solo approval (27 Oct)
 

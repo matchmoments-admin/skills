@@ -170,6 +170,7 @@ who does each step for any combination.
 | `BASELINE_NIGHTLY` | `prod-baseline` also runs nightly, catching changes made directly in production Setup (it always runs after each release and weekly) | after releases and weekly only |
 | `UAT_TESTER_ROLE` | **Send me a UAT login** gives the tester this role when no story names a `Persona:` | the tester has no role (every permission set in the code) |
 | `ORG_RESERVE` | scratch-org slots a new story org leaves free for staging, UAT and CI | 0 |
+| `ORG_POOL` | warm scratch orgs the janitor keeps ready from the snapshot (`pool-1`...): `/start` claims one instead of waiting for a new org. Each holds an active slot, and the janitor makes one only while a slot stays free beyond `ORG_RESERVE`; lowering it deletes the extras | 0 (no pool) |
 | `UAT_SAMPLE` | `on`: after each UAT deploy, a masked subset of production goes into UAT ([Test data](#test-data); needs secret `SF_PROD_READ_USERNAME`, a read-only production user, and the `production-read` environment) | off: UAT has the synthetic seed only |
 | `UAT_SAMPLE_DOMAINS` | production's email domains (`acme.com,acme.co.uk`): the UAT sample fails if any survives masking | none: `UAT_SAMPLE=on` refuses to trust the sample |
 | `VOLUME_RECORDS` | volume records (accounts and opportunities) loaded into the staging org | 5000 |

@@ -36,4 +36,5 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - run: |
           node pipeline/bin/pipe.mjs org sweep
+          node pipeline/bin/pipe.mjs org pool    # ORG_POOL warm orgs (0: none), only while a slot stays free
           node pipeline/bin/pipe.mjs org limits
