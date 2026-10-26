@@ -62,7 +62,8 @@ export function findings({ changed: all = [], added = [], files = [], read, exce
 
     if (p.endsWith(".permissionset-meta.xml")) {
       const name = p.split("/").pop().replace(/\.permissionset-meta\.xml$/, "");
-      if (!grouped.has(name)) {
+      // a Feature_<Name> switch is assigned to chosen users, not to a persona (CLAUDE.md "Metadata")
+      if (!grouped.has(name) && !name.startsWith("Feature_")) {
         say(isNew.has(p) ? "blocker" : "warning", "permset-group", p, 1, `No permission set group lists ${name}, so a user would have to be given it on its own. Add it to the group of each persona that needs it (permissionsetgroups/<Persona>.permissionsetgroup-meta.xml): users are assigned groups, and a deploy that adds a set to a group reaches everyone who holds the group.`);
       }
     }

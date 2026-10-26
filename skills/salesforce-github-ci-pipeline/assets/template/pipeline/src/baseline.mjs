@@ -112,8 +112,10 @@ export function subtractOwned(baselineDir, forceAppDir) {
   }
   for (const f of walk(baselineDir)) {
     const rel = relative(baselineDir, f);
-    if (owned.has(rel.split(/[\\/]/).join("/").replace(/^main\/default\//, ""))) { rmSync(f); removed.push(rel); continue; }
-    if (!f.endsWith(".labels-meta.xml") || !labels.size) continue;
+    // a labels file is never owned whole: force-app's CustomLabels.labels-meta.xml holds only the story's labels
+    const isLabels = f.endsWith(".labels-meta.xml");
+    if (!isLabels && owned.has(rel.split(/[\\/]/).join("/").replace(/^main\/default\//, ""))) { rmSync(f); removed.push(rel); continue; }
+    if (!isLabels || !labels.size) continue;
     const xml = readFileSync(f, "utf8");
     const kept = xml.replace(/\s*<labels>[\s\S]*?<\/labels>/g, (l) => (labels.has(l.match(/<fullName>([^<]+)/)?.[1]) ? "" : l));
     if (!/<labels>/.test(kept)) { rmSync(f); removed.push(rel); } else if (kept !== xml) writeFileSync(f, kept);

@@ -81,6 +81,13 @@ test("baseline: all of production, minus the managed, the platform's own and exc
   assert.ok(existsSync(join(t, "v/main/default/classes/Mine.cls")), "a class force-app does not hold stays");
   const left = readFileSync(join(t, "v/main/default/labels/CustomLabels.labels-meta.xml"), "utf8");
   assert.match(left, /<fullName>Mine</); assert.doesNotMatch(left, /fflib_a/, "a vendored label leaves the merged file; production's own stay");
+  // a story's own CustomLabels file shares production's path: it owns its labels, never production's whole file
+  for (const [f, body] of [["s/main/default/labels/CustomLabels.labels-meta.xml", lab("ProdOnly", "Story_Label")], ["sfa/main/default/labels/CustomLabels.labels-meta.xml", lab("Story_Label")]]) {
+    mkdirSync(join(t, f, ".."), { recursive: true }); writeFileSync(join(t, f), body);
+  }
+  assert.deepEqual(baselineMod.subtractOwned(join(t, "s"), join(t, "sfa")), []);
+  const kept = readFileSync(join(t, "s/main/default/labels/CustomLabels.labels-meta.xml"), "utf8");
+  assert.match(kept, /<fullName>ProdOnly</, "production's labels stay"); assert.doesNotMatch(kept, /Story_Label/, "the story's label goes");
   assert.deepEqual(baselineMod.dropEmpty(join(t, "b")), ["sharingRules/ScratchOrgInfo.sharingRules-meta.xml"]);
   const id = baselineMod.baselineId(join(t, "b"));
   assert.match(id, /^[0-9a-f]{10}$/);

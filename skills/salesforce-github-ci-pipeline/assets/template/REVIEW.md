@@ -59,7 +59,7 @@ review it line by line, and never ask for it to follow our Apex rules.
 ## Access (CLAUDE.md "Access")
 CI's access check already fails profiles, administrator permissions, View All / Modify All, a class with no sharing
 keyword, unexplained `without sharing`, new fields or objects no permission set grants, and new permission sets no
-permission set group lists. Its findings (warnings
+permission set group lists (a `Feature_<Name>` switch is exempt: chosen users hold it). Its findings (warnings
 too) are in the access report you are given. Review what it cannot judge:
 - **blocker**: a query or DML a user triggers that runs in system mode without a reason (`@AuraEnabled`, invocable
   Apex, a screen Flow); `without sharing` whose stated reason does not hold; a new object or field public to external users.

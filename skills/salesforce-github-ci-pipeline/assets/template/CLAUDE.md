@@ -48,7 +48,7 @@ Least privilege: a user gets exactly the access the story needs, and every grant
   (`<Thing>_Access`), and it is listed in the **permission set group** of every persona that needs it
   (`permissionsetgroups/<Persona>.permissionsetgroup-meta.xml`, one group per business role or process, such as
   `Support_Agent`). Users hold groups, never loose sets, so a deploy that adds a set to a group reaches everyone in that
-  role. CI fails a new permission set that no group lists. Assigning a group to people is an admin's job in each org (or
+  role. CI fails a new permission set that no group lists (except a `Feature_<Name>` switch, which goes to chosen users). Assigning a group to people is an admin's job in each org (or
   a User Access Policy), never a deploy step. To take a permission away from one persona, use the group's muting
   permission set rather than a second, narrower set.
 - No administrator permissions in a story's permission set (Modify All Data, View All Data, Manage Users, Author Apex,
