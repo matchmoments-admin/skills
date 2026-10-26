@@ -568,3 +568,13 @@ Every entry happened in a real run. Search this file for the error text you see.
   stories may race for one), else
   a new org. `merged.yml` gives a closed story PR's org back at once unless another PR on the branch is open. The pool
   is off by default: each pool org holds an active slot.
+
+## Solo approval (27 Oct)
+
+- **With one name in `APPROVERS`, the approver could never approve a change they pushed** (the gate's four-eyes rule),
+  so a solo developer needed an admin merge each time (#371, #382, #384-#390). `APPROVAL_MODE=solo` lets that one
+  approver's approval of their own push count once a real AI review passed on that exact commit ("not needed" is not
+  one: no AI looked at it); the approval and delivery
+  records say "solo". It fixes the gate's own rule (story PRs, sign-offs, releases). GitHub itself never lets a PR's
+  author approve it, so a maintenance PR into main that you opened still needs another reviewer or an audited admin
+  merge. The approval policy moved to `pipeline/src/approval.mjs` (pure; the gate passes it the AI review's verdict).

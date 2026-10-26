@@ -502,3 +502,23 @@ test("metrics by model: each role, provider, model and arm with cost, failures a
   assert.equal(s.ai.logRetries, 2);
   assert.match(toMarkdown(s), /\| review \| anthropic \| claude-haiku-5-5 \| declarative \| 1 \| \$0\.10 \| \$0\.10 \| 0 \| 1 \|/);
 });
+
+test("solo approval (APPROVAL_MODE=solo): the one approver's own push counts once the AI review passed on it, and the record says solo; a team never", () => {
+  const solo = { approvers: ["boss"], lastPusher: "boss", approvalMode: "solo" };
+  assert.match(gate.approvalProblem({ ...solo, aiReviewPassed: false }, "boss"), /needs a real AI review to pass/);
+  assert.match(gate.approvalProblem({ ...solo, aiReviewPassed: true, aiReviewOn: false }, "boss"), /turn on AI_REVIEW/);
+  assert.equal(gate.approvalProblem({ ...solo, aiReviewPassed: true }, "boss"), null);
+  assert.match(gate.approvalProblem({ ...solo, approvalMode: "team", aiReviewPassed: true }, "boss"), /pushed the latest change/, "team mode: four eyes");
+  assert.match(gate.approvalProblem({ ...solo, approvers: ["boss", "deputy"], aiReviewPassed: true }, "boss"), /pushed the latest change/, "two approvers: the other one approves");
+  assert.equal(gate.approvalProblem({ approvers: [], lastPusher: "dev", approvalMode: "team" }, "dev"), null, "APPROVERS unset: anyone with write access (as the handbook says)");
+  // through approval(): the AI review's verdict on the head decides, and the approval says solo
+  const head = "a".repeat(40);
+  const ctx = (reviewState, description = "AI review passed") => ({ ...solo, head, ai: { review: true }, reviews: [{ user: { login: "boss", type: "User" }, state: "APPROVED", commit_id: head, submitted_at: "2026-10-27T01:00:00Z" }],
+    statuses: reviewState ? [{ sha: head, context: gate.STATUS.review, state: reviewState, description, created_at: "2026-10-27T00:59:00Z", creator: { login: "github-actions[bot]" } }] : [] });
+  assert.equal(gate.approval(ctx(null)).ok, false, "no AI review yet");
+  assert.equal(gate.approval(ctx("success", "not needed: low risk per Jev (0.40 of 0-3)")).ok, false, "a review no AI ran is not a second pair of eyes");
+  const a = gate.approval(ctx("success"));
+  assert.ok(a.ok && a.who[0].solo);
+  assert.match(gate.approvalRecord(a), /^@boss \(approved the pull request \(solo: the AI review passed\), 2026-10-27T01:00Z\)$/);
+  assert.deepEqual(gate.readApprovalRecord(gate.approvalRecord(a)), { by: "boss", how: "approved the pull request (solo: the AI review passed)", at: "2026-10-27T01:00:00Z" });
+});

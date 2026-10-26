@@ -162,6 +162,7 @@ who does each step for any combination.
 | `CLOUD_ML_REGION` | the `vertex` provider: the Vertex AI region | no Vertex |
 
 | `APPROVERS` | the team's approvers (`@lead,@senior1`), default first: stories name an **Approver**; only that person (or another approver when none is named, or when the approver pushed the latest change) can approve, sign off or `/review-ok`, and never whoever pushed the latest change. The card says who must approve | anyone with write access approves |
+| `APPROVAL_MODE` | `solo`: with one name in `APPROVERS`, that person may approve (or sign off) a change they pushed themselves once the AI review passed on that exact commit; the approval record and the delivery record say "solo". GitHub itself never lets a PR's author approve it, so a maintenance PR into main that you opened still needs another person or an audited admin merge | `team`: nobody approves a change they pushed |
 | `SLACK_ACTIONS` | Slack notices carry the card's next options as buttons, run by the Slack actions Worker (`pipeline/slack/`; see "Slack notices") | notices carry links only |
 | `UAT_ENABLED` | releases go to UAT and need **UAT passed** | staging is the last stop before production |
 | `UAT_TESTERS` | `{"github-login": "email"}`: where **Send me a login** emails the set-password link | the person's public GitHub email |
