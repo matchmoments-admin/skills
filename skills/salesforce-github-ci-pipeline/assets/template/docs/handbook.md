@@ -262,8 +262,8 @@ story's card already says what to fix. Triage the ticket (Cause, Fix), then fix 
 `Closes #N`; the weekly metrics count tickets opened, fixed and still open.
 
 **Nothing stays stuck.** Every job ends with one step, `pipe finish <stage>`: its verdict, then the gate, the card and
-what comes next, always in that order. If GitHub drops the event that should start the next stage, the janitor's
-**reconcile** sweep (every 6 hours, or *Actions › scratch-janitor* by hand, or `pipe reconcile --pr N`) starts whatever is
+what comes next, always in that order. If GitHub drops the event that should start the next stage, the
+**reconcile** sweep (every hour, or *Actions › reconcile* by hand, or `pipe reconcile --pr N`) starts whatever is
 owed on every open PR that nothing is running for.
 
 Start from the **story card**: a ❌ row links to what failed. Every run is under

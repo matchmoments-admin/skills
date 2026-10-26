@@ -166,3 +166,34 @@ test("#237: a back-merge that changes nothing staging tests keeps the regression
   assert.match(wf, /pipe\.mjs ci staging-plan --branch/);
   assert.equal(start.stagingCarry({ git: (a) => (a[0] === "rev-list" ? "h\np1" : git(a)), host: runs({ h: [done("success", "1"), { status: "in_progress", started_at: "2" }] }) }), "h", "the head itself counts; a run in progress does not hide its pass");
 });
+
+test("a run GitHub never started (billing, 22-24 Oct) opens no ticket, and reconcile re-runs it once", async () => {
+  const { faultOf, notStarted } = await import("../src/improve.mjs");
+  const { rerunNotStarted } = await import("../src/finish.mjs");
+  const blocked = [{ id: 1, name: "static checks", conclusion: "failure", steps: [] }];
+  assert.equal(notStarted(blocked), true);
+  assert.equal(notStarted([{ ...blocked[0], steps: [{ name: "Run", conclusion: "failure" }] }]), false, "a step ran: a real failure");
+  assert.equal(notStarted([]), false);
+  assert.equal(notStarted([...blocked, { id: 2, name: "nudge", conclusion: "skipped", steps: [] }]), true, "a job that needs it ends skipped");
+  assert.equal(notStarted([{ id: 2, name: "nudge", conclusion: "skipped", steps: [] }]), false, "nothing failed");
+  assert.equal(faultOf({ name: "ci", conclusion: "failure", head_branch: "issue-9" }, blocked, () => "").whose, "ignore");
+  const runs = [
+    { id: 11, name: "ci", run_attempt: 1, event: "pull_request" },          // never started: re-run
+    { id: 12, name: "ci", run_attempt: 2, event: "pull_request" },          // re-run already: leave it
+    { id: 13, name: "scratch-janitor", run_attempt: 1, event: "schedule" }, // its next tick runs anyway
+    { id: 14, name: "ci", run_attempt: 1, event: "pull_request" },          // a real failure
+  ];
+  const calls = [];
+  const host = { repo: "o/r", api(method, path) {
+    calls.push(`${method} ${path}`);
+    if (/actions\/runs\?status=failure/.test(path)) return { workflow_runs: runs };
+    const m = path.match(/runs\/(\d+)\/jobs/);
+    if (m) return { jobs: m[1] === "14" ? [{ conclusion: "failure", steps: [{ conclusion: "failure" }] }] : blocked };
+    return {};
+  } };
+  const events = [];
+  assert.deepEqual(rerunNotStarted({ host, record: (k, d) => events.push([k, d]), now: Date.parse("2026-10-27T00:00:00Z") }), [11]);
+  assert.ok(calls.includes("POST repos/o/r/actions/runs/11/rerun"));
+  assert.ok(calls.some((c) => /created=>=2026-10-24T00:00:00/.test(c)), "the last three days only");
+  assert.deepEqual(events, [["reconcile", { rerun: 11, rerunOf: "ci" }]]);
+});

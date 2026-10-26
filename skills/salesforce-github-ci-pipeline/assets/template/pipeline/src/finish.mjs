@@ -4,8 +4,9 @@
 // journey owes next. The order used to be each workflow's own bash (15 Oct review: a lane released before its status,
 // a planned UI regression that failed to start recorded nothing).
 // reconcile() is level-triggered: on each open PR nothing is running for, it asks Standing what is owed and starts it,
-// so a dropped workflow_run (GitHub lost them for half an hour on 13 Oct) costs one janitor tick, not a stalled story.
+// so a dropped workflow_run (GitHub lost them for half an hour on 13 Oct) costs one hourly tick (reconcile.yml), not a stalled story.
 import { STATUS, standing, nudge, route } from "./gate.mjs";
+import { notStarted } from "./improve.mjs";
 
 /** What each stage posts: its result's status context, the labels people read, and the journey step after it. */
 export const STAGE = {
@@ -91,7 +92,10 @@ export async function reconcile({ host, gh, cards, next, record = () => {}, log 
     if (busy(p)) { out.push({ pr: p.number, skipped: "a run is going" }); continue; }
     const facts = host.prFacts(p.number);
     const started = [];
-    if (nudge(facts).action === "dispatch" && standing(facts).gate.state !== "success") { host.dispatch("gate.yml", { pr: String(p.number) }); started.push("gate"); }
+    // a gate production rejected stays failed on that head: re-validating the same code every tick only fails again
+    const gate = standing(facts).gate;
+    const rejected = gate.state === "failure" && /^Production rejected/.test(gate.description || "");
+    if (nudge(facts).action === "dispatch" && gate.state !== "success" && !rejected) { host.dispatch("gate.yml", { pr: String(p.number) }); started.push("gate"); }
     const r = await next("any", p.number);
     started.push(...(r?.steps || []).map((s) => s.start || s.dispatch));
     if (started.length) {
@@ -100,6 +104,28 @@ export async function reconcile({ host, gh, cards, next, record = () => {}, log 
       log(`reconcile #${p.number}: started ${started.join(", ")}`);
     }
     out.push({ pr: p.number, started });
+  }
+  return out;
+}
+
+/**
+ * Runs GitHub never started (every job failed with no steps: a failed payment, the spending limit, a runner outage)
+ * in the last three days, re-run once each (first attempts only), so a billing stop does not leave CI red on every open PR
+ * (22-24 Oct). Scheduled runs are left to their next tick. Returns the runs it re-ran.
+ */
+export function rerunNotStarted({ host, record = () => {}, log = () => {}, now = Date.now(), max = 10 }) {
+  const since = new Date(now - 72 * 3600e3).toISOString().slice(0, 19);   // a stop can last days (22-24 Oct)
+  const runs = host.api("GET", `repos/${host.repo}/actions/runs?status=failure&created=>=${since}&per_page=100`)?.workflow_runs || [];
+  const out = [];
+  for (const r of runs.filter((x) => x.run_attempt === 1 && x.event !== "schedule")) {
+    if (out.length >= max) break;
+    const jobs = host.api("GET", `repos/${host.repo}/actions/runs/${r.id}/jobs?per_page=100`)?.jobs || [];
+    if (!notStarted(jobs)) continue;
+    const res = host.api("POST", `repos/${host.repo}/actions/runs/${r.id}/rerun`);
+    if (res?.status >= 400) { log(`::warning::could not re-run ${r.name} run ${r.id}: ${res.message || res.status}`); continue; }
+    record("reconcile", { rerun: r.id, rerunOf: r.name });
+    log(`re-ran ${r.name} run ${r.id} (its jobs never started)`);
+    out.push(r.id);
   }
   return out;
 }

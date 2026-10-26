@@ -48,7 +48,7 @@ test("UI evidence is behind UI_EVIDENCE: off unless exactly true, and the workfl
   assert.match(wf, /id: evidence\n\s+if: env\.OUTCOME == 'success' && vars\.UI_EVIDENCE == 'true'/);
   assert.match(wf, /continue-on-error: true   # no screenshots never fails the verdict/);
   assert.match(readFileSync(new URL("../../e2e/support/evidence.ts", import.meta.url), "utf8"), /const dir = process\.env\.EVIDENCE_DIR;\n\s+if \(!dir\) return;/);
-  assert.match(readFileSync(new URL("../../.github/workflows/scratch-janitor.yml", import.meta.url), "utf8"), /pipe\.mjs evidence squash/);
+  assert.match(readFileSync(new URL("../../.github/workflows/reconcile.yml", import.meta.url), "utf8"), /pipe\.mjs evidence squash/);
 });
 
 test("UI evidence: only small WebP shots with safe names are published, at most 6, never a URL", () => {
@@ -167,6 +167,6 @@ test("round 1: a weak UI spec fails; evidence never boxes the page header; close
   const api = (m, path) => path.endsWith("/git/ref/heads/evidence") ? { object: { sha: "h" } } : path.includes("/git/commits/") ? { tree: { sha: "t" } }
     : { tree: [{ type: "blob", path: "story-143/abc/01-a.webp" }, { type: "blob", path: "story-150/def/01-b.webp" }, { type: "blob", path: "README.md" }] };
   assert.deepEqual(evidence.storiesOnBranch({ api, repo: "o/r" }), ["143", "150"]);
-  assert.match(readFileSync(new URL("../../.github/workflows/scratch-janitor.yml", import.meta.url), "utf8"), /issues: write/);
+  assert.match(readFileSync(new URL("../../.github/workflows/reconcile.yml", import.meta.url), "utf8"), /issues: write/);
   assert.doesNotMatch(evidence.removedComment(), /open in the scratch org|!\[/);
 });

@@ -97,6 +97,10 @@ test("shipping wiring: the gate passes the SHA and the validated tree; nothing q
   assert.match(wf("release"), /run-name: release \$\{\{ inputs.sha/);
   assert.match(wf("release"), /closeout run --tag "\$TAG" --sha "\$SHA"/);
   assert.match(wf("merged"), /--sha "\$MERGED_SHA"/);
+  assert.match(wf("reconcile"), /ship watchdog/);
+  assert.match(wf("reconcile"), /pipe\.mjs reconcile/);
+  assert.doesNotMatch(wf("reconcile"), /SF_CI_|sf-auth/, "reconcile is GitHub only: no Salesforce key");
+  assert.doesNotMatch(wf("scratch-janitor"), /ship watchdog|pipe\.mjs reconcile/, "the janitor keeps only what needs the Dev Hub");
   assert.match(wf("scratch-janitor"), /ship watchdog/);
   for (const w of ["ai-plan", "ai-spec", "ai-review"]) assert.doesNotMatch(wf(w), /SF_CI_|sf-auth/, `${w}: the context pack reads baseline-facts/, no production login`);
   assert.match(wf("prod-baseline"), /git add -A baseline baseline-facts/);
