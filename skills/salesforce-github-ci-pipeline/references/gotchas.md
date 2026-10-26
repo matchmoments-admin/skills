@@ -549,3 +549,12 @@ Every entry happened in a real run. Search this file for the error text you see.
   fetch: the workspace checkout already persists one, two Authorization headers made GitHub answer 400, and the read
   failed open (spend 0, never stopped). It now uses the checkout's credentials and warns when the log cannot be read.
   A stop sets `AI_BUDGET_STOPPED`, so the callers say "budget spent" rather than "build failed" or "changed nothing".
+
+## Org fleet (27 Oct)
+
+- **Allocation was spread over three places** (`ready()`'s capacity check and create, the fleet's limits, the janitor)
+  and a closed, unmerged story PR held its org until the 6-hour sweep. `allocate()` is now the one place an org is
+  allocated: a warm pool org when `ORG_POOL` keeps some (made ahead from the snapshot by the janitor, only while a slot
+  stays free beyond `ORG_RESERVE`; the story claims it by rewriting the Dev Hub's `ScratchOrgInfo.Description`), else
+  a new org. `merged.yml` gives a closed story PR's org back at once unless another PR on the branch is open. The pool
+  is off by default: each pool org holds an active slot.

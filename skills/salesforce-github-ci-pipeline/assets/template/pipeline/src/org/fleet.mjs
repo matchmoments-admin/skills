@@ -10,9 +10,14 @@ export const DEVHUB = "devhub";
  *   ci-*                 a CI run's temporary org older than tempHours: its run failed before its cleanup, or died
  *   issue-N / KEY-N      the story merged or closed (isStoryDone): a merged story's org that a late job rebuilt (E16)
  *   staging-S, uat-S     sprint S is not the open sprint (shipped or abandoned)
+ *   pool-N               the warm pool holds more than ORG_POOL (it was lowered): the newest go first
  */
-export function findOrphans(records, { now = new Date(), isStoryClosed = () => false, isStoryDone = isStoryClosed, openSprint = null, tempHours = 2 } = {}) {
+export function findOrphans(records, { now = new Date(), isStoryClosed = () => false, isStoryDone = isStoryClosed, openSprint = null, tempHours = 2, poolSize = null } = {}) {
   const out = [];
+  if (poolSize !== null) {
+    const pool = records.filter((r) => POOL.test(r.Description || "")).sort((a, b) => String(a.CreatedDate).localeCompare(String(b.CreatedDate)));
+    for (const r of pool.slice(Math.max(0, poolSize))) out.push({ username: r.SignupUsername, description: r.Description, why: `the warm pool is ${poolSize} (ORG_POOL)` });
+  }
   for (const r of records) {
     const d = r.Description || "";
     const age = (now - new Date(r.CreatedDate || now)) / 3600e3;
@@ -25,8 +30,20 @@ export function findOrphans(records, { now = new Date(), isStoryClosed = () => f
   return out;
 }
 
-/** Is a Description one of this pipeline's orgs? (story, staging, UAT, CI temporary, snapshot source) */
-export const isPipelineOrg = (d) => /^(issue-\d+|[A-Z][A-Z0-9]+-\d+|staging-.+|uat-.+|ci-.+|snapshot-.+)$/.test(String(d || ""));
+/** Is a Description one of this pipeline's orgs? (story, staging, UAT, CI temporary, snapshot source, warm pool) */
+export const isPipelineOrg = (d) => /^(issue-\d+|[A-Z][A-Z0-9]+-\d+|staging-.+|uat-.+|ci-.+|snapshot-.+|pool-\d+)$/.test(String(d || ""));
+/** A warm pool org: made ahead from the snapshot (ORG_POOL), claimed by the next story that needs an org. */
+export const POOL = /^pool-\d+$/;
+
+/** The pool orgs to make now: up to `size`, each only while a slot stays free beyond the reserve (a story or staging
+ *  that needs an org must never find the pool holding it). Pure: { records, size, limits, reserve } -> [description]. */
+export function poolToMake({ records = [], size = 0, limits = {}, reserve = 0 }) {
+  const have = new Set(records.map((r) => r.Description).filter((d) => POOL.test(d || "")));
+  const free = (limits.active?.remaining ?? 0) - reserve - 1, daily = limits.daily?.remaining ?? 0;
+  const out = [];
+  for (let n = 1; n <= size && out.length < Math.min(free, daily); n++) if (!have.has(`pool-${n}`)) out.push(`pool-${n}`);
+  return out;
+}
 
 /**
  * Why a new org cannot be created now, or null. Names who holds the slots (another project's orgs share the Dev Hub's
@@ -102,6 +119,20 @@ export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineD
         else log(`could not delete ${o.description} (${o.why})`);
       }
       return gone;
+    },
+    /**
+     * Claim a warm pool org for this org (a story's): its Description becomes the story's, so find() and attach() see it
+     * as the story's own. Null when the pool is empty (or off). The Dev Hub's ScratchOrgInfo Description is editable.
+     */
+    claimPool(org) {
+      if (org.kind !== "story" || !(Number(env.ORG_POOL || 0) > 0)) return null;
+      const r = active().filter((x) => POOL.test(x.Description || "")).sort((a, b) => String(a.CreatedDate).localeCompare(String(b.CreatedDate)))[0];
+      if (!r) return null;
+      const ok = sf(["data", "update", "record", "-o", DEVHUB, "-s", "ScratchOrgInfo", "-w", `SignupUsername='${r.SignupUsername}'`, "-v", `Description='${org.description}'`], { allowFail: true });
+      if (!ok) { log(`::warning::could not claim ${r.Description}: creating ${org.alias} instead`); return null; }
+      record("org", { action: "claimed", org: org.description, from: r.Description });
+      log(`claimed warm pool org ${r.Description} for ${org.alias}`);
+      return { fromSnapshot: true, pooled: r.Description };
     },
     limits() {
       const raw = sf(["limits", "api", "display", "-o", DEVHUB], { allowFail: true });

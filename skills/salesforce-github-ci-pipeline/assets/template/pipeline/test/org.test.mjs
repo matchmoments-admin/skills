@@ -749,3 +749,44 @@ test("one table says what kind of Salesforce failure an error is; every caller b
     assert.doesNotMatch(readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8"), /JwtAuthError|LICENSE_LIMIT_EXCEEDED|shape\.\{0,40\}|HTTP 50\[234\]/, `${f} keeps no failure-kind regex of its own: io.SF_FAILURES`);
   }
 });
+
+test("the warm pool (ORG_POOL): a story claims a pool org instead of creating one; the janitor makes only what a spare slot allows; lowering it deletes the newest", async () => {
+  const { poolToMake } = await import("../src/org.mjs");
+  const lim = (active, daily = 50) => ({ active: { remaining: active, max: 40 }, daily: { remaining: daily, max: 80 } });
+  assert.deepEqual(poolToMake({ records: [], size: 2, limits: lim(10) }), ["pool-1", "pool-2"]);
+  assert.deepEqual(poolToMake({ records: [{ Description: "pool-1" }], size: 2, limits: lim(10) }), ["pool-2"], "only what is missing");
+  assert.deepEqual(poolToMake({ records: [], size: 3, limits: lim(3), reserve: 1 }), ["pool-1"], "a slot stays free beyond the reserve");
+  assert.deepEqual(poolToMake({ records: [], size: 3, limits: lim(10, 1) }), ["pool-1"], "the daily allowance too");
+  assert.deepEqual(poolToMake({ records: [], size: 0, limits: lim(10) }), []);
+  const pool = [{ Description: "pool-1", SignupUsername: "p1@x", CreatedDate: "2026-10-20" }, { Description: "pool-2", SignupUsername: "p2@x", CreatedDate: "2026-10-21" }];
+  assert.deepEqual(findOrphans(pool, { poolSize: 1 }).map((o) => o.description), ["pool-2"], "the newest go first");
+  assert.deepEqual(findOrphans(pool, {}), [], "no pool size given: pool orgs are left alone");
+  // a story claims the oldest pool org: its Description becomes the story's, then the usual deploy; no new org
+  const live = pool.map((r) => ({ ...r })), calls = [];
+  const sf = (args) => {
+    calls.push(args.slice(0, 3).join(" "));
+    if (args[0] === "data" && args[1] === "update" && args.includes("ScratchOrgInfo")) {
+      const who = args[args.indexOf("-w") + 1].match(/'(.+)'/)[1], to = args[args.indexOf("-v") + 1].match(/'(.+)'/)[1];
+      live.find((r) => r.SignupUsername === who).Description = to;
+      return { success: true };
+    }
+    if (args[0] === "data" && args[1] === "query" && /FROM User/.test(args.at(-1))) return { records: [{ Title: null }] };
+    if (args[0] === "data" && args[1] === "query") return { records: live };
+    if (args[0] === "org" && args[1] === "display") return { clientId: "CID", username: "u@x" };
+    if (args[0] === "package" && args[1] === "installed") return [];
+    return {};
+  };
+  const o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], record: () => {}, env: { ORG_POOL: "2", BASELINE: "off", SEED: "off" } }).ensure("story:9");
+  assert.equal(o.created, true);
+  assert.equal(live[0].Description, "issue-9", "the oldest pool org is the story's now");
+  assert.ok(!calls.includes("org create scratch"), "no new org");
+  assert.ok(calls.includes("org login jwt") && calls.includes("project deploy start"), "logged in under the story's alias, then deployed");
+  // pool off: a story creates as before
+  const c2 = [];
+  orgRegistry({ sf: (a, x) => { c2.push(a.slice(0, 3).join(" ")); return sf(a, x); }, log: () => {}, sleep: () => {}, packages: [], record: () => {}, env: { BASELINE: "off", SEED: "off" } }).ensure("story:10");
+  assert.ok(c2.includes("org create scratch"));
+  // wiring: the janitor tops it up after its sweep; a story PR closed without merging gives its org back at once
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  assert.match(wf("scratch-janitor"), /org sweep\n\s+node pipeline\/bin\/pipe\.mjs org pool/);
+  assert.match(wf("merged"), /closed:\n[\s\S]*merged == false[\s\S]*--state open --json number[\s\S]*start followups --after delete-story-org/);
+});

@@ -141,7 +141,7 @@ jobs:
         if: always() && github.event_name == 'issues'
         run: gh issue edit "$KEY" --remove-label ai:implement >/dev/null 2>&1 || true
       - name: Make sure the work is pushed and a PR exists
-        if: always() && steps.ctx.outcome == 'success'   # plumbing holds even when the agent step reports an error
+        if: always() && steps.ctx.outcome == 'success' && env.AI_BUDGET_STOPPED != 'true'   # plumbing holds even when the agent step reports an error
         env:
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
@@ -155,7 +155,7 @@ jobs:
             gh pr create --base "$BASE" --head "$BRANCH" --title "$(git log -1 --format=%s "origin/$BRANCH")" --body-file pr-body.md ${MILESTONE:+--milestone "$MILESTONE"}
           fi
       - name: The story card says the build failed, and where to look
-        if: failure() && steps.ctx.outcome == 'success'
+        if: failure() && steps.ctx.outcome == 'success' && env.AI_BUDGET_STOPPED != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude's build" --failed --retry "comment /build to retry, or build it on the branch yourself"

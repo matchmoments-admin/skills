@@ -46,8 +46,8 @@ export function recorder({ api, repo, env = process.env, log = () => {}, sleep =
 
 // ---------------------------------------------------------------- reading the log
 /** Every event of the last `days` days: one fetch of the branch, one `git cat-file --batch` for the files. */
-export function readLog(io, { days = 28, now = new Date() } = {}) {
-  if (io.git(["fetch", "-q", "--depth=1", "origin", `+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}`], { allowFail: true }) === null) return [];   // the tip only: not every event commit
+export function readLog(io, { days = 28, now = new Date(), onFail = () => {} } = {}) {
+  if (io.git(["fetch", "-q", "--depth=1", "origin", `+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}`], { allowFail: true }) === null) { onFail(); return []; }   // the tip only: not every event commit
   const since = new Date(now - days * 24 * 3600e3).toISOString().slice(0, 10);
   const files = (io.git(["ls-tree", "-r", `origin/${BRANCH}`, "--", "events"], { allowFail: true }) || "").split("\n")
     .map((l) => l.match(/^\d+ blob ([0-9a-f]+)\t(events\/(\d{4})\/(\d{2})\/(\d{2})\/.+\.json)$/)).filter(Boolean)

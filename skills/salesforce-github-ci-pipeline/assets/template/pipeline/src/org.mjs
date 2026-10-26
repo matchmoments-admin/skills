@@ -4,17 +4,17 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { orgFor } from "./conventions.mjs";
+import { orgFor, ORG_LIFETIME_DAYS, DEFINITION } from "./conventions.mjs";
 import { PIPELINE_ROOT, sfFailure } from "./io.mjs";
 import { baselineId as idOf, composeProject, DIR as BASELINE_DIR } from "./baseline.mjs";
-import { DEVHUB, fleetMethods, shapeOutdated, capacityProblem } from "./org/fleet.mjs";
+import { DEVHUB, fleetMethods, shapeOutdated, capacityProblem, poolToMake } from "./org/fleet.mjs";
 import { dataMethods } from "./org/data.mjs";
 import { usersMethods } from "./org/users.mjs";
 import { snapshotMethods } from "./org/snapshot.mjs";
 import { setupChangesMethods } from "./org/setup-changes.mjs";
 // the helpers that moved to org/, still importable from here
 /** A Salesforce login or network failure: worth one more try, and no fault of a snapshot. */
-export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB } from "./org/fleet.mjs";
+export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB, poolToMake, POOL } from "./org/fleet.mjs";
 export { expandSeed, seedReplaceApex, VOLUME_MARKER, volumeApex, foldSeeds } from "./org/data.mjs";
 export { roleRebuild, personaOf, permissionSets, permissionSetGroups, assignAccess } from "./org/users.mjs";
 
@@ -159,8 +159,8 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       else {
         const no = refusal(org);
         if (no) throw new Error(no);
-        self.assertCapacity(org.kind === "story" ? Number(env.ORG_RESERVE || 0) : 0);
-        how = self.create(org);
+        how = self.allocate(org);
+        if (how.pooled) self.attach(org);   // a claimed pool org: logged in under the story's alias
         if (!how.fromSnapshot) { self.enableLoginAs(org.alias); self.rebuildRoles(org.alias); }   // roles before the deploy: shares attach to them
       }
       self.installPackages(org.alias);
@@ -172,6 +172,25 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       if (org.kind === "sprint") self.volume(org.alias, Number(env.VOLUME_RECORDS ?? 5000));   // staging only
       self.markReady(org.alias, want);
       return { ...org, created: !existing, completed: Boolean(existing) };
+    },
+    /**
+     * A new org for this target: a warm pool org for a story when there is one (ORG_POOL), else a slot checked against
+     * the Dev Hub's limits (a story keeps ORG_RESERVE free) and a new org. The one place an org is allocated.
+     */
+    allocate(org) {
+      const pooled = self.claimPool(org);
+      if (pooled) return pooled;
+      self.assertCapacity(org.kind === "story" ? Number(env.ORG_RESERVE || 0) : 0);
+      return self.create(org);
+    },
+    /** Make the warm pool's missing orgs (ORG_POOL; the janitor, after its sweep). Returns their descriptions. */
+    topUpPool(size = Number(env.ORG_POOL || 0)) {
+      const make = poolToMake({ records: active(), size, limits: self.limits(), reserve: Number(env.ORG_RESERVE || 0) });
+      for (const d of make) {
+        self.create({ kind: "pool", alias: d, description: d, days: ORG_LIFETIME_DAYS.story, definition: DEFINITION.story });
+        record("org", { action: "created", org: d });
+      }
+      return make;
     },
     /** The production baseline's id as it would be deployed now (null: BASELINE=off or none). */
     baselineId() { return baseline(); },

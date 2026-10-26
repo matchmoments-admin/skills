@@ -55,3 +55,36 @@ jobs:
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         # no validation id: the release validates this commit first. The same command as the gate's follow-ups.
         run: node pipeline/bin/pipe.mjs start followups --after "$AFTER" --pr "$PR" --base "$BASE" --sha "$MERGED_SHA" --story "$STORY"
+  closed:
+    # A story PR closed without merging gives its scratch org back at once (it waited for the janitor's 6-hour sweep),
+    # unless another PR on the same branch is still open (a PR replaced by a new one keeps its org).
+    if: github.event.pull_request.merged == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD: ${{ github.event.pull_request.head.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: Is it a story with no other open PR?
+        id: s
+        run: |
+          KEY=$(node pipeline/bin/pipe.mjs context --branch "$HEAD" | sed -n 's/^STORY=//p')
+          OPEN=$(gh pr list --head "$HEAD" --state open --json number --jq 'length')
+          if [ -n "$KEY" ] && [ "$OPEN" = 0 ]; then echo "story=$KEY" >> "$GITHUB_OUTPUT"; else echo "nothing to give back (story: ${KEY:-none}, open PRs on $HEAD: $OPEN)"; fi
+      - uses: ./.github/actions/sf-auth
+        if: steps.s.outputs.story != ''
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Give the story's org back
+        if: steps.s.outputs.story != ''
+        env:
+          STORY: ${{ steps.s.outputs.story }}
+          PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+        run: node pipeline/bin/pipe.mjs start followups --after delete-story-org --pr "$PR" --story "$STORY"

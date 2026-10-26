@@ -78,6 +78,7 @@ jobs:
       since: ${{ steps.pr.outputs.since }}
       skip: ${{ steps.pr.outputs.skip }}
       not-needed: ${{ steps.triage.outputs.not-needed }}
+      budget: ${{ steps.budget.outputs.stopped }}   # the story's AI budget stopped the review: the verdict says so
     steps:
       - name: The PR (validated)
         id: pr
@@ -160,6 +161,10 @@ jobs:
             Leave an inline comment for each finding (the inline comment tool, or if it is not available:
             gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments -f commit_id="${{ steps.pr.outputs.head }}" -f path=<file> -F line=<line in the new file> -f side=RIGHT -f body="[minor] ..."),
             then write the summary (ending with the verdict line) to ${{ runner.temp }}/review.md with the Write tool. Do not post it: the pipeline does, word for word (posting long text through the shell kept failing on quoting, PR #144).
+      - name: Did the story's AI budget stop the review?
+        id: budget
+        if: always()
+        run: echo "stopped=${AI_BUDGET_STOPPED:-false}" >> "$GITHUB_OUTPUT"
       - name: Post the review (agent-free; the agent writes review.md, or its final message carries the verdict)
         if: always() && steps.id.outcome == 'success'
         env:
@@ -201,7 +206,7 @@ jobs:
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           TYPESAFE_API_KEY: ${{ vars.AI_TRIAGE == 'true' && secrets.TYPESAFE_API_KEY || '' }}
         run: |
-          if [ -n "$NOT_NEEDED" ]; then V=not-needed; else V=$(node pipeline/bin/pipe.mjs verdict review "$PR" --since "${{ needs.review.outputs.since }}"); fi
+          if [ "${{ needs.review.outputs.budget }}" = true ]; then V=budget; elif [ -n "$NOT_NEEDED" ]; then V=not-needed; else V=$(node pipeline/bin/pipe.mjs verdict review "$PR" --since "${{ needs.review.outputs.since }}"); fi
           echo "verdict=$V" >> "$GITHUB_OUTPUT"
           case "$V" in pass|changes|not-needed) ;; *) echo "::warning::no verdict" ;; esac
           node pipeline/bin/pipe.mjs finish review --pr "$PR" --sha "$HEAD" --outcome "$V" --detail "$NOT_NEEDED"

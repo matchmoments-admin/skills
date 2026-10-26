@@ -454,7 +454,7 @@ test("nudge reads Standing: a sign-off that still covers the head, an approval (
   delete process.env.APPROVERS;
 });
 
-test("AI budget per story: spend from the agents' own reports; over the cap no agent starts; an approver's /budget-ok adds as much again, on record", () => {
+test("AI budget per story: spend from the agents' own reports; over the cap no agent starts; an approver's /budget-ok adds as much again, on record", async () => {
   const ev = [
     { kind: "agent", story: "12", usd: 1.6 }, { kind: "agent", story: "12", usd: 2.1 }, { kind: "agent", story: "13", usd: 9 },
     { kind: "agent", story: "12", usd: 1.3 },
@@ -474,7 +474,15 @@ test("AI budget per story: spend from the agents' own reports; over the cap no a
   assert.deepEqual(did[1], ["gh", "pr", "edit", "40", "--remove-label", "blocked"]);
   assert.deepEqual(actions.command("/budget-ok because"), { id: "budget-ok", arg: "because" });
   const a = readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8");
-  assert.match(a, /if: steps\.rules\.outputs\.stop == 'true'[\s\S]*?--add-label blocked[\s\S]*?over its AI budget/, "the stop labels and explains, then fails the job");
+  assert.match(a, /if: steps\.rules\.outputs\.stop == 'true'[\s\S]*?--add-label blocked[\s\S]*?AI_BUDGET_STOPPED=true[\s\S]*?over its AI budget/, "the stop labels and explains, then fails the job");
+  // the workspace checkout's own credentials fetch the log: a second Authorization header made GitHub refuse it (400)
+  assert.doesNotMatch(a, /GIT_CONFIG_|extraheader/);
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  assert.match(wf("ai-implement"), /Make sure the work is pushed and a PR exists\n\s+if: [^\n]*env\.AI_BUDGET_STOPPED != 'true'/, "no \"finished without pushing\" after a budget stop");
+  assert.match(wf("ai-fix"), /needs\.fix\.outputs\.budget != 'true'/, "no \"changed nothing\" after a budget stop");
+  assert.match(wf("ai-review"), /V=budget/);
+  const { verdictOf } = await import("../src/finish.mjs");
+  assert.match(verdictOf("review", { outcome: "budget" }).description, /AI budget is spent: an approver's \/budget-ok/);
 });
 
 test("metrics by model: each role, provider, model and arm with cost, failures and overruled reviews; spend by story; log collisions", () => {
