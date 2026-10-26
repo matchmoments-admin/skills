@@ -37,11 +37,20 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
 - A component users see must be on the Lightning record page they use. Ship the FlexiPage in `force-app` and activate it as the org default for the object with an `actionOverrides` entry (View, Large, Flexipage) in the object's `.object-meta.xml`, so every environment shows the same page.
 - A field users edit must also be on the page layout they use. Retrieve the layout from the scratch org first (`sf project retrieve start -o issue-12 -m "Layout:Account-Account Layout"`), add the field, and commit the layout. Scratch orgs copy production's shape, so a retrieved layout only references what production has.
 - Reference data (settings an admin changes) goes in custom metadata, not hard-coded constants.
+- A behaviour that must be switched on separately from its deploy (a gradual rollout, a quick off switch) checks a
+  custom permission `Feature_<Name>` (`FeatureManagement.checkPermission('Feature_<Name>')`) granted by a permission set
+  of the same name: on for the users who hold it, off for everyone else. Test both states with `System.runAs`.
 
 ## Access (permissions, sharing, org-wide defaults)
 Least privilege: a user gets exactly the access the story needs, and every grant can be reviewed. CI's **access check**
 (`pipe access check`) fails the build on the blockers below; the review checks the rest.
-- Grant access with **permission sets** (grouped in permission set groups for a persona), never by editing profiles.
+- Grant access with **permission sets**, never by editing profiles. A permission set is one capability
+  (`<Thing>_Access`), and it is listed in the **permission set group** of every persona that needs it
+  (`permissionsetgroups/<Persona>.permissionsetgroup-meta.xml`, one group per business role or process, such as
+  `Support_Agent`). Users hold groups, never loose sets, so a deploy that adds a set to a group reaches everyone in that
+  role. CI fails a new permission set that no group lists. Assigning a group to people is an admin's job in each org (or
+  a User Access Policy), never a deploy step. To take a permission away from one persona, use the group's muting
+  permission set rather than a second, narrower set.
 - No administrator permissions in a story's permission set (Modify All Data, View All Data, Manage Users, Author Apex,
   Customize Application...), and no View All / Modify All on an object: they ignore the sharing model.
 - New custom objects start with org-wide default **Private** (internal and external); open access with sharing rules or
@@ -55,10 +64,13 @@ Least privilege: a user gets exactly the access the story needs, and every grant
   when that matters. Screen and autolaunched Flows keep the default run mode; `SystemModeWithoutSharing` only with
   `sharing: <why>` in the Flow's description.
 - Tests run as production's CI user does: a System Administrator with **none** of the story permission sets (CI takes
-  them away from the scratch org's user for the test run). So set up and read test data in system mode
-  (`Database.insert(records, AccessLevel.SYSTEM_MODE)`, `[SELECT ... WITH SYSTEM_MODE]`), and test access inside
-  `System.runAs` with a user you create and assign the permission set to. A test that needs the running user to have a
-  story permission set passes in a scratch org and fails in production.
+  them away from the scratch org's user for the test run), but **with production's own permission sets** (it holds
+  `Timesheet_Self_Approve`, for one), which a scratch org's user does not have. So set up and read test data in system
+  mode (`Database.insert(records, AccessLevel.SYSTEM_MODE)`, `[SELECT ... WITH SYSTEM_MODE]`), and run anything that
+  depends on who the user is (field access, a custom permission, `FeatureManagement.checkPermission`) inside
+  `System.runAs` with a user you create and assign exactly the permission sets the case needs, mock unit tests included.
+  A test that relies on the running user's permissions, either way, passes in a scratch org and fails in production
+  (story #381).
 - The permission test proves a boundary: a user **without** the story's permission set is refused (or does not see the
   field), and a user with it succeeds. A test that passes only because the org-wide default is Public Read/Write
   proves nothing; create the record as another user, or assert on access (`UserRecordAccess`, `Schema` describe).

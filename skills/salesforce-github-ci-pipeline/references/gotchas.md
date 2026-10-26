@@ -488,6 +488,26 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **The fix round edited code-analyzer.yml in the story**, and CI refused the PR. The agents were told only "not
   .github/ or pipeline/"; they now get the full `PIPELINE_PATHS` list and report a pipeline-config failure instead.
 
+- **The first baseline refresh after FFLib reached production put all 141 vendored files into baseline/** (PR #383, a
+  false drift that would have deployed every class twice into scratch orgs). `subtractOwned` matched only the same
+  path under `force-app/main/default`; it now matches a component anywhere under force-app (a vendored library's own
+  layout) and subtracts custom labels one by one, since production returns them as one merged file.
+
+## Release 2027-w02 (25 Oct)
+
+- **Mock unit tests passed in CI and failed in production validation**: production's CI user holds production's own
+  permission sets (`Timesheet_Self_Approve`, a custom permission the handler checks), and scratch users do not. Tests
+  of code that reads the running user's permissions run `System.runAs` a persona, mock tests included (story #381).
+- **The approver's own push dead-ends four eyes**: the gate ignores an approval from the newest human pusher, so an
+  agent working under the approver's account must leave story code to `/build` or `/fix`. With one approver, the way
+  out is an audited admin merge.
+- **Permission set assignments are data, and nobody held the story's set in production**: `Case_Escalated_Access`
+  shipped with #343 but no production user could see the field. Users now hold a **persona permission set group** (one per
+  business role or process); the access check fails a new permission set no group lists, tester and UI-test logins
+  assign groups (waiting for `Status = 'Updated'`: a deploy leaves a changed group recalculating), Apex tests use
+  `PermissionSetGroupId` with `Test.calculatePermissionSetGroup`, and the baseline captures `PermissionSetGroup` and
+  `MutingPermissionSet` (Salesforce's own `force__` groups are filtered by namespace). Assigning a group to people stays
+  an admin step, or a User Access Policy (deployable metadata, switched on once per org).
 
 ## Artifacts (26 Oct)
 

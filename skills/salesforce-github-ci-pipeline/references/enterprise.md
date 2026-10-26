@@ -121,7 +121,38 @@ UAT signer, the release tag and production validation id, and hours per stage. A
 fields, so a GitHub or Jira report (or a script) can chart lead time and approvals without the pipeline. The weekly
 metrics document has median and p90 minutes per stage.
 
+## 6d. Access: persona permission set groups
+
+- Permission sets are capabilities (`<Thing>_Access`), and each persona (business role or process) has one
+  **permission set group** listing the sets it needs. The access check fails a new set that no group lists.
+- Assignments are data, so a deploy never gives anyone access. At onboarding, ask who in production gets which group,
+  and whether to switch on **User Access Policies** (Setup > User Management Settings). Policies are
+  `UserAccessPolicy` metadata, so they can be deployed from the repo and assign groups by user fields (department,
+  role, profile) when a user is created or changed.
+- After a release that adds a set to a group, check that the group reads `Updated` (Setup > Permission Set Groups), not
+  `Failed`.
+
+## 6e. Checking a release in production (a smoke check)
+
+The release validates every test in production, but no person has seen the change yet. To see a story work there
+without creating users (production licences cost money), run its Playwright spec as the CI user:
+
+1. Give the CI user the story's permission set for the run only. Remove it in a `trap ... EXIT` or `finally`, because
+   while the CI user holds a story set, production validations of other changes test the wrong access.
+2. `SCRATCH_ALIAS=<prod alias> npx playwright test <spec> --retries=0`, using `login(page)` (not `loginAs`, which creates
+   persona users). Name created records `PIPELINE SMOKE ...` and delete them in `afterAll`.
+3. Screenshot the field's layout section (`records-record-layout-section` filtered by the field), not the page: on a
+   production record page the Details panel is often below the fold.
+4. Check afterwards that no `PIPELINE SMOKE` record and no extra assignment is left.
+
+Release 2027-w02 checked FFLib's Escalated flag this way: a High priority Phone case read ✓ and an Email case didn't.
+It also found that no production user held the story's permission set, which is why §6d exists.
+
 ## Next steps (not built yet)
+- An automatic smoke check after each release (6e), once there is a production test user with the persona groups.
+- Solo mode: with one name in `APPROVERS`, the approver's own push should not dead-end the gate (today: an audited
+  admin merge).
+- Separate credentials for production and for scratch and sandbox orgs (today one JWT key does both).
 
 - Parallel release trains (one staging per train) for teams shipping more than one release at a time.
 - Secrets from a company vault over OIDC instead of GitHub secrets.

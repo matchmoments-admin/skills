@@ -216,9 +216,43 @@ export async function loginAs(
           values.join(" ")
         ]).id
     ) as string;
-    for (const ps of sets.length
+    // a persona names permission set groups (one per business role or process) or, before them, loose sets
+    const list = sets.map((n) => `'${n}'`).join(",");
+    let groups: { Id: string; DeveloperName: string; Status: string }[] =
+      sets.length
+        ? q(
+            `SELECT Id, DeveloperName, Status FROM PermissionSetGroup WHERE DeveloperName IN (${list})`
+          )
+        : [];
+    // a deploy that changes a group leaves it Outdated or Updating, and an assignment then fails: wait for Updated
+    for (
+      let i = 0;
+      i < 12 && groups.some((g) => !["Updated", "Failed"].includes(g.Status));
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 10_000));
+      groups = q(
+        `SELECT Id, DeveloperName, Status FROM PermissionSetGroup WHERE DeveloperName IN (${list})`
+      );
+    }
+    for (const g of groups)
+      sfJson([
+        "data",
+        "create",
+        "record",
+        "-o",
+        alias,
+        "-s",
+        "PermissionSetAssignment",
+        "-v",
+        `AssigneeId=${id} PermissionSetGroupId=${g.Id}`
+      ]);
+    const loose = sets.filter(
+      (n) => !groups.some((g) => g.DeveloperName === n)
+    );
+    for (const ps of loose.length
       ? q(
-          `SELECT Id FROM PermissionSet WHERE Name IN (${sets.map((n) => `'${n}'`).join(",")})`
+          `SELECT Id FROM PermissionSet WHERE Name IN (${loose.map((n) => `'${n}'`).join(",")})`
         )
       : [])
       sfJson([

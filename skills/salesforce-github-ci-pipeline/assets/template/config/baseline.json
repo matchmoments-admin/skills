@@ -5,7 +5,7 @@
     "CustomObject", "CustomField", "ValidationRule", "RecordType", "ListView", "WebLink", "CompactLayout", "FieldSet", "BusinessProcess",
     "Layout", "FlexiPage", "CustomApplication", "CustomTab", "QuickAction",
     "Flow", "Workflow", "DuplicateRule", "MatchingRules", "SharingRules",
-    "PermissionSet", "CustomPermission", "CustomLabel", "CustomMetadata", "GlobalValueSet", "CustomNotificationType",
+    "PermissionSet", "PermissionSetGroup", "MutingPermissionSet", "CustomPermission", "CustomLabel", "CustomMetadata", "GlobalValueSet", "CustomNotificationType",
     "Report", "ReportType", "Dashboard", "EmailTemplate",
     "Queue", "Group",
     "NamedCredential", "ExternalCredential", "ExternalDataSource", "ExternalServiceRegistration", "RemoteSiteSetting", "CspTrustedSite",

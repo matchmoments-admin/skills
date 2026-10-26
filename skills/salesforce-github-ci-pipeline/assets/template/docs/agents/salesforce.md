@@ -47,8 +47,9 @@ add the new field and copy (story 1), move every reference (story 2..n), delete 
 The loop is red → green, but each run is a deploy plus a scratch-org test run (minutes, holding the org's lane), so:
 
 - Batch per acceptance criterion: write the tests for one criterion, deploy, run them (`--tests Class.method`), then the code.
-- Tests run as production's CI user does: no story permission set. Set up and read data in system mode
-  (`AccessLevel.SYSTEM_MODE`, `WITH SYSTEM_MODE`); test access only inside `System.runAs`.
+- Tests run as production's CI user does: no story permission set, but production's own ones. Set up and read data in
+  system mode (`AccessLevel.SYSTEM_MODE`, `WITH SYSTEM_MODE`); test access, and any logic that checks a permission,
+  only inside `System.runAs` a user created in the test.
 - Every class: positive, negative, permission (refused without the permission set) and bulk (200 records) cases.
 - Mocks: `fflib_ApexMocks` for the logic's collaborators (selectors, services, the unit of work), `Test.setMock` for
   callouts, builders for data; seam tests still use the database. Structure, the 85% minimum and the builder pattern:
@@ -97,6 +98,23 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   depends on field access, such as `describeReport` groupings on a custom field, `Schema...isAccessible()` or a query
   `WITH USER_MODE`, must run inside `System.runAs` a user who holds the permission set. Otherwise it passes in your
   story org and fails in CI (PR #144: `List index out of bounds: 0` on `getGroupingsDown()[0]`).
+- **Production's CI user holds production's own permission sets; a scratch org's user does not.** Code that waives a
+  rule for a custom permission (`FeatureManagement.checkPermission('Timesheet_Approve_Own')`) takes that path in
+  production validation only. Run such tests, mock unit tests too, as a persona created in the test with only the
+  permission sets the case needs (story #381: `TimesheetTriggerMockTest` passed in CI and failed two cases in the
+  release 2027-w02 validation, because the CI user holds `Timesheet_Self_Approve`).
+- **Permission set groups recalculate after a deploy.** A deploy that changes a group leaves it `Outdated` or
+  `Updating` (seconds, sometimes longer), and assigning it fails until its `Status` is `Updated`; `Failed` needs
+  Setup > Permission Set Groups > Recalculate. The pipeline's tester and UI-test logins wait for `Updated`. In Apex, assign a
+  group with `new PermissionSetAssignment(AssigneeId = u.Id, PermissionSetGroupId = g.Id)` and call
+  `Test.calculatePermissionSetGroup(g.Id)` once, in `@TestSetup`, when the group's `Status` is not `Updated`. A group
+  can have one muting permission set, which removes permissions only inside that group (access from elsewhere still
+  applies), so it is not a deny. Assigning groups to people automatically, by user fields, is a **User Access Policy**
+  (`UserAccessPolicy` metadata; switched on once in Setup > User Management Settings), never a script.
+- **Feature switches** are custom permissions named `Feature_<Name>`, each granted by a permission set of the same
+  name; the code checks `FeatureManagement.checkPermission`. Assigning the set turns it on for a user, so the PR's
+  "How to revert" can be "remove the assignment" instead of a deploy. A switch the whole org shares (no per-user
+  rollout) is a custom metadata record instead.
 - **Everything a story needs reaches production by the deploy: no run-once scripts.** Nothing runs a `data/*.apex` or
   "run this after the deploy" step in UAT or production. Some things cannot be deployed as metadata, notably a
   **public group's members**. Design around them: share a report folder (`folderShares`), a sharing rule or a queue with
@@ -157,7 +175,7 @@ Summary: the smallest metadata view, for example a tree of what changed per obje
 (`Account → Sales_Region__c (picklist) → Sales_Region_Access → Account Layout`) or a Flow's decision path. Evidence: the
 Apex and Flow test results for this change (class.method pass/fail, coverage of changed classes) and what the UI test
 saw (link the story's **UI evidence** comment when there is one); before and after for a fix. Merge Danger: one-way doors above; blast radius in Salesforce terms (one object, every
-user of a page, every Opportunity save). Keep `Closes #N` and the test plan.
+user of a page, every Opportunity save). Start with `Story #N` (never `Closes #N`) and keep the test plan, Risk and How to revert.
 
 ## Review (`code-review`)
 
