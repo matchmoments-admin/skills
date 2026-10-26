@@ -71,6 +71,16 @@ test("baseline: all of production, minus the managed, the platform's own and exc
     mkdirSync(join(t, f, ".."), { recursive: true }); writeFileSync(join(t, f), body);
   }
   assert.deepEqual(baselineMod.subtractOwned(join(t, "b"), join(t, "fa")), ["objects/Account/fields/Tier__c.field-meta.xml"], "one owner: force-app");
+  // a vendored library keeps its own layout, and production merges every custom label into one file (release v2026.10.25-26)
+  const lab = (...ns) => `<CustomLabels>${ns.map((n) => `\n    <labels>\n        <fullName>${n}</fullName>\n    </labels>`).join("")}\n</CustomLabels>`;
+  for (const [f, body] of [["v/main/default/classes/fflib_Answer.cls", "x"], ["v/main/default/classes/Mine.cls", "x"], ["v/main/default/labels/CustomLabels.labels-meta.xml", lab("fflib_a", "Mine")],
+    ["v/main/default/labels/Other.labels-meta.xml", lab("fflib_b")], ["vfa/vendor/fflib-apex-mocks/main/classes/fflib_Answer.cls", "x"], ["vfa/vendor/fflib-apex-common/main/labels/fflib-CustomLabels.labels-meta.xml", lab("fflib_a", "fflib_b")]]) {
+    mkdirSync(join(t, f, ".."), { recursive: true }); writeFileSync(join(t, f), body);
+  }
+  assert.deepEqual(baselineMod.subtractOwned(join(t, "v"), join(t, "vfa")).sort(), ["main/default/classes/fflib_Answer.cls", "main/default/labels/Other.labels-meta.xml"], "vendored classes and all-vendored label files go");
+  assert.ok(existsSync(join(t, "v/main/default/classes/Mine.cls")), "a class force-app does not hold stays");
+  const left = readFileSync(join(t, "v/main/default/labels/CustomLabels.labels-meta.xml"), "utf8");
+  assert.match(left, /<fullName>Mine</); assert.doesNotMatch(left, /fflib_a/, "a vendored label leaves the merged file; production's own stay");
   assert.deepEqual(baselineMod.dropEmpty(join(t, "b")), ["sharingRules/ScratchOrgInfo.sharingRules-meta.xml"]);
   const id = baselineMod.baselineId(join(t, "b"));
   assert.match(id, /^[0-9a-f]{10}$/);

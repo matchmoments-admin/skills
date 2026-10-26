@@ -22,7 +22,9 @@ finding. Comments on the story and its spec since they were written win over the
   (`docs/agents/apex-testing.md`).
 - **major**: new logic (a domain, service or invocable) with no DML-free unit test; a selector or domain mock without its
   `sObjectType()` stub; matchers mixed with plain values in one `when`/`verify`; a permission tested with a mock instead
-  of `System.runAs`.
+  of `System.runAs`; a test (mock or seam) of code that checks a custom permission or field access, run as the default
+  user instead of inside `System.runAs` a persona created in the test (production's CI user holds production's own
+  permission sets, story #381).
 - **minor**: naming, duplication, comment quality, small clarity issues; an `Assert` without a message; record fields
   listed inline in a test where an `<Object>Builder` exists (or none was added for a new object under test).
 

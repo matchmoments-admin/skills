@@ -98,12 +98,25 @@ export function dropEmpty(baselineDir) {
   return removed;
 }
 
-/** Remove from a baseline tree every file force-app owns (same path under main/default), then empty folders. */
+/**
+ * Remove from a baseline tree every component force-app owns, wherever force-app keeps it: main/default or a vendored
+ * library's own layout (force-app/vendor/fflib-apex-mocks/main/classes/X.cls owns classes/X.cls). Custom labels come
+ * from production as one merged file, so they are subtracted label by label. Returns the removed paths.
+ */
 export function subtractOwned(baselineDir, forceAppDir) {
-  const removed = [];
+  const owned = new Set(), labels = new Set(), removed = [];
+  for (const f of walk(forceAppDir)) {
+    const parts = relative(forceAppDir, f).split(/[\\/]/);
+    for (let i = 0; i < parts.length - 1; i++) owned.add(parts.slice(i).join("/"));   // every suffix: <type folder>/.../<file>
+    if (f.endsWith(".labels-meta.xml")) for (const [, n] of readFileSync(f, "utf8").matchAll(/<fullName>([^<]+)<\/fullName>/g)) labels.add(n);
+  }
   for (const f of walk(baselineDir)) {
     const rel = relative(baselineDir, f);
-    if (existsSync(join(forceAppDir, rel))) { rmSync(f); removed.push(rel); }
+    if (owned.has(rel.split(/[\\/]/).join("/").replace(/^main\/default\//, ""))) { rmSync(f); removed.push(rel); continue; }
+    if (!f.endsWith(".labels-meta.xml") || !labels.size) continue;
+    const xml = readFileSync(f, "utf8");
+    const kept = xml.replace(/\s*<labels>[\s\S]*?<\/labels>/g, (l) => (labels.has(l.match(/<fullName>([^<]+)/)?.[1]) ? "" : l));
+    if (!/<labels>/.test(kept)) { rmSync(f); removed.push(rel); } else if (kept !== xml) writeFileSync(f, kept);
   }
   return removed;
 }
