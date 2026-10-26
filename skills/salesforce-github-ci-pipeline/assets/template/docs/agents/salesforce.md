@@ -103,6 +103,14 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   production validation only. Run such tests, mock unit tests too, as a persona created in the test with only the
   permission sets the case needs (story #381: `TimesheetTriggerMockTest` passed in CI and failed two cases in the
   release 2027-w02 validation, because the CI user holds `Timesheet_Self_Approve`).
+- **Permission set groups recalculate after a deploy.** A deploy that changes a group leaves it `Outdated` or
+  `Updating` (seconds, sometimes longer), and assigning it fails until its `Status` is `Updated`; `Failed` needs
+  Setup > Permission Set Groups > Recalculate. The pipeline's tester and UI-test logins wait for `Updated`. In Apex, assign a
+  group with `new PermissionSetAssignment(AssigneeId = u.Id, PermissionSetGroupId = g.Id)` and call
+  `Test.calculatePermissionSetGroup(g.Id)` once, in `@TestSetup`, when the group's `Status` is not `Updated`. A group
+  can have one muting permission set, which removes permissions only inside that group (access from elsewhere still
+  applies), so it is not a deny. Assigning groups to people automatically, by user fields, is a **User Access Policy**
+  (`UserAccessPolicy` metadata; switched on once in Setup > User Management Settings), never a script.
 - **Feature switches** are custom permissions named `Feature_<Name>`, each granted by a permission set of the same
   name; the code checks `FeatureManagement.checkPermission`. Assigning the set turns it on for a user, so the PR's
   "How to revert" can be "remove the assignment" instead of a deploy. A switch the whole org shares (no per-user

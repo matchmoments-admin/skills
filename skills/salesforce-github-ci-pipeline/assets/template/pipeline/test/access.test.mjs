@@ -73,6 +73,15 @@ test("access check: a new field or object needs a permission set; a new object s
   assert.deepEqual(access.findings({ ...granted, changed: [field], added: [field] }), []);
 });
 
+test("access check: a permission set belongs to a persona's group: a new one is a blocker, a changed loose one a warning", () => {
+  const ps = (n) => `${O}/permissionsets/${n}.permissionset-meta.xml`, psg = `${O}/permissionsetgroups/Support_Agent.permissionsetgroup-meta.xml`;
+  const r = repo({ [ps("Case_Access")]: "<PermissionSet/>", [ps("Visit_Access")]: "<PermissionSet/>", [ps("Old_Access")]: "<PermissionSet/>",
+    [psg]: "<PermissionSetGroup><label>Support Agent</label><permissionSets>Case_Access</permissionSets></PermissionSetGroup>" });
+  const f = access.findings({ ...r, changed: [ps("Case_Access"), ps("Visit_Access"), ps("Old_Access")], added: [ps("Case_Access"), ps("Visit_Access")] });
+  assert.deepEqual(f.map((x) => `${x.level} ${x.rule} ${x.file.split("/").pop()}`), ["blocker permset-group Visit_Access.permissionset-meta.xml", "warning permset-group Old_Access.permissionset-meta.xml"]);
+  assert.match(f[0].message, /Add it to the group of each persona/);
+});
+
 test("access check: user-facing queries in user mode, and a permission test that runs as a limited user", () => {
   const ctl = `${O}/classes/Ctl.cls`;
   const r = repo({ [ctl]: "public with sharing class Ctl {\n @AuraEnabled public static Integer n() { return [SELECT COUNT() FROM Case]; }\n}",

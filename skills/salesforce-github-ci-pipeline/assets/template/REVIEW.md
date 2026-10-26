@@ -22,7 +22,7 @@ finding. Comments on the story and its spec since they were written win over the
   (`docs/agents/apex-testing.md`).
 - **major**: new logic (a domain, service or invocable) with no DML-free unit test; a selector or domain mock without its
   `sObjectType()` stub; matchers mixed with plain values in one `when`/`verify`; a permission tested with a mock instead
-  of `System.runAs`; a test (mock or seam) of code that checks a custom permission or field access, run as the default
+  of `System.runAs`; a persona with a permission set group tested with its loose sets instead of the group; a test (mock or seam) of code that checks a custom permission or field access, run as the default
   user instead of inside `System.runAs` a persona created in the test (production's CI user holds production's own
   permission sets, story #381).
 - **minor**: naming, duplication, comment quality, small clarity issues; an `Assert` without a message; record fields
@@ -58,13 +58,16 @@ review it line by line, and never ask for it to follow our Apex rules.
 
 ## Access (CLAUDE.md "Access")
 CI's access check already fails profiles, administrator permissions, View All / Modify All, a class with no sharing
-keyword, unexplained `without sharing`, and new fields or objects no permission set grants. Its findings (warnings
+keyword, unexplained `without sharing`, new fields or objects no permission set grants, and new permission sets no
+permission set group lists. Its findings (warnings
 too) are in the access report you are given. Review what it cannot judge:
 - **blocker**: a query or DML a user triggers that runs in system mode without a reason (`@AuraEnabled`, invocable
   Apex, a screen Flow); `without sharing` whose stated reason does not hold; a new object or field public to external users.
 - **major**: a new custom object not Private with no reason in the plan; a permission test that would pass with no
   permission set at all (it relies on a Public Read/Write org-wide default or a system-context Flow and asserts nothing
-  about access); a permission set broader than the story needs (edit where read is enough, objects it never uses).
+  about access); a permission set broader than the story needs (edit where read is enough, objects it never uses); a
+  permission set added to a group whose persona the story does not name, or a second narrower set where the group's
+  muting permission set would do.
 - **minor**: a permission set without a description of who it is for.
 
 ## How to report
