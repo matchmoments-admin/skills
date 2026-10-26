@@ -516,3 +516,13 @@ Every entry happened in a real run. Search this file for the error text you see.
   run, each with the front-door URL and the `sid` cookie, kept 90 days. CI now records no traces or videos at all
   (`playwright.config.ts`), the uploads exclude them as well, and report artifacts keep 14 days. UI evidence is
   unaffected: WebP, at most 100 KB a shot, on the squashed `evidence` branch.
+
+## Scale review (27 Oct)
+
+- **The janitor "failed" 67% of its runs, and none was its code**: GitHub refused to start any job for two days (a failed
+  payment, then the spending limit), and every run showed red with zero steps and no log. Reconcile now lives in its own
+  hourly workflow with no Salesforce key, re-runs once any run whose jobs all failed with no steps, and improve opens no
+  ticket for one. The janitor keeps only the Dev Hub sweep.
+- **Reconcile re-validated a release production had rejected, every 6 hours**: it re-ran the gate whenever the gate
+  status was not success, and production validation leaves it failed on the same head. A gate "Production rejected it"
+  now waits for a new head; any other failed gate (a dropped approval event) is still re-run.

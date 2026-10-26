@@ -221,7 +221,7 @@ export async function publish({ dir, key, sha, pr, orgUrl, host, tracker, record
 }
 
 /**
- * The janitor's sweep (pipe evidence squash): a closed story's comment is rewritten FIRST, and only then are its
+ * The hourly sweep (reconcile.yml: pipe evidence squash): a closed story's comment is rewritten FIRST, and only then are its
  * screenshots deleted (a failed rewrite keeps them for the next sweep). Returns what it says.
  */
 export async function sweep({ host, tracker, log = () => {} }) {
