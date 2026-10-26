@@ -56,13 +56,8 @@ jobs:
         with: { ref: main, fetch-depth: 0 }
       - name: Trusted pipeline code (main)
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
-      - uses: ./.pipeline/.github/actions/sf-auth   # read-only use: production's org-wide defaults for the context pack
-        with:
-          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
-          username: ${{ secrets.SF_CI_USERNAME }}
-          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: The code the story will be built on, and the story (with any earlier plan, the answers and the context pack)
         id: ctx
         run: |

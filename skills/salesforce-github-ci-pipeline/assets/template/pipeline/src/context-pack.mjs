@@ -4,7 +4,8 @@
 // already does it, a permission set to extend, an org-wide default the change relies on), at a fixed small size
 // however large the repo grows. Pure: pack() takes paths, a reader and the sharing model. Production's own customisations
 // (the production baseline, baseline/) are listed too, marked: an agent that only saw force-app missed them.
-import { DIR as BASELINE } from "./baseline.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { DIR as BASELINE, SHARING_FACTS } from "./baseline.mjs";
 import { isVendored } from "./conventions.mjs";
 
 /** Standard objects worth recognising in a story's words (custom objects come from the repo). */
@@ -85,7 +86,7 @@ export function pack({ files, production = [], read, objects, owd = {}, branch =
     const ours = inventory(files, read, o), theirs = inventory(production, read, o);
     const s = owd[o];
     lines.push(`### ${o}`,
-      `- Org-wide default in production: ${s ? `internal **${s.internal}**, external **${s.external}**${/ReadWrite|Read/.test(s.internal) ? " (users see records they do not own: a test of access must not rely on this)" : ""}` : "unknown (not logged in to production, or not an object)"}`);
+      `- Org-wide default in production: ${s ? `internal **${s.internal}**, external **${s.external}**${/ReadWrite|Read/.test(s.internal) ? " (users see records they do not own: a test of access must not rely on this)" : ""}` : "unknown (not in baseline-facts/sharing.json: run prod-baseline, or not an object)"}`);
     for (const [k, label] of ROWS) {
       const all = [...ours[k], ...theirs[k].map((n) => `${n} (production)`)];
       if (all.length || ALWAYS.has(k)) lines.push(`- ${label}: ${list(all)}`);
@@ -95,20 +96,19 @@ export function pack({ files, production = [], read, objects, owd = {}, branch =
   return lines.join("\n");
 }
 
-/** The SOQL for production's org-wide defaults of these objects (EntityDefinition, read-only). */
-export const owdQuery = (objects) =>
-  `SELECT QualifiedApiName, InternalSharingModel, ExternalSharingModel FROM EntityDefinition WHERE QualifiedApiName IN (${objects.map((o) => `'${o.replace(/[^A-Za-z0-9_]/g, "")}'`).join(",")})`;
+/** Production's org-wide defaults as the last baseline refresh captured them ({} before the first one). Read beside
+ *  the pipeline's own code (main's, in .pipeline/ in CI): a fact about production now, not about the story's branch. */
+export function capturedSharing(path = new URL(`../../${SHARING_FACTS}`, import.meta.url)) {
+  try { return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {}; } catch { return {}; }
+}
 
-export const owdFrom = (records = []) =>
-  Object.fromEntries(records.map((r) => [r.QualifiedApiName, { internal: r.InternalSharingModel, external: r.ExternalSharingModel }]));
-
-/** The pack for a story's text, from this checkout and (when logged in) production's org-wide defaults. */
-export function packForCheckout(io, { text, base = null, log = () => {} }) {
+/** The pack for a story's text, from this checkout and the captured production facts: no production login. */
+export function packForCheckout(io, { text, base = null, log = () => {}, sharing = capturedSharing() }) {
   const { files: all, read, changed } = io.sourceFiles({ base });
   const files = all.filter((p) => !isVendored(p));   // a vendored library's classes are not "the codebase" to extend
   const production = io.sourceFiles({ dirs: [BASELINE] }).files;
   const objects = objectsFor({ text, changed, files: [...files, ...production] });
-  const owd = objects.length ? owdFrom(io.sf(["data", "query", "-o", "devhub", "-q", owdQuery(objects)], { allowFail: true })?.records) : {};
+  const owd = Object.fromEntries(objects.filter((o) => sharing[o]).map((o) => [o, sharing[o]]));
   log(`context pack: ${objects.join(", ") || "no objects"}; sharing model for ${Object.keys(owd).length}; ${production.length} production files`);
   return pack({ files, production, read, objects, owd, branch: io.git(["rev-parse", "--abbrev-ref", "HEAD"], { allowFail: true }) || "" });
 }

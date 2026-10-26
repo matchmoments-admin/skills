@@ -516,3 +516,11 @@ Every entry happened in a real run. Search this file for the error text you see.
   run, each with the front-door URL and the `sid` cookie, kept 90 days. CI now records no traces or videos at all
   (`playwright.config.ts`), the uploads exclude them as well, and report artifacts keep 14 days. UI evidence is
   unaffected: WebP, at most 100 KB a shot, on the squashed `evidence` branch.
+
+## Context pack without production (27 Oct)
+
+- **Plan, spec and review logged in to production only to read org-wide defaults** (4–6 production logins per story,
+  each a job holding the production key). The baseline refresh now captures every customisable object's internal and
+  external default into `baseline-facts/sharing.json` (beside `baseline/`, never deployed, not in the baseline's id), and
+  the pack reads main's copy beside the pipeline code. Standard objects' object files exist in `baseline/` only where
+  production differs from a new org, so they could not answer it.
