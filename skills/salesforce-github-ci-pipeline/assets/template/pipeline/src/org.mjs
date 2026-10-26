@@ -184,13 +184,19 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       return self.create(org);
     },
     /** Make the warm pool's missing orgs (ORG_POOL; the janitor, after its sweep). Returns their descriptions. */
-    topUpPool(size = Number(env.ORG_POOL || 0)) {
-      const make = poolToMake({ records: active(), size, limits: self.limits(), reserve: Number(env.ORG_RESERVE || 0) });
-      for (const d of make) {
-        self.create({ kind: "pool", alias: d, description: d, days: ORG_LIFETIME_DAYS.story, definition: DEFINITION.story });
-        record("org", { action: "created", org: d });
+    topUpPool(size = Number(env.ORG_POOL) || 0) {
+      // pool orgs come from the snapshot only: one from production's shape would skip the roles setup a claim relies on
+      if (!size || !self.currentSnapshot()) return [];
+      const made = [];
+      for (const d of poolToMake({ records: active(), size, limits: self.limits(), reserve: Number(env.ORG_RESERVE || 0) })) {
+        try {
+          const how = self.create({ kind: "pool", alias: d, description: d, days: ORG_LIFETIME_DAYS.story, definition: DEFINITION.story });
+          if (!how.fromSnapshot) { self.removeTagged(d); log(`::warning::${d} came from production's shape, not the snapshot: deleted`); continue; }
+          record("org", { action: "created", org: d });
+          made.push(d);
+        } catch (e) { log(`::warning::could not make ${d}: ${String(e.message).split("\n")[0]}`); }
       }
-      return make;
+      return made;
     },
     /** The production baseline's id as it would be deployed now (null: BASELINE=off or none). */
     baselineId() { return baseline(); },

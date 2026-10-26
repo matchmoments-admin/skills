@@ -756,11 +756,13 @@ test("the warm pool (ORG_POOL): a story claims a pool org instead of creating on
   assert.deepEqual(poolToMake({ records: [], size: 2, limits: lim(10) }), ["pool-1", "pool-2"]);
   assert.deepEqual(poolToMake({ records: [{ Description: "pool-1" }], size: 2, limits: lim(10) }), ["pool-2"], "only what is missing");
   assert.deepEqual(poolToMake({ records: [], size: 3, limits: lim(3), reserve: 1 }), ["pool-1"], "a slot stays free beyond the reserve");
-  assert.deepEqual(poolToMake({ records: [], size: 3, limits: lim(10, 1) }), ["pool-1"], "the daily allowance too");
+  assert.deepEqual(poolToMake({ records: [], size: 3, limits: lim(10, 2) }), ["pool-1"], "the daily allowance too, never its last org");
   assert.deepEqual(poolToMake({ records: [], size: 0, limits: lim(10) }), []);
   const pool = [{ Description: "pool-1", SignupUsername: "p1@x", CreatedDate: "2026-10-20" }, { Description: "pool-2", SignupUsername: "p2@x", CreatedDate: "2026-10-21" }];
-  assert.deepEqual(findOrphans(pool, { poolSize: 1 }).map((o) => o.description), ["pool-2"], "the newest go first");
-  assert.deepEqual(findOrphans(pool, {}), [], "no pool size given: pool orgs are left alone");
+  const now = new Date("2026-10-22T00:00:00Z");
+  assert.deepEqual(findOrphans(pool, { poolSize: 1, now }).map((o) => o.description), ["pool-2"], "the newest go first");
+  assert.deepEqual(findOrphans(pool, { now }), [], "no pool size given: pool orgs are left alone");
+  assert.deepEqual(findOrphans(pool, { poolSize: 2, now: new Date("2026-10-23T12:00:00Z") }).map((o) => o.description), ["pool-1"], "older than 72 h: a fresh one is made");
   // a story claims the oldest pool org: its Description becomes the story's, then the usual deploy; no new org
   const live = pool.map((r) => ({ ...r })), calls = [];
   const sf = (args) => {
@@ -778,7 +780,7 @@ test("the warm pool (ORG_POOL): a story claims a pool org instead of creating on
   };
   const o = orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], record: () => {}, env: { ORG_POOL: "2", BASELINE: "off", SEED: "off" } }).ensure("story:9");
   assert.equal(o.created, true);
-  assert.equal(live[0].Description, "issue-9", "the oldest pool org is the story's now");
+  assert.equal(live[1].Description, "issue-9", "the newest pool org (the most days left) is the story's now");
   assert.ok(!calls.includes("org create scratch"), "no new org");
   assert.ok(calls.includes("org login jwt") && calls.includes("project deploy start"), "logged in under the story's alias, then deployed");
   // pool off: a story creates as before
@@ -788,5 +790,5 @@ test("the warm pool (ORG_POOL): a story claims a pool org instead of creating on
   // wiring: the janitor tops it up after its sweep; a story PR closed without merging gives its org back at once
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
   assert.match(wf("scratch-janitor"), /org sweep\n\s+node pipeline\/bin\/pipe\.mjs org pool/);
-  assert.match(wf("merged"), /closed:\n[\s\S]*merged == false[\s\S]*--state open --json number[\s\S]*start followups --after delete-story-org/);
+  assert.match(wf("merged"), /closed:\n[\s\S]*merged == false && github\.event\.pull_request\.head\.repo\.full_name == github\.repository[\s\S]*--state open --json number[\s\S]*\^\(issue-\[0-9\]\+[\s\S]*start followups --after delete-story-org/);
 });
