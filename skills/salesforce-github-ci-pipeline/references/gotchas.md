@@ -526,3 +526,10 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Reconcile re-validated a release production had rejected, every 6 hours**: it re-ran the gate whenever the gate
   status was not success, and production validation leaves it failed on the same head. A gate "Production rejected it"
   now waits for a new head; any other failed gate (a dropped approval event) is still re-run.
+## Context pack without production (27 Oct)
+
+- **Plan, spec and review logged in to production only to read org-wide defaults** (4–6 production logins per story,
+  each a job holding the production key). The baseline refresh now captures every customisable object's internal and
+  external default into `baseline-facts/sharing.json` (beside `baseline/`, never deployed, not in the baseline's id), and
+  the pack reads main's copy beside the pipeline code. Standard objects' object files exist in `baseline/` only where
+  production differs from a new org, so they could not answer it.

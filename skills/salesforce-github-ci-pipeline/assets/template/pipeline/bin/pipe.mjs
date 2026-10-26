@@ -265,8 +265,10 @@ const commands = {
   "baseline capture": () => {   // production's customisations into baseline/ (pipeline/src/baseline.mjs); the workflow opens the drift PR
     const r = baseline.capture({ sf: io.sf, config: JSON.parse(readFileSync("config/baseline.json", "utf8")), log, packages: packageList() });
     const changes = (io.git(["status", "--porcelain", "--untracked-files=all", "--", baseline.DIR], { allowFail: true }) || "").split("\n").filter(Boolean);
+    // facts change when a release ships (a story's new object or default) too: never counted as drift outside a story
+    const facts = (io.git(["status", "--porcelain", "--untracked-files=all", "--", baseline.FACTS], { allowFail: true }) || "").split("\n").filter(Boolean);
     const inventory = baseline.inventoryMarkdown(r.notCopied); summary(inventory);
-    writeFileSync(flag("out", "drift.md"), [baseline.driftSummary(changes, r.listings), inventory].filter(Boolean).join("\n\n")); output({ changed: changes.length, id: baseline.baselineId(baseline.DIR) || "" });
+    writeFileSync(flag("out", "drift.md"), [baseline.driftSummary(changes, r.listings), inventory].filter(Boolean).join("\n\n")); output({ changed: changes.length, facts: facts.length, id: baseline.baselineId(baseline.DIR) || "" });
     record("baseline", { action: changes.length ? "drift" : "refreshed", changed: changes.length }); return say(`${changes.length} file(s) differ from git`);
   },
   "snapshot refresh": () => {   // a source org (shape + packages + baseline + source + seed), snapshotted; the newest Active one is used

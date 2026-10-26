@@ -96,7 +96,7 @@ jobs:
       - name: Trusted pipeline code (main)
         if: steps.pr.outputs.skip != 'true'
         uses: actions/checkout@v4
-        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - if: steps.pr.outputs.skip != 'true'
         run: echo ".pipeline/" >> .git/info/exclude
       - name: Anything worth an AI review? (and, with AI_TRIAGE, is it risky enough?)
@@ -124,12 +124,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "${{ steps.pr.outputs.branch }}" --now "Claude is reviewing the change (2 to 5 minutes)"
-      - uses: ./.pipeline/.github/actions/sf-auth   # read-only use: production's org-wide defaults for the context pack
-        if: steps.id.outcome == 'success'
-        with:
-          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
-          username: ${{ secrets.SF_CI_USERNAME }}
-          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: The story (with its context pack), the diff and the access findings, as files (fewer agent turns)
         id: story
         if: steps.id.outcome == 'success'

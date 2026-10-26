@@ -11,6 +11,16 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 export const DIR = "baseline";
+/** Facts about production the baseline refresh records beside baseline/ (never deployed, not part of its id): the
+ *  context pack reads them, so agents' jobs need no production login. */
+export const FACTS = "baseline-facts";
+export const SHARING_FACTS = `${FACTS}/sharing.json`;
+/** Production's org-wide defaults, internal and external, of every customisable object (EntityDefinition), read-only. */
+export const SHARING_QUERY = "SELECT QualifiedApiName, InternalSharingModel, ExternalSharingModel FROM EntityDefinition WHERE IsCustomizable = true";
+/** EntityDefinition rows -> { Object: { internal, external } }, sorted, objects without a sharing model left out. Pure. */
+export const sharingFacts = (records = []) => Object.fromEntries(records.filter((r) => r.InternalSharingModel)
+  .map((r) => [r.QualifiedApiName, { internal: r.InternalSharingModel, external: r.ExternalSharingModel ?? "unknown" }])
+  .sort(([a], [b]) => a.localeCompare(b)));
 const CUSTOM_OBJECT = /__(c|e|mdt|x|b)$/;
 // children of an object: on a STANDARD object they count only when a person made them after the org was created
 const CHILD_TYPES = ["CustomField", "ValidationRule", "RecordType", "ListView", "WebLink", "CompactLayout", "FieldSet", "BusinessProcess"];
@@ -208,6 +218,13 @@ export function capture({ sf, config, root = process.cwd(), log = () => {}, pack
     log(`baseline: production's sharing default for ${p.split("/")[1]} (${xml.match(/<sharingModel>([^<]*)/)[1]})`);
   }
   for (const f of walk(out).filter((x) => /\.xml$/.test(x))) writeFileSync(f, sanitize(relative(root, f), readFileSync(f, "utf8")));   // binaries untouched
+  // every object's org-wide defaults (standard objects included, internal and external), for the context pack
+  const sharing = sharingFacts(sf(["data", "query", "-o", "devhub", "-q", SHARING_QUERY], { allowFail: true })?.records);
+  if (!Object.keys(sharing).length) log("::warning::production's sharing defaults could not be read: baseline-facts/sharing.json is left as it was");
+  if (Object.keys(sharing).length) {
+    mkdirSync(join(root, FACTS), { recursive: true });
+    writeFileSync(join(root, SHARING_FACTS), JSON.stringify(sharing, null, 1) + "\n");
+  }
   log(`baseline: ${walk(out).length} files from production, ${removed.length} left to force-app (it owns them)`);
   return { manifest, listings, removed, notCopied };
 }
