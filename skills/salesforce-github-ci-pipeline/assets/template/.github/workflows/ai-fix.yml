@@ -144,6 +144,7 @@ jobs:
         if: steps.lane.outputs.parked != 'true'
         with:
           role: fix
+          key: ${{ env.STORY_KEY || 'N' }}   # its experiment arm and AI budget are the story's
           pr: ${{ env.PR }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)

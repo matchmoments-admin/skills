@@ -20,9 +20,28 @@ export function resolve(spec, policy = POLICY) {
   const [provider, name] = s.includes(":") && policy.providers[s.split(":")[0]] ? [s.slice(0, s.indexOf(":")), s.slice(s.indexOf(":") + 1)] : [policy.default.provider, s];
   const p = policy.providers[provider];
   if (!p) throw new Error(`Unknown AI provider: ${provider} (config/ai-models.json providers)`);
-  const id = p.models?.[name] || (/[-.:]/.test(name) ? name : null);   // an alias, or a full model id
+  const id = (p.models && Object.hasOwn(p.models, name) ? p.models[name] : null) || (/\d/.test(name) && /[-.:]/.test(name) ? name : null);   // an alias, or a full (versioned) model id
   if (!id) throw new Error(`Provider ${provider} has no model id for "${name}": add it to config/ai-models.json`);
   return { provider, model: id };
+}
+
+/** Every role and experiment resolves, writers run Claude, and no role's experiments take more than 100% of stories.
+ *  Checked when the policy loads, so a bad edit fails every agent loudly at once, not one story's bucket later. */
+export function validatePolicy(policy) {
+  const share = {};
+  for (const [role, r] of Object.entries(policy.roles)) {
+    for (const m of [r.model || policy.default.model, r.declarative].filter(Boolean)) checkModel(role, resolve(m, policy).model);
+  }
+  for (const e of policy.experiments || []) {
+    if (!policy.roles[e.role]) throw new Error(`experiment ${e.arm}: unknown role ${e.role}`);
+    checkModel(e.role, resolve(e.model, policy).model);
+    share[e.role] = (share[e.role] || 0) + Number(e.percent || 0);
+    if (share[e.role] > 100) throw new Error(`experiments on ${e.role} take ${share[e.role]}% of stories`);
+  }
+  return true;
+}
+function checkModel(role, id) {
+  if (!/claude/i.test(id) && !NON_CLAUDE_OK.includes(role)) throw new Error(`${id} is not a Claude model: only ${NON_CLAUDE_OK.join(" and ")} may run one (config/ai-models.json)`);
 }
 
 /** A stable 0-99 bucket for a story, so its every run lands in the same experiment arm. Pure. */
@@ -51,7 +70,7 @@ export function choose(role, override, { story = "", declarative = false } = {},
     else if (declarative && r.declarative) { pick = resolve(r.declarative, policy); arm = "declarative"; }
     else pick = resolve(r.model || policy.default.model, policy);
   }
-  if (!/claude/i.test(pick.model) && !NON_CLAUDE_OK.includes(role)) throw new Error(`${pick.model} is not a Claude model: only ${NON_CLAUDE_OK.join(" and ")} may run one (config/ai-models.json)`);
+  checkModel(role, pick.model);
   return { ...pick, arm };
 }
 
@@ -86,6 +105,8 @@ export function budget(role, override, ctx) {
   const c = choose(role, override, ctx);
   return { model: c.model, turns: ROLES[role].turns, turnLimitOk: Boolean(ROLES[role].turnLimitOk), provider: c.provider, arm: c.arm };
 }
+
+validatePolicy(POLICY);
 
 /**
  * CI's results on a commit, as a list an agent or Jev reads: code CI deployed and whose tests passed compiles and

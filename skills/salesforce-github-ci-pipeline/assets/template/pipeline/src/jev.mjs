@@ -75,8 +75,14 @@ export async function triageUiFailure(jev, { log, story = "", ci = "" }) {
 // Deterministic first: these always get the full AI review, whatever Jev says.
 const ALWAYS_REVIEW = [/\/classes\//, /\/triggers\//, /\/flows\//, /\/workflows\//, /\/approvalProcesses\//, /\/permissionsets\//, /\/profiles\//, /\/sharingRules\//, /\/permissionsetgroups\//,
   /\/lwc\//, /\/aura\//, /\/namedCredentials\//, /\/connectedApps\//, /\/remoteSiteSettings\//];
-/** A change with no code, access or automation (nothing ALWAYS_REVIEW names): the review may use a cheaper model. */
-export const isDeclarativeOnly = (files = []) => files.length > 0 && !files.some((f) => ALWAYS_REVIEW.some((re) => re.test(f)));
+/** What a cheaper review model may judge: metadata with no code, access, automation or sharing. An allow-list, so a type
+ *  nobody listed (Visualforce, a validation rule, a custom permission, a sharing set, an object's org-wide default,
+ *  a spec) gets the full model. */
+const DECLARATIVE = [/\/objects\/[^/]+\/fields\/[^/]+\.field-meta\.xml$/, /\/objects\/[^/]+\/listViews\//, /\/objects\/[^/]+\/compactLayouts\//,
+  /\/objects\/[^/]+\/fieldSets\//, /\/layouts\//, /\/flexipages\//, /\/labels\//, /\/reports\//, /\/reportTypes\//, /\/dashboards\//, /\/tabs\//,
+  /\/applications\//, /\/translations\//, /\/objectTranslations\//, /\.md$/];
+/** A change made only of DECLARATIVE metadata: the review may use a cheaper model (config/ai-models.json review.declarative). */
+export const isDeclarativeOnly = (files = []) => files.length > 0 && files.every((f) => DECLARATIVE.some((re) => re.test(f)));
 export const RISK_LEVELS = ["trivial: text, labels or descriptions only", "low: simple declarative metadata", "medium: behaviour changes users will notice", "high: logic, data or access changes"];
 const MAX_SKIP_SCORE = 1.0;
 

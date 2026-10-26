@@ -231,10 +231,10 @@ test("the review rubric: the UI test spec comes after the review; answers win ov
 test("AI_MODEL_<ROLE> overrides one role, ahead of AI_MODEL", async () => {
   const { modelFor } = await import("../src/roles.mjs");
   const prev = process.env.PIPELINE_VARS;
-  process.env.PIPELINE_VARS = JSON.stringify({ AI_MODEL: "claude-m-all", AI_MODEL_UI_TEST: "claude-m-ui" });
+  process.env.PIPELINE_VARS = JSON.stringify({ AI_MODEL: "claude-all-9-9", AI_MODEL_UI_TEST: "claude-ui-9-9" });
   try {
-    assert.equal(modelFor("ui-test"), "claude-m-ui");
-    assert.equal(modelFor("review"), "claude-m-all");
+    assert.equal(modelFor("ui-test"), "claude-ui-9-9");
+    assert.equal(modelFor("review"), "claude-all-9-9");
   } finally { if (prev === undefined) delete process.env.PIPELINE_VARS; else process.env.PIPELINE_VARS = prev; }
 });
 
@@ -301,6 +301,11 @@ test("model policy (config/ai-models.json): overrides, experiments, a declarativ
   assert.deepEqual(roles.choose("review", "anthropic-api:opus", {}, policy), { provider: "anthropic-api", model: "claude-opus-5-5", arm: "override" });
   assert.equal(roles.choose("review", "claude-sonnet-5-5", {}, policy).provider, "anthropic", "a bare id runs on the default provider");
   assert.throws(() => roles.choose("review", "bedrock:sonnet", {}, policy), /bedrock has no model id for "sonnet"/, "a provider without ids is refused, not guessed");
+  assert.throws(() => roles.choose("review", "sonnet-x", {}, policy), /no model id for "sonnet-x"/, "a mistyped alias is not taken for an id");
+  assert.throws(() => roles.choose("review", "constructor", {}, policy), /no model id/);
+  assert.ok(roles.validatePolicy(policy), "the committed policy is valid");
+  assert.throws(() => roles.validatePolicy({ ...policy, experiments: [{ role: "fix", arm: "x", model: "gateway:gpt-5", percent: 10 }] }), /not a Claude model/);
+  assert.throws(() => roles.validatePolicy({ ...policy, experiments: [{ role: "plan", arm: "a", model: "haiku", percent: 60 }, { role: "plan", arm: "b", model: "opus", percent: 50 }] }), /110%/);
   assert.throws(() => roles.choose("implement", "gateway:gpt-5", {}, policy), /not a Claude model/, "a writer never runs another vendor's model");
   assert.equal(roles.choose("plan", "gateway:gpt-5", {}, policy).model, "gpt-5", "a read-only role may, as an experiment");
   // experiments: a stable bucket per story; the percentages stack in order
@@ -310,8 +315,11 @@ test("model policy (config/ai-models.json): overrides, experiments, a declarativ
   assert.ok(inArm > 70 && inArm < 130, `about half the stories (${inArm} of 200)`);
   assert.equal(roles.choose("review", "", { story: "42" }, x).arm, roles.choose("review", "", { story: "42" }, x).arm, "the same story, the same arm");
   assert.equal(roles.choose("review", "", {}, x).arm, "", "no story, no experiment");
-  assert.ok(isDeclarativeOnly(["force-app/main/default/objects/Case/fields/X__c.field-meta.xml", "force-app/main/default/layouts/Case-Case Layout.layout-meta.xml"]));
-  assert.ok(!isDeclarativeOnly(["force-app/main/default/objects/Case/fields/X__c.field-meta.xml", "force-app/main/default/permissionsets/X.permissionset-meta.xml"]), "access is never declarative-only");
+  const D = "force-app/main/default";
+  assert.ok(isDeclarativeOnly([`${D}/objects/Case/fields/X__c.field-meta.xml`, `${D}/layouts/Case-Case Layout.layout-meta.xml`, `${D}/flexipages/Case_Record.flexipage-meta.xml`]));
+  for (const risky of [`${D}/permissionsets/X.permissionset-meta.xml`, `${D}/pages/Quote.page`, `${D}/objects/Case/validationRules/Need.validationRule-meta.xml`,
+    `${D}/customPermissions/Feature_X.customPermission-meta.xml`, `${D}/objects/Visit__c/Visit__c.object-meta.xml`, `${D}/staticresources/lib.js`, "e2e/story-12.spec.ts", `${D}/sharingSets/S.sharingSet-meta.xml`])
+    assert.ok(!isDeclarativeOnly([`${D}/layouts/A.layout-meta.xml`, risky]), `${risky} gets the full model`);
   assert.ok(!isDeclarativeOnly([]));
   // a provider's login settings: named when missing, never a secret
   const prev = process.env.PIPELINE_VARS;

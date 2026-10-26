@@ -251,6 +251,7 @@ const commands = {
     const b = roles.budget(arg(0), undefined, { story: flag("key") && flag("key") !== "N" ? flag("key") : "", declarative: Boolean(files) && isDeclarativeOnly(files) });
     const p = roles.providerSetup(b.provider);
     output({ ...b, auth: p.auth, ...p.with });
+    for (const [k, v] of Object.entries(p.env)) if (/[\r\n]/.test(v)) throw new Error(`${k} holds a line break: fix that repository variable`);
     if (process.env.GITHUB_ENV) for (const [k, v] of Object.entries(p.env)) appendFileSync(process.env.GITHUB_ENV, `${k}=${v}\n`);
     return say(`${arg(0)}: ${b.provider} ${b.model}${b.arm ? ` (${b.arm})` : ""}, ${b.turns} turns`);
   },
