@@ -5,7 +5,8 @@
 //
 // Effects: a label (applied as the pipeline App, so its workflow starts), a trusted commit status from an agent-free job
 // (the sign-off and UAT verdicts the gate reads), or a workflow dispatch.
-import { STATUS, approvalProblem, standing } from "./gate.mjs";
+import { STATUS, approvalProblem, standing, approverList } from "./gate.mjs";
+import { setting } from "./settings.mjs";
 import { storyOf, storyBranch, nextSprint, sprintOfMilestoneTitle } from "./conventions.mjs";
 
 export const ACTIONS = {
@@ -21,6 +22,7 @@ export const ACTIONS = {
   "ai-test": { label: "🧪 Have Claude write and run the UI test", on: "pr", adds: ["ai:test"], flag: "uiTest" },
   test: { label: "🧪 Run the committed UI test", on: "pr", adds: ["test"] },
   "review-ok": { label: "✋ The AI review is wrong? Comment /review-ok <why> to accept the change anyway (the reason goes on record)", on: "pr" },
+  "budget-ok": { label: "💵 Comment /budget-ok <why> to give this story another AI budget (AI_STORY_BUDGET_USD)", on: "any" },
   ship: { label: "🚀 Sign off: merge it into the sprint when everything is green", on: "pr" },
   "uat-pass": { label: "✅ UAT passed: tested in UAT, ready for production", on: "pr" },
   "uat-login": { label: "🔑 Send me a UAT login (Salesforce emails you a link to set a password)", on: "pr" },
@@ -37,7 +39,7 @@ export const ACTIONS = {
 };
 // the comment commands, and the action each one is
 const COMMANDS = { "/sprint": "sprint", "/spec": "spec", "/story": "story", "/tickets": "story", "/plan": "plan", "/start": "start", "/build": "build", "/hotfix": "hotfix", "/review": "review", "/fix": "fix",
-  "/test": "test", "/ui-test": "ai-test", "/ship": "ship", "/review-ok": "review-ok", "/uat-pass": "uat-pass", "/uat-fail": "uat-fail", "/gate": "gate", "/ci": "ci",
+  "/test": "test", "/ui-test": "ai-test", "/ship": "ship", "/review-ok": "review-ok", "/budget-ok": "budget-ok", "/uat-pass": "uat-pass", "/uat-fail": "uat-fail", "/gate": "gate", "/ci": "ci",
   "/staging": "staging", "/uat": "uat", "/fix-story": "fix-story", "/login": "org-login", "/admin-login": "org-login-admin", "/retrieve": "retrieve", "/sprint-start": "sprint", "/release-cut": "release-cut", "/help": "help" };
 
 const MARK = (id) => `<!-- act:${id} -->`;
@@ -111,6 +113,17 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprov
     host.record?.("overrule", { pr: Number(where.number), sha: pr.headRefOid, by: who, why: arg.slice(0, 300) });   // the metrics: how often each model's review is overruled
     host.dispatch("gate.yml", { pr: where.number });
     return { done: `AI review overruled by @${who} on ${pr.headRefOid.slice(0, 7)}`, said: `✋ @${who} accepted this change over the AI review on \`${pr.headRefOid.slice(0, 7)}\`: ${arg}. A new push needs a review again.` };
+  }
+  if (id === "budget-ok") {   // an approver gives a story whose agents stopped at its AI budget as much again; the reason goes on record
+    const story = where.isPr ? storyOf(where.pr.headRefName) : String(where.number);
+    if (!story) return { said: "`/budget-ok` works on a story or its pull request." };
+    if (!arg) return { said: `@${who}: say why in the comment: \`/budget-ok <why>\` (for example \`/budget-ok the fix round needs one more try\`). The reason goes on record.` };
+    const approvers = approverList(setting("APPROVERS"));
+    const no = where.isPr ? mayApprove(who) : (approvers.length && !approvers.includes(who) ? `only an approver (${approvers.join(", ")}) can` : null);
+    if (no) return { said: `The budget stands: ${no}.` };
+    host.record?.("budget-ok", { story, by: who, why: arg.slice(0, 300) });
+    appGh([where.isPr ? "pr" : "issue", "edit", String(where.number), "--remove-label", "blocked"], { allowFail: true });
+    return { done: `AI budget for story ${story} extended by @${who}`, said: `💵 @${who} gave story ${story} another AI budget (${setting("AI_STORY_BUDGET_USD")} USD): ${arg}. Start the agent again (for example \`/fix\` or \`/build\`).` };
   }
   if (id === "gate") { host.dispatch("gate.yml", { pr: where.number }); return { done: "re-running the gate" }; }
   if (id === "ci") { host.dispatch("ci.yml", { ref: where.pr.headRefName }, where.pr.headRefName); return { done: "re-running CI" }; }

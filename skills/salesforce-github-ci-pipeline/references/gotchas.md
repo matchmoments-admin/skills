@@ -542,3 +542,10 @@ Every entry happened in a real run. Search this file for the error text you see.
   model and turns, experiments by a stable hash of the story key, and Haiku for a review of a change with no code,
   access or automation (Haiku's false blockers on PR #144 were on Apex). Bedrock and Vertex start with no model ids:
   the policy refuses an alias it cannot map rather than guessing an id. Only review and plan may run a non-Claude model.
+- **Nothing stopped a story's AI spend** (only turn caps and two fix rounds; review ran 50 times in a fortnight). Each
+  agent now checks the story's spend in the event log first (`AI_STORY_BUDGET_USD`, default $5, from the agents' own
+  cost reports): over it, the PR or story is labelled `blocked` with a comment and no agent starts; an approver's
+  `/budget-ok <why>` adds as much again, on record. The first version added its own git auth header for the `metrics`
+  fetch: the workspace checkout already persists one, two Authorization headers made GitHub answer 400, and the read
+  failed open (spend 0, never stopped). It now uses the checkout's credentials and warns when the log cannot be read.
+  A stop sets `AI_BUDGET_STOPPED`, so the callers say "budget spent" rather than "build failed" or "changed nothing".
