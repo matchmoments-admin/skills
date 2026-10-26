@@ -8,6 +8,7 @@ import * as sample from "../../src/sample.mjs";
 import { personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered, foldSeeds } from "../../src/org.mjs";
 import { lane, jobId, wakeAll } from "../../src/lane.mjs";
 import { sfFailure } from "../../src/io.mjs";
+import { readLog, summarize } from "../../src/events.mjs";
 
 export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record, freed }) {
   function orgLane(target, { card = true } = {}) {
@@ -34,7 +35,11 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
   "org deploy": () => { orgs().deploy(arg(0), { manifest: flag("manifest") }); },
   "org temp": () => { const o = orgs().temporary(arg(0)); record("org", { action: "created", org: o.description }); output({ alias: o.alias, temp: true }); return say(o.alias); },
   "org changes": () => { const o = orgs(), c = o.retrieveChanges(arg(0), o.setupChanges(arg(0), { exclude: JSON.parse(readFileSync("config/baseline.json", "utf8")).exclude })); output({ count: c.length }); return say(c.map((x) => `${x.type}:${x.name}`).join("\n") || "no Setup changes"); },
-  "org capacity": () => say(capacity.report(capacity.plan({ ...capacity.gather({ limits: () => orgs().limits(), flag, has }), uiPolicy: names.setting("UI_REGRESSION") || "release" }))),   // how much load this carries, and the settings for more
+  "org capacity": () => {   // how much load this carries, and the settings for more; AI cost per story measured when the log has it
+    const measured = summarize(readLog(io, { days: 90 })).ai.medianStoryUsd;
+    const m = measured ? { ...capacity.MEASURED, aiUsdPerStory: measured } : capacity.MEASURED;
+    return say(capacity.report(capacity.plan({ ...capacity.gather({ limits: () => orgs().limits(), flag, has }), uiPolicy: names.setting("UI_REGRESSION") || "release", m })));
+  },
   // shipped stories' seeds (data/seed/stories/<key>) into the core seed, in the working directory (seed-fold.yml)
   "seed fold": () => {
     const dir = "data/seed", root = `${dir}/stories`;

@@ -30,6 +30,11 @@ runs:
         sf org list --json 2>/dev/null | jq -r '[.result.nonScratchOrgs[]?.alias] | "non-scratch logins left: \(length)"' || true
     - id: rules
       shell: bash
+      env:
+        # this step only (the agent never gets it): the event log's branch, read for the story's AI spend so far
+        GIT_CONFIG_COUNT: "1"
+        GIT_CONFIG_KEY_0: http.https://github.com/.extraheader
+        GIT_CONFIG_VALUE_0: "AUTHORIZATION: bearer ${{ inputs.github-token }}"
       run: |
         {
           echo 'text<<__RULES__'
@@ -39,6 +44,20 @@ runs:
         # provider=, model=, turns=, arm= and the provider's login settings (config/ai-models.json, pipeline/src/roles.mjs)
         AI_MODEL="${{ inputs.model }}" node .pipeline/pipeline/bin/pipe.mjs agent budget "${{ inputs.role }}" --key "${{ inputs.key }}" ${{ inputs.changed-files && format('--changed "{0}"', inputs.changed-files) || '' }}
         [ -z "${{ inputs.max-turns }}" ] || echo "turns=${{ inputs.max-turns }}" >> "$GITHUB_OUTPUT"
+    - name: Stop when the story's AI budget is spent (AI_STORY_BUDGET_USD; an approver's /budget-ok adds as much again)
+      if: steps.rules.outputs.stop == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        KEY: ${{ inputs.key }}
+        PR: ${{ inputs.pr }}
+        SPENT: ${{ steps.rules.outputs.spent }}
+        CAP: ${{ steps.rules.outputs.cap }}
+      run: |
+        MSG="⏸ Story $KEY has used \$$SPENT of its \$$CAP AI budget, so no AI agent starts on it. An approver can comment \`/budget-ok <why>\` to add as much again (AI_STORY_BUDGET_USD), or a person can take it from here."
+        if [ -n "$PR" ]; then gh pr comment "$PR" --body "$MSG" || true; gh pr edit "$PR" --add-label blocked || true
+        elif [ "$KEY" != N ]; then gh issue comment "$KEY" --body "$MSG" || true; gh issue edit "$KEY" --add-label blocked || true; fi
+        echo "::error::story $KEY is over its AI budget (\$$SPENT of \$$CAP)"; exit 1
     - name: Log in to AWS for Bedrock (GitHub's OIDC identity: no stored key)
       if: steps.rules.outputs.auth == 'aws-oidc'
       uses: aws-actions/configure-aws-credentials@v4

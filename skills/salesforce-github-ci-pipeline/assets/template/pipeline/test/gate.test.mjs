@@ -453,3 +453,44 @@ test("nudge reads Standing: a sign-off that still covers the head, an approval (
   assert.equal(nudge(w, 6), "dispatch", "a back-merge needs no one");
   delete process.env.APPROVERS;
 });
+
+test("AI budget per story: spend from the agents' own reports; over the cap no agent starts; an approver's /budget-ok adds as much again, on record", () => {
+  const ev = [
+    { kind: "agent", story: "12", usd: 1.6 }, { kind: "agent", story: "12", usd: 2.1 }, { kind: "agent", story: "13", usd: 9 },
+    { kind: "agent", story: "12", usd: 1.3 },
+  ];
+  assert.deepEqual(roles.storyBudget(ev, "12", 5), { spent: 5, cap: 5, extensions: 0, over: true }, "at the cap: stop");
+  assert.equal(roles.storyBudget([...ev, { kind: "budget-ok", story: "12" }], "12", 5).over, false, "one /budget-ok: $10");
+  assert.equal(roles.storyBudget(ev, "12", 0).over, false, "0: no limit");
+  assert.equal(roles.storyBudget(ev, "99", 5).spent, 0);
+  // /budget-ok: a reason, an approver, on record; the blocked label comes off
+  const did = [], host = { record: (k, d) => did.push(["record", k, d]) }, appGh = (a) => did.push(["gh", ...a]);
+  const pr = { headRefName: "issue-12", headRefOid: "abc1234", baseRefName: "release/2027-w03" };
+  assert.match(actions.perform("budget-ok", "", { number: 40, isPr: true, pr }, "boss", { host, appGh }).said, /say why/);
+  assert.match(actions.perform("budget-ok", "one more fix round", { number: 40, isPr: true, pr }, "dev", { host, appGh, mayApprove: () => "dev pushed the latest change" }).said, /The budget stands/);
+  const r = actions.perform("budget-ok", "one more fix round", { number: 40, isPr: true, pr }, "boss", { host, appGh });
+  assert.match(r.done, /story 12 extended by @boss/);
+  assert.deepEqual(did[0], ["record", "budget-ok", { story: "12", by: "boss", why: "one more fix round" }]);
+  assert.deepEqual(did[1], ["gh", "pr", "edit", "40", "--remove-label", "blocked"]);
+  assert.deepEqual(actions.command("/budget-ok because"), { id: "budget-ok", arg: "because" });
+  const a = readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8");
+  assert.match(a, /if: steps\.rules\.outputs\.stop == 'true'[\s\S]*?--add-label blocked[\s\S]*?over its AI budget/, "the stop labels and explains, then fails the job");
+});
+
+test("metrics by model: each role, provider, model and arm with cost, failures and overruled reviews; spend by story; log collisions", () => {
+  const { summarize, toMarkdown } = events;
+  const at = "2026-10-27T00:00:00Z";
+  const s = summarize([
+    { kind: "agent", at, role: "review", provider: "anthropic", model: "claude-haiku-5-5", arm: "declarative", usd: 0.1, pr: 7, story: "12", ok: true },
+    { kind: "agent", at, role: "review", provider: "anthropic", model: "claude-sonnet-5-5", usd: 0.3, pr: 8, story: "13", ok: true },
+    { kind: "agent", at, role: "implement", model: "claude-sonnet-5-5", usd: 1.2, story: "12", ok: false, retries: 2 },
+    { kind: "overrule", at, pr: 7 }, { kind: "budget-ok", at, story: "12" },
+  ]);
+  const haiku = s.ai.byModel.find((m) => m.model === "claude-haiku-5-5");
+  assert.deepEqual(haiku, { role: "review", provider: "anthropic", model: "claude-haiku-5-5", arm: "declarative", runs: 1, usd: 0.1, perRunUsd: 0.1, failed: 0, overruled: 1 });
+  assert.equal(s.ai.byModel.find((m) => m.role === "implement").failed, 1);
+  assert.deepEqual(s.ai.byStory[0], { story: "12", usd: 1.3 });
+  assert.equal(s.ai.budgetExtensions, 1);
+  assert.equal(s.ai.logRetries, 2);
+  assert.match(toMarkdown(s), /\| review \| anthropic \| claude-haiku-5-5 \| declarative \| 1 \| \$0\.10 \| \$0\.10 \| 0 \| 1 \|/);
+});

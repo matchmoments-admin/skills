@@ -28,7 +28,7 @@ const STORY_STEPS = [
 /** Never the story's, whatever the step: the pipeline broke (a crash's stack trace too) or Salesforce/GitHub had a moment. */
 const PIPELINE_ALWAYS = /fatal signup error|Unknown command|SyntaxError|TypeError|ReferenceError|Cannot find module|Resource not accessible|INVALID_SESSION_ID|ECONNRESET|ETIMEDOUT|socket hang up|HTTP (404|5\d\d)|^\s*at .+\.m?js:\d+/im;
 /** Not a fault at all: the pipeline refusing or waiting on purpose (a full Dev Hub, a command used at the wrong time). */
-const REFUSAL = /No free scratch org slot|scratch org slot\(s\) free|has created its \d+ scratch orgs for today|No open sprint|is still open\. Ship it first|not green yet|Start the story first|not a PR number|bad input|PR #\d+ is not open/i;
+const REFUSAL = /over its AI budget|No free scratch org slot|scratch org slot\(s\) free|has created its \d+ scratch orgs for today|No open sprint|is still open\. Ship it first|not green yet|Start the story first|not a PR number|bad input|PR #\d+ is not open/i;
 
 /** Whose failure is it: "story" (no ticket), "pipeline" (a ticket) or "ignore". */
 export function classify({ conclusion = "failure", step = "", logTail = "" }) {
