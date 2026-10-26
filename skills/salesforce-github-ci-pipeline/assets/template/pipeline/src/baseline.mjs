@@ -19,7 +19,7 @@ export const SHARING_FACTS = `${FACTS}/sharing.json`;
 export const SHARING_QUERY = "SELECT QualifiedApiName, InternalSharingModel, ExternalSharingModel FROM EntityDefinition WHERE IsCustomizable = true";
 /** EntityDefinition rows -> { Object: { internal, external } }, sorted, objects without a sharing model left out. Pure. */
 export const sharingFacts = (records = []) => Object.fromEntries(records.filter((r) => r.InternalSharingModel)
-  .map((r) => [r.QualifiedApiName, { internal: r.InternalSharingModel, external: r.ExternalSharingModel }])
+  .map((r) => [r.QualifiedApiName, { internal: r.InternalSharingModel, external: r.ExternalSharingModel ?? "unknown" }])
   .sort(([a], [b]) => a.localeCompare(b)));
 const CUSTOM_OBJECT = /__(c|e|mdt|x|b)$/;
 // children of an object: on a STANDARD object they count only when a person made them after the org was created
@@ -219,7 +219,8 @@ export function capture({ sf, config, root = process.cwd(), log = () => {}, pack
   }
   for (const f of walk(out).filter((x) => /\.xml$/.test(x))) writeFileSync(f, sanitize(relative(root, f), readFileSync(f, "utf8")));   // binaries untouched
   // every object's org-wide defaults (standard objects included, internal and external), for the context pack
-  const sharing = sharingFacts(sf(["data", "query", "-o", "devhub", "-q", SHARING_QUERY])?.records);
+  const sharing = sharingFacts(sf(["data", "query", "-o", "devhub", "-q", SHARING_QUERY], { allowFail: true })?.records);
+  if (!Object.keys(sharing).length) log("::warning::production's sharing defaults could not be read: baseline-facts/sharing.json is left as it was");
   if (Object.keys(sharing).length) {
     mkdirSync(join(root, FACTS), { recursive: true });
     writeFileSync(join(root, SHARING_FACTS), JSON.stringify(sharing, null, 1) + "\n");
