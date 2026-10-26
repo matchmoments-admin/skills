@@ -533,3 +533,12 @@ Every entry happened in a real run. Search this file for the error text you see.
   external default into `baseline-facts/sharing.json` (beside `baseline/`, never deployed, not in the baseline's id), and
   the pack reads main's copy beside the pipeline code. Standard objects' object files exist in `baseline/` only where
   production differs from a new org, so they could not answer it.
+
+## Model policy (27 Oct)
+
+- **Every role ran Sonnet through the subscription token, with no way to try another provider.** The model policy is
+  now `config/ai-models.json`: providers (`anthropic` token, `anthropic-api` key, `bedrock` and `vertex` through
+  GitHub's OIDC identity with no stored cloud key, a `gateway` such as LiteLLM), aliases per provider, each role's
+  model and turns, experiments by a stable hash of the story key, and Haiku for a review of a change with no code,
+  access or automation (Haiku's false blockers on PR #144 were on Apex). Bedrock and Vertex start with no model ids:
+  the policy refuses an alias it cannot map rather than guessing an id. Only review and plan may run a non-Claude model.

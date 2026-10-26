@@ -108,6 +108,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprov
     const no = mayApprove(who);   // overruling the review is an approver's call, never the author's own
     if (no) return { said: `The AI review stands: ${no}.` };
     host.status(pr.headRefOid, STATUS.review, "success", `AI review overruled by @${who}${arg ? `: ${arg}` : ""}`.slice(0, 139));
+    host.record?.("overrule", { pr: Number(where.number), sha: pr.headRefOid, by: who, why: arg.slice(0, 300) });   // the metrics: how often each model's review is overruled
     host.dispatch("gate.yml", { pr: where.number });
     return { done: `AI review overruled by @${who} on ${pr.headRefOid.slice(0, 7)}`, said: `✋ @${who} accepted this change over the AI review on \`${pr.headRefOid.slice(0, 7)}\`: ${arg}. A new push needs a review again.` };
   }

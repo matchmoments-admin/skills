@@ -7,7 +7,7 @@
 // path each time, so writers never conflict on a file. Readers fetch the branch once.
 
 export const BRANCH = "metrics";
-const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile"];
+const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile", "overrule"];
 
 /** The envelope's own fields: a payload never sets them (Jev's `run` was silently replaced by the Actions run id). */
 export const RESERVED = ["v", "at", "kind", "run", "workflow", "job"];

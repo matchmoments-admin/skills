@@ -10,10 +10,12 @@ inputs:
   pr: { required: false, default: "", description: "Pull request number, for the event log (fix rounds, cost per PR)" }
   max-turns: { required: false, default: "", description: "Turn cap override; empty = the role's budget (pipeline/src/roles.mjs)" }
   allowed-tools: { required: true, description: "Comma-separated tool allow-list" }
-  oauth-token: { required: true, description: "secrets.CLAUDE_CODE_OAUTH_TOKEN" }
+  oauth-token: { required: true, description: "secrets.CLAUDE_CODE_OAUTH_TOKEN (the anthropic provider)" }
+  api-key: { required: false, default: "", description: "secrets.ANTHROPIC_API_KEY: the anthropic-api provider's key, or the gateway's" }
+  changed-files: { required: false, default: "", description: "A file listing the PR's changed paths, one a line: a review of a change with no code, access or automation may use a cheaper model" }
   github-token: { required: true, description: "Token Claude acts with on GitHub" }
   allowed-bots: { required: false, default: "", description: "Bot actors allowed to trigger this run (vars.PIPELINE_BOTS)" }
-  model: { required: false, default: "", description: "Model override (vars.AI_MODEL); empty = the role's model from pipeline/src/roles.mjs" }
+  model: { required: false, default: "", description: "Model override for this run ('model', 'alias' or 'provider:model'); empty = config/ai-models.json, AI_MODEL_<ROLE> and AI_MODEL" }
 runs:
   using: composite
   steps:
@@ -34,15 +36,31 @@ runs:
           node .pipeline/pipeline/bin/pipe.mjs verdict instructions "${{ inputs.role }}" --key "${{ inputs.key }}"
           echo '__RULES__'
         } >> "$GITHUB_OUTPUT"
-        AI_MODEL="${{ inputs.model }}" node .pipeline/pipeline/bin/pipe.mjs agent budget "${{ inputs.role }}"   # writes model= and turns=
+        # provider=, model=, turns=, arm= and the provider's login settings (config/ai-models.json, pipeline/src/roles.mjs)
+        AI_MODEL="${{ inputs.model }}" node .pipeline/pipeline/bin/pipe.mjs agent budget "${{ inputs.role }}" --key "${{ inputs.key }}" ${{ inputs.changed-files && format('--changed "{0}"', inputs.changed-files) || '' }}
         [ -z "${{ inputs.max-turns }}" ] || echo "turns=${{ inputs.max-turns }}" >> "$GITHUB_OUTPUT"
+    - name: Log in to AWS for Bedrock (GitHub's OIDC identity: no stored key)
+      if: steps.rules.outputs.auth == 'aws-oidc'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ steps.rules.outputs.aws_role }}
+        aws-region: ${{ steps.rules.outputs.aws_region }}
+    - name: Log in to Google Cloud for Vertex AI (workload identity federation: no stored key)
+      if: steps.rules.outputs.auth == 'gcp-wif'
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ steps.rules.outputs.gcp_provider }}
+        service_account: ${{ steps.rules.outputs.gcp_account }}
     - id: claude
       uses: anthropics/claude-code-action@v1
       continue-on-error: true   # judged below from the transcript: a finished run that went past the turn cap is a success
       env:
         CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"   # agents ran tests in the background and ended before committing (F22, story #54)
       with:
-        claude_code_oauth_token: ${{ inputs.oauth-token }}
+        claude_code_oauth_token: ${{ steps.rules.outputs.auth == 'oauth' && inputs.oauth-token || '' }}
+        anthropic_api_key: ${{ contains(fromJSON('["api-key","gateway"]'), steps.rules.outputs.auth) && inputs.api-key || '' }}
+        use_bedrock: ${{ steps.rules.outputs.auth == 'aws-oidc' }}
+        use_vertex: ${{ steps.rules.outputs.auth == 'gcp-wif' }}
         github_token: ${{ inputs.github-token }}
         allowed_bots: ${{ inputs.allowed-bots }}
         prompt: |
@@ -73,7 +91,9 @@ runs:
         KEY: ${{ inputs.key }}
         PR: ${{ inputs.pr }}
         MODEL: ${{ steps.rules.outputs.model }}
-      run: node .pipeline/pipeline/bin/pipe.mjs event agent --role "$ROLE" --key "$KEY" ${PR:+--pr "$PR"} --model "$MODEL" --file "$RUNNER_TEMP/claude-execution-output.json" || true
+        PROVIDER: ${{ steps.rules.outputs.provider }}
+        ARM: ${{ steps.rules.outputs.arm }}
+      run: node .pipeline/pipeline/bin/pipe.mjs event agent --role "$ROLE" --key "$KEY" ${PR:+--pr "$PR"} --model "$MODEL" --provider "$PROVIDER" ${ARM:+--arm "$ARM"} --file "$RUNNER_TEMP/claude-execution-output.json" || true
     - name: Keep the AI transcript (audit trail)
       if: always()
       uses: actions/upload-artifact@v4

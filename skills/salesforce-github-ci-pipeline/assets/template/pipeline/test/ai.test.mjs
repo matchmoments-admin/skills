@@ -231,10 +231,10 @@ test("the review rubric: the UI test spec comes after the review; answers win ov
 test("AI_MODEL_<ROLE> overrides one role, ahead of AI_MODEL", async () => {
   const { modelFor } = await import("../src/roles.mjs");
   const prev = process.env.PIPELINE_VARS;
-  process.env.PIPELINE_VARS = JSON.stringify({ AI_MODEL: "m-all", AI_MODEL_UI_TEST: "m-ui" });
+  process.env.PIPELINE_VARS = JSON.stringify({ AI_MODEL: "claude-all-9-9", AI_MODEL_UI_TEST: "claude-ui-9-9" });
   try {
-    assert.equal(modelFor("ui-test"), "m-ui");
-    assert.equal(modelFor("review"), "m-all");
+    assert.equal(modelFor("ui-test"), "claude-ui-9-9");
+    assert.equal(modelFor("review"), "claude-all-9-9");
   } finally { if (prev === undefined) delete process.env.PIPELINE_VARS; else process.env.PIPELINE_VARS = prev; }
 });
 
@@ -289,4 +289,45 @@ test("Jev decisions are events, and the metrics count what they saved", () => {
   assert.equal(events.event("jev", { decision: "fix" }).kind, "jev");
   // the event's own `run` is the Actions run id: a decision's field must not be called run (story #293's events)
   assert.equal(events.event("jev", { skipped: false }, { GITHUB_RUN_ID: "9" }).skipped, false);
+});
+
+test("model policy (config/ai-models.json): overrides, experiments, a declarative review's cheaper model, providers, Claude-only writers", async () => {
+  const roles = await import("../src/roles.mjs");
+  const { isDeclarativeOnly } = await import("../src/jev.mjs");
+  const policy = JSON.parse(readFileSync(new URL("../../config/ai-models.json", import.meta.url), "utf8"));
+  for (const role of Object.keys(policy.roles)) assert.match(roles.choose(role, "", {}, policy).model, /^claude-/, `${role} resolves on the default provider`);
+  assert.deepEqual(roles.choose("review", "", { declarative: true }, policy), { provider: "anthropic", model: "claude-haiku-5-5", arm: "declarative" });
+  assert.equal(roles.choose("implement", "", { declarative: true }, policy).model, "claude-sonnet-5-5", "only review has a declarative model");
+  assert.deepEqual(roles.choose("review", "anthropic-api:opus", {}, policy), { provider: "anthropic-api", model: "claude-opus-5-5", arm: "override" });
+  assert.equal(roles.choose("review", "claude-sonnet-5-5", {}, policy).provider, "anthropic", "a bare id runs on the default provider");
+  assert.throws(() => roles.choose("review", "bedrock:sonnet", {}, policy), /bedrock has no model id for "sonnet"/, "a provider without ids is refused, not guessed");
+  assert.throws(() => roles.choose("review", "sonnet-x", {}, policy), /no model id for "sonnet-x"/, "a mistyped alias is not taken for an id");
+  assert.throws(() => roles.choose("review", "constructor", {}, policy), /no model id/);
+  assert.ok(roles.validatePolicy(policy), "the committed policy is valid");
+  assert.throws(() => roles.validatePolicy({ ...policy, experiments: [{ role: "fix", arm: "x", model: "gateway:gpt-5", percent: 10 }] }), /not a Claude model/);
+  assert.throws(() => roles.validatePolicy({ ...policy, experiments: [{ role: "plan", arm: "a", model: "haiku", percent: 60 }, { role: "plan", arm: "b", model: "opus", percent: 50 }] }), /110%/);
+  assert.throws(() => roles.choose("implement", "gateway:gpt-5", {}, policy), /not a Claude model/, "a writer never runs another vendor's model");
+  assert.equal(roles.choose("plan", "gateway:gpt-5", {}, policy).model, "gpt-5", "a read-only role may, as an experiment");
+  // experiments: a stable bucket per story; the percentages stack in order
+  const x = { ...policy, experiments: [{ role: "review", arm: "haiku-all", model: "haiku", percent: 50 }] };
+  const keys = Array.from({ length: 200 }, (_, i) => String(i));
+  const inArm = keys.filter((k) => roles.choose("review", "", { story: k }, x).arm === "haiku-all").length;
+  assert.ok(inArm > 70 && inArm < 130, `about half the stories (${inArm} of 200)`);
+  assert.equal(roles.choose("review", "", { story: "42" }, x).arm, roles.choose("review", "", { story: "42" }, x).arm, "the same story, the same arm");
+  assert.equal(roles.choose("review", "", {}, x).arm, "", "no story, no experiment");
+  const D = "force-app/main/default";
+  assert.ok(isDeclarativeOnly([`${D}/objects/Case/fields/X__c.field-meta.xml`, `${D}/layouts/Case-Case Layout.layout-meta.xml`, `${D}/flexipages/Case_Record.flexipage-meta.xml`]));
+  for (const risky of [`${D}/permissionsets/X.permissionset-meta.xml`, `${D}/pages/Quote.page`, `${D}/objects/Case/validationRules/Need.validationRule-meta.xml`,
+    `${D}/customPermissions/Feature_X.customPermission-meta.xml`, `${D}/objects/Visit__c/Visit__c.object-meta.xml`, `${D}/staticresources/lib.js`, "e2e/story-12.spec.ts", `${D}/sharingSets/S.sharingSet-meta.xml`])
+    assert.ok(!isDeclarativeOnly([`${D}/layouts/A.layout-meta.xml`, risky]), `${risky} gets the full model`);
+  assert.ok(!isDeclarativeOnly([]));
+  // a provider's login settings: named when missing, never a secret
+  const prev = process.env.PIPELINE_VARS;
+  try {
+    process.env.PIPELINE_VARS = JSON.stringify({});
+    assert.deepEqual(roles.providerSetup("anthropic", policy), { auth: "oauth", env: {}, with: {} });
+    assert.throws(() => roles.providerSetup("bedrock", policy), /needs AWS_ROLE_ARN, AWS_REGION/);
+    process.env.PIPELINE_VARS = JSON.stringify({ AI_GATEWAY_URL: "https://llm.example.invalid" });
+    assert.deepEqual(roles.providerSetup("gateway", policy).env, { ANTHROPIC_BASE_URL: "https://llm.example.invalid" });
+  } finally { if (prev === undefined) delete process.env.PIPELINE_VARS; else process.env.PIPELINE_VARS = prev; }
 });

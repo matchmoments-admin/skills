@@ -76,8 +76,8 @@ jobs:
         with:
           role: plan
           key: ${{ env.KEY }}
-          model: ${{ vars.AI_MODEL }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           github-token: ${{ github.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # /plan arrives as the pipeline App; empty = none
           allowed-tools: "Read,Glob,Grep,Write"
