@@ -7,7 +7,7 @@ import { world, rng } from "./sim.mjs";
 import { violations, finish, observe, actAs, nextDeps } from "./invariants.mjs";
 import { next } from "../src/journey.mjs";
 import { finish as finishStage, reconcile } from "../src/finish.mjs";
-import { STATUS, GATE_STATUS } from "../src/gate.mjs";
+import { STATUS, GATE_STATUS, standing, approvalRecord } from "../src/gate.mjs";
 
 process.env.PIPELINE_BOTS = "github-actions,__owner__-pipeline";
 process.env.APPROVERS = "boss,deputy";
@@ -216,4 +216,30 @@ test("reconcile: a dropped workflow_run is caught on the next tick, once; a PR w
   await all(w);
   assert.deepEqual(await violations(w, REL, ENV), []);
   assert.deepEqual((await reconcile(stageDeps(w))).find((x) => x.pr === REL).started, [], "nothing owed once UAT has the head");
+});
+
+test("solo approval on the simulated world (27 Oct review): the one approver's own push needs a real AI review; a wrong review is overruled, not an admin merge", async () => {
+  const saved = { APPROVERS: process.env.APPROVERS, APPROVAL_MODE: process.env.APPROVAL_MODE };
+  Object.assign(process.env, { APPROVERS: "boss", APPROVAL_MODE: "solo" });
+  try {
+    const w = world({ aiReview: true }), AI = { ...ENV, AI_REVIEW: "true" };
+    w.branch("release/2027-w01");
+    w.story("302", { approver: "boss" });
+    const sha = w.push("issue-302", ["force-app/main/default/classes/A.cls"], { by: "boss", from: "release/2027-w01" });
+    w.pr(32, { head: "issue-302", base: "release/2027-w01" });
+    await finish(w, w.take((r) => r.workflow === "ci.yml"), { env: AI });
+    w.take((r) => r.workflow === "ai-review.yml");
+    w.acting({ event: "workflow_run", branch: "main", workflow: "ai-review.yml" });
+    await finishStage("review", { pr: 32, sha, outcome: "changes" }, stageDeps(w, AI));
+    w.approve(32, "boss");
+    assert.match(observe(w, 32, AI).decision.reasons.join(), /needs a real AI review to pass|AI review/, "the review asked for changes: the solo approval waits");
+    const ok = await actAs(w, 32, "boss", "/review-ok the SOQL is valid and CI passed");
+    assert.ok(ok.done, `the one approver may overrule (no admin merge): ${ok.text}`);
+    w.approve(32, "boss");
+    const o = observe(w, 32, AI);
+    assert.equal(o.decision.mergeable, true, o.decision.reasons.join("; "));
+    assert.match(approvalRecord(standing(w.host(AI).prFacts(32)).approval), /solo: the AI review was overruled, reason on record/);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  }
 });

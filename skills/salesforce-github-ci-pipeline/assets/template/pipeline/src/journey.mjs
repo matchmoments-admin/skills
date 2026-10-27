@@ -75,10 +75,10 @@ export async function next(after, pr, deps) {
   return after === "org-freed" && !r.steps.length ? startWaiting(deps) || r : r;
 }
 
-async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, jev = null, log = () => {} }) {
+async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, jev = null, budgetOf, log = () => {} }) {
   if (!pr) {
     const rel = String(host.openRelease() || "").replace(/^origin\//, "");
-    pr = rel ? (gh(["pr", "list", "--head", rel, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || [])[0]?.number : null;
+    pr = rel ? host.releasePrOf(rel) : null;
   }
   if (!pr) return { steps: [], said: `nothing starts after ${after}: no pull request` };
   const facts = host.prFacts(pr);
@@ -87,7 +87,7 @@ async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, jev = nul
   const steps = nextSteps(after, standing(facts), { ai, uat, uiNeeded: uiNeeded(files), pr });
   for (const s of steps) {
     log(`next after ${after}: ${s.start || s.dispatch} (${s.why})`);
-    if (s.start) await startJob(s.start, pr, { host, gh, cards, ai, jev, mode: s.mode || "run", log });
+    if (s.start) await startJob(s.start, pr, { host, gh, cards, ai, jev, budgetOf, mode: s.mode || "run", log });
     else host.dispatch(s.dispatch, s.inputs, s.ref);
   }
   return { steps, said: steps.length ? `started: ${steps.map((x) => `${x.start || x.dispatch} (${x.why})`).join("; ")}` : `nothing owed after ${after} on PR #${pr}` };

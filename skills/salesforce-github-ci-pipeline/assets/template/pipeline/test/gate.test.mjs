@@ -249,7 +249,7 @@ test("correctness wiring: story PR base from the story, UAT never reset by a red
   assert.match(wf("story-pr"), /pipe.mjs story base "\$KEY"/);
   assert.doesNotMatch(wf("story-pr"), /merge-base --is-ancestor/);
   assert.match(wf("uat-deploy"), /UAT already has/);
-  assert.match(wf("staging-deploy"), /superseded by/);
+  assert.match(start.stagingPlan({ tip: "a".repeat(40) }).why, /superseded by aaaaaaa/);
   assert.match(wf("staging-deploy"), /pipe.mjs finish staging --branch "\$REL"/, "UAT only when the journey owes it: staging passed on the head, UAT lacks it (finish asks it)");
   assert.deepEqual(gate.gateStatus({ mergeable: true, validate: true, reasons: [] }), { state: "pending", description: "Ready: validating against production before merging" });
   assert.doesNotMatch(wf("gate"), /STATE=pending/, "the decision's status is mapped in one place (gateStatus)");
@@ -467,14 +467,14 @@ test("AI budget per story: spend from the agents' own reports; over the cap no a
   const did = [], host = { record: (k, d) => did.push(["record", k, d]) }, appGh = (a) => did.push(["gh", ...a]);
   const pr = { headRefName: "issue-12", headRefOid: "abc1234", baseRefName: "release/2027-w03" };
   assert.match(actions.perform("budget-ok", "", { number: 40, isPr: true, pr }, "boss", { host, appGh }).said, /say why/);
-  assert.match(actions.perform("budget-ok", "one more fix round", { number: 40, isPr: true, pr }, "dev", { host, appGh, mayApprove: () => "dev pushed the latest change" }).said, /The budget stands/);
+  assert.match(actions.perform("budget-ok", "one more fix round", { number: 40, isPr: true, pr }, "dev", { host, appGh, authority: (action) => (action === "budget" ? "only an approver (@boss) can" : null) }).said, /The budget stands/);
   const r = actions.perform("budget-ok", "one more fix round", { number: 40, isPr: true, pr }, "boss", { host, appGh });
   assert.match(r.done, /story 12 extended by @boss/);
   assert.deepEqual(did[0], ["record", "budget-ok", { story: "12", by: "boss", why: "one more fix round" }]);
   assert.deepEqual(did[1], ["gh", "pr", "edit", "40", "--remove-label", "blocked"]);
   assert.deepEqual(actions.command("/budget-ok because"), { id: "budget-ok", arg: "because" });
   const a = readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8");
-  assert.match(a, /if: steps\.rules\.outputs\.stop == 'true'[\s\S]*?--add-label blocked[\s\S]*?AI_BUDGET_STOPPED=true[\s\S]*?over its AI budget/, "the stop labels and explains, then fails the job");
+  assert.match(a, /if: steps\.rules\.outputs\.stop == 'true'[\s\S]*?pipe\.mjs agent stop[\s\S]*?AI_BUDGET_STOPPED=true[\s\S]*?over its AI budget/, "the agent's last check: the same stop (start.stopForBudget), then it fails the job");
   // the workspace checkout's own credentials fetch the log: a second Authorization header made GitHub refuse it (400)
   assert.doesNotMatch(a, /GIT_CONFIG_|extraheader/);
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
@@ -483,6 +483,41 @@ test("AI budget per story: spend from the agents' own reports; over the cap no a
   assert.match(wf("ai-review"), /V=budget/);
   const { verdictOf } = await import("../src/finish.mjs");
   assert.match(verdictOf("review", { outcome: "budget" }).description, /AI budget is spent: an approver's \/budget-ok/);
+});
+
+test("the AI budget stops a story before any runner, lane or org (27 Oct review): the Start decision, and ai-implement before its lane", async () => {
+  const over = { spent: 5.2, cap: 5, extensions: 0, over: true }, under = { spent: 1, cap: 5, extensions: 0, over: false };
+  const base = { ai: { ...FULL_AI, fix: true }, branch: "issue-12", labels: [], changed: ["force-app/main/default/classes/A.cls"] };
+  assert.deepEqual(start.decide("review", { ...base, budget: under }), { run: true });
+  assert.match(start.decide("review", { ...base, budget: over }).why, /AI budget is spent \(\$5\.20 of \$5\.00\)/);
+  assert.equal(start.decide("fix", { ...base, budget: over }).budget, true);
+  assert.equal(start.decide("ui-test", { ...base, mode: "ai", budget: over }).budget, true);
+  assert.equal(start.decide("ui-test", { ...base, mode: "run", hasSpec: true, budget: over }).run, true, "the committed spec runs: no agent");
+  assert.ok(start.decide("review", { ...base, changed: ["docs/x.md"], budget: over }).status, "nothing reviewable still says not needed, with no agent");
+  // the stop: comment and label once, then the card
+  const calls = [], cards = { refresh: async (k, o) => calls.push(["card", k, o.activity.what]) };
+  const gh = (labels) => (a) => { calls.push(a.join(" ")); return a[2] === "view" || a[1] === "view" ? { labels: labels.map((name) => ({ name })) } : null; };
+  await start.stopForBudget({ key: "12", pr: 40, sb: over }, { gh: gh([]), cards });
+  assert.match(calls.find((c) => /pr comment 40/.test(c)), /used \$5\.20 of its \$5\.00 AI budget/);
+  assert.ok(calls.includes("pr edit 40 --add-label blocked"));
+  assert.deepEqual(calls.at(-1), ["card", "12", "the story's AI budget is spent ($5.20 of $5.00)"]);
+  calls.length = 0;
+  await start.stopForBudget({ key: "12", sb: over }, { gh: gh(["blocked"]), cards });
+  assert.deepEqual(calls.filter((c) => typeof c === "string" && /comment|edit/.test(c)), [], "already blocked: no second comment");
+  // the reader: once per story, null when there is no limit, no story, or no log
+  let reads = 0;
+  const r = roles.budgetReader({ read: () => { reads++; return [{ kind: "agent", story: "12", usd: 6 }]; }, base: () => 5 });
+  assert.equal(r("12").over, true); r("12"); assert.equal(reads, 1);
+  assert.equal(r("N"), null);
+  assert.equal(roles.budgetReader({ read: () => [], base: () => 0 })("12"), null, "0: no limit");
+  const warned = [];
+  assert.equal(roles.budgetReader({ read: (onFail) => { onFail(); return []; }, base: () => 5, log: (m) => warned.push(m) })("12"), null, "an unreadable log never stops a story");
+  assert.match(warned[0], /not checked this run/);
+  // ai-implement stops before the lane and the org; every start door passes the budget
+  const impl = readFileSync(new URL("../../.github/workflows/ai-implement.yml", import.meta.url), "utf8");
+  assert.ok(impl.indexOf("pipe.mjs agent stop") > 0 && impl.indexOf("pipe.mjs agent stop") < impl.indexOf("lane acquire"), "the budget before the lane");
+  const pipe = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  assert.equal((pipe.match(/startJob[,(][^\n]*budgetOf/g) || []).length, 2, "startCmd and the journey both pass the budget");
 });
 
 test("metrics by model: each role, provider, model and arm with cost, failures and overruled reviews; spend by story; log collisions", () => {
@@ -505,11 +540,12 @@ test("metrics by model: each role, provider, model and arm with cost, failures a
 
 test("solo approval (APPROVAL_MODE=solo): the one approver's own push counts once the AI review passed on it, and the record says solo; a team never", () => {
   const solo = { approvers: ["boss"], lastPusher: "boss", approvalMode: "solo" };
-  assert.match(gate.approvalProblem({ ...solo, aiReviewPassed: false }, "boss"), /needs a real AI review to pass/);
-  assert.match(gate.approvalProblem({ ...solo, aiReviewPassed: true, aiReviewOn: false }, "boss"), /turn on AI_REVIEW/);
-  assert.equal(gate.approvalProblem({ ...solo, aiReviewPassed: true }, "boss"), null);
-  assert.match(gate.approvalProblem({ ...solo, approvalMode: "team", aiReviewPassed: true }, "boss"), /pushed the latest change/, "team mode: four eyes");
-  assert.match(gate.approvalProblem({ ...solo, approvers: ["boss", "deputy"], aiReviewPassed: true }, "boss"), /pushed the latest change/, "two approvers: the other one approves");
+  for (const k of [null, "changes", "not-needed", "budget", "running", "none"]) assert.match(gate.approvalProblem({ ...solo, aiReview: k }, "boss"), /needs a real AI review to pass/, String(k));
+  assert.match(gate.approvalProblem({ ...solo, aiReview: "passed", aiReviewOn: false }, "boss"), /turn on AI_REVIEW/);
+  assert.equal(gate.approvalProblem({ ...solo, aiReview: "passed" }, "boss"), null);
+  assert.equal(gate.approvalProblem({ ...solo, aiReview: "overruled" }, "boss"), null, "an overrule with a reason on record stands in for the review");
+  assert.match(gate.approvalProblem({ ...solo, approvalMode: "team", aiReview: "passed" }, "boss"), /pushed the latest change/, "team mode: four eyes");
+  assert.match(gate.approvalProblem({ ...solo, approvers: ["boss", "deputy"], aiReview: "passed" }, "boss"), /pushed the latest change/, "two approvers: the other one approves");
   assert.equal(gate.approvalProblem({ approvers: [], lastPusher: "dev", approvalMode: "team" }, "dev"), null, "APPROVERS unset: anyone with write access (as the handbook says)");
   // through approval(): the AI review's verdict on the head decides, and the approval says solo
   const head = "a".repeat(40);
@@ -521,4 +557,39 @@ test("solo approval (APPROVAL_MODE=solo): the one approver's own push counts onc
   assert.ok(a.ok && a.who[0].solo);
   assert.match(gate.approvalRecord(a), /^@boss \(approved the pull request \(solo: the AI review passed\), 2026-10-27T01:00Z\)$/);
   assert.deepEqual(gate.readApprovalRecord(gate.approvalRecord(a)), { by: "boss", how: "approved the pull request (solo: the AI review passed)", at: "2026-10-27T01:00:00Z" });
+  const o = gate.approval(ctx("success", gate.REVIEW.overruled("boss", "THIS_YEAR is valid SOQL")));
+  assert.ok(o.ok);
+  assert.match(gate.approvalRecord(o), /solo: the AI review was overruled, reason on record/, "the record never reads an overrule as a pass");
+});
+
+test("solo lockout (27 Oct review): the one approver may overrule a review of their own push and extend its budget; a team keeps four eyes", () => {
+  const head = "b".repeat(40);
+  const facts = (mode, approvers, description = "AI review asks for changes", state = "failure") => ({ approvers, approvalMode: mode, lastPusher: "boss", head, ai: { review: true }, reviews: [],
+    statuses: [{ sha: head, context: gate.STATUS.review, state, description, created_at: "2026-10-27T00:59:00Z", creator: { login: "github-actions[bot]" } }] });
+  const solo = facts("solo", ["boss"]);
+  assert.equal(gate.authorityProblemFor(solo, "overrule", "boss"), null, "solo: /review-ok on their own push");
+  assert.equal(gate.authorityProblemFor(facts("solo", ["boss"], gate.REVIEW.budget(), "error"), "budget", "boss"), null, "solo: /budget-ok after a budget stop");
+  assert.match(gate.authorityProblemFor(solo, "approve", "boss"), /needs a real AI review/, "approving still needs the review (or an overrule) first");
+  const team = facts("team", ["boss", "deputy"]);
+  assert.match(gate.authorityProblemFor(team, "overrule", "boss"), /pushed the latest change/, "a team: the author never overrules their own review");
+  assert.equal(gate.authorityProblemFor(team, "overrule", "deputy"), null);
+  assert.equal(gate.authorityProblemFor(team, "budget", "boss"), null, "budget is spending, not code: any approver");
+  assert.match(gate.authorityProblemFor(team, "budget", "eve"), /only an approver/);
+  assert.equal(gate.authorityProblem("budget", { approvers: [] }, "eve"), null, "APPROVERS unset: anyone with write access");
+  assert.throws(() => gate.authorityProblem("merge", { approvers: ["boss"] }, "boss"), /unknown action/);
+});
+
+test("a review verdict's kind is read in one place (REVIEW, reviewKindOf), and what writes it uses the same text", () => {
+  const k = (s, d) => gate.reviewKindOf(s, d);
+  assert.equal(k("success", gate.REVIEW.passed()), "passed");
+  assert.equal(k("failure", gate.REVIEW.changes()), "changes");
+  assert.equal(k("success", gate.REVIEW.notNeeded("low risk per Jev (0.40 of 0-3)")), "not-needed");
+  assert.equal(k("success", gate.REVIEW.overruled("boss", "fine")), "overruled");
+  assert.equal(k("error", gate.REVIEW.budget()), "budget");
+  assert.equal(k("pending", gate.REVIEW.running()), "running");
+  assert.equal(k("error", gate.REVIEW.none()), "none");
+  for (const f of ["finish.mjs", "start.mjs", "actions.mjs", "events.mjs", "closeout.mjs"]) {
+    const src = readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+    assert.doesNotMatch(src, /\/\^not needed|"AI review passed"|STATUS\.review, "[a-z]+", [`"']|overruled by @\(/, `${f} reads or writes review text itself`);
+  }
 });

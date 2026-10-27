@@ -2,6 +2,7 @@
 // apply() acts through the tracker and the org registry.
 import { storyOf, sprintOf, releaseBranch, setting } from "./conventions.mjs";
 import { approverOf, gather as gateGather, standing, readApprovalRecord, statusOn, STATUS } from "./gate.mjs";
+import { checkRunsOn } from "./github.mjs";
 
 /**
  * Inputs:
@@ -136,19 +137,19 @@ export function gatherDelivery(key, io, { tag, sprint = null, now = new Date(), 
   const a = st.approval.who?.[0] || null;
   const approved = recorded || (a ? { by: a.login, at: a.at, how: a.how } : null);
   const review = ["missing", "stale"].includes(st.review.state) ? null : st.review;
-  const overruled = /overruled by @([A-Za-z0-9-]+)/.exec(review?.description || "");
-  const reason = overruled ? (api(`repos/${repo}/issues/${pr.number}/comments?per_page=100`) || []).map((c) => String(c.body || ""))
-    .reverse().find((b) => b.startsWith(`✋ @${overruled[1]} accepted this change`))?.replace(/^.*?`[0-9a-f]{7}`: /s, "").replace(/\. A new push needs a review again\.$/, "") : null;
+  const overruledBy = review?.kind === "overruled" ? review.who : null;
+  const reason = overruledBy ? (api(`repos/${repo}/issues/${pr.number}/comments?per_page=100`) || []).map((c) => String(c.body || ""))
+    .reverse().find((b) => b.startsWith(`✋ @${overruledBy} accepted this change`))?.replace(/^.*?`[0-9a-f]{7}`: /s, "").replace(/\. A new push needs a review again\.$/, "") : null;
   const ui = ["missing", "stale"].includes(st.ui.state) ? null : st.ui;
   // the release (or, for a hotfix, the PR itself): UAT sign-off and the production validation's deploy id
   const rel = sprint ? (gh(["pr", "list", "--head", releaseBranch(sprint), "--base", "main", "--state", "merged", "--json", "number,headRefOid,mergedAt"], { allowFail: true }) || [])[0] : { headRefOid: pr.headRefOid, mergedAt: pr.mergedAt };
   const uat = rel ? statusOn(io.ghPages, repo, rel.headRefOid, STATUS.uat) : null;   // UAT's sign-off is for the exact commit shipped
-  const validation = rel ? (api(`repos/${repo}/commits/${rel.headRefOid}/check-runs?per_page=100`)?.check_runs || []).filter((c) => c.name === "Production validation" && c.conclusion === "success")
+  const validation = rel ? checkRunsOn(io, repo, rel.headRefOid, "Production validation").filter((c) => c.conclusion === "success")
     .map((c) => String(c.output?.summary || "").match(/`(0Af[A-Za-z0-9]+)`/)?.[1]).find(Boolean) : null;
   return {
     key: String(key), title: issue.title || "", tag, sprint, pr: pr.number,
     approver: approverOf(issue.body), lastPusher: facts.lastPusher, approved,
-    review: review ? { state: review.state, overruledBy: overruled?.[1] || null, reason, text: review.description || "" } : null,
+    review: review ? { state: review.state, overruledBy, reason, text: review.description || "" } : null,
     ui: ui ? { state: ui.state, url: ui.url || null } : null,
     uat: uat?.state === "success" ? uat.who || "signed off" : null,
     validation,

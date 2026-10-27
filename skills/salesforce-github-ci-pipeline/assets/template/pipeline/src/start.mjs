@@ -2,8 +2,8 @@
 // (or CI's static job), before the long job starts: GitHub bills every job at least a minute, a 75-minute job that
 // starts only to find it has nothing to do costs a runner and a lane wait, and a rule in a release branch's YAML stays
 // stale until a back-merge. decide() and ciPlan() are pure; `pipe start` and `pipe ci plan` gather the facts and act.
-import { storyOf, sprintOf, uiNeeded } from "./conventions.mjs";
-import { STATUS, standing, carriedFrom, RESULTS } from "./gate.mjs";
+import { storyOf, storyBranch, sprintOf, uiNeeded } from "./conventions.mjs";
+import { STATUS, REVIEW, standing, carriedFrom, RESULTS } from "./gate.mjs";
 import { CHECKS, LIVE_TESTS_CHECK } from "./conventions.mjs";
 import { fixRoundsUsed, MAX_FIX_ROUNDS, REVIEW_LINE, reviewComments } from "./verdict.mjs";
 import { triageFix, fixSkippedMessage } from "./jev.mjs";
@@ -48,7 +48,7 @@ function passedTests(result, { shas, host, all = false }) {
   const name = RESULTS[result].proof;
   const latest = (runs) => [...runs].filter((r) => r.status === "completed").sort((a, b) => String(a.started_at).localeCompare(String(b.started_at))).pop();
   return shas.filter((sha) => {
-    const run = latest(host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}`)?.check_runs || []);
+    const run = latest(host.checkRuns(sha, name));
     return run?.conclusion === "success" && (!all || /all local tests/.test(run.output?.summary || ""));
   });
 }
@@ -72,17 +72,19 @@ export const lastStagingTested = ({ git, host }) => passedTests("staging", { sha
  * What a staging run does (#273). Apex and Flow on every run, unless they passed on this code (or one it carries to).
  * The UI regression (every UI spec) only when it is due, UI_REGRESSION: "release" (the default) once the release PR is
  * open, so once per release; "every" on every run. And not if it already passed on this code. superseded: the release
- * PR's head moved on since this run started (its own run tests that). Scope: a story merge mid-sprint runs the tests
- * for what changed since the last tested commit (`tested`), the release PR every local test; no tested commit, every
- * test. Pure.
+ * PR's head moved on since this run started; tip: the release branch's tip when it is not this run's commit (each merge
+ * queues a run, only the newest tests). Either way its own run tests that. Scope: a story merge mid-sprint runs the
+ * tests for what changed since the last tested commit (`tested`), the release PR every local test; no tested commit,
+ * every test. `tests` is that scope as `pipe tests run staging` arguments. Pure.
  */
-export function stagingPlan({ policy = "release", releaseOpen = false, apexPassed = false, uiPassed = false, superseded = false, tested = null }) {
-  if (superseded) return { apex: "skip", ui: "skip", done: true, why: "superseded: the release PR's head moved on; its own run tests it" };
+export function stagingPlan({ policy = "release", releaseOpen = false, apexPassed = false, uiPassed = false, superseded = false, tip = null, tested = null }) {
+  if (tip) return { apex: "skip", ui: "skip", done: true, tests: "", why: `superseded by ${tip.slice(0, 7)}: its own run tests it` };
+  if (superseded) return { apex: "skip", ui: "skip", done: true, tests: "", why: "superseded: the release PR's head moved on; its own run tests it" };
   const due = policy === "every" || releaseOpen;
   const apex = apexPassed ? "skip" : "run", ui = due && !uiPassed ? "run" : "skip";
   const scope = releaseOpen || !tested ? "all" : "relevant";
   const why = `Apex and Flow: ${apexPassed ? "already passed on this code" : scope === "all" ? "every test" : `the tests for what changed since ${tested.slice(0, 7)}`}; UI regression: ${ui === "run" ? "run" : !due ? "not yet (it runs once per release, when the release PR opens)" : "already passed on this code"}`;
-  return { apex, ui, scope, base: scope === "relevant" ? tested : "", done: apex === "skip" && ui === "skip", why };
+  return { apex, ui, scope, base: scope === "relevant" ? tested : "", tests: scope === "relevant" ? `--base ${tested}` : "--all --base HEAD", done: apex === "skip" && ui === "skip", why };
 }
 
 /**
@@ -91,11 +93,14 @@ export function stagingPlan({ policy = "release", releaseOpen = false, apexPasse
  * disagreement looped staging runs: code review, 14 Oct). Without an open release PR it is not due (UI_REGRESSION
  * release) or runs (every).
  */
-export function stagingPlanFor({ git, host, gh, branch, policy }) {
-  const pr = branch ? (gh(["pr", "list", "--head", branch, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || [])[0]?.number : null;
+export function stagingPlanFor({ git, host, branch, policy }) {
+  const pr = host.releasePrOf(branch);
   const st = pr ? standing(host.prFacts(pr)) : null;
   const head = git(["rev-parse", "HEAD"], { allowFail: true })?.trim();
   const superseded = Boolean(st?.ctx?.pr?.headRefOid && head && st.ctx.pr.headRefOid !== head);
+  const tipSha = branch ? host.api("GET", `repos/${host.repo}/commits/${encodeURIComponent(branch)}`)?.sha : null;
+  const tip = tipSha && head && tipSha !== head ? tipSha : null;
+  if (tip) return stagingPlan({ tip });
   // the release's own regression is every test: a pass of only a merge's tests does not carry to it
   return stagingPlan({ policy, releaseOpen: Boolean(pr), superseded, apexPassed: Boolean(stagingCarry({ git, host, all: Boolean(pr) })), uiPassed: st?.uiRegression?.state === "success",
     tested: pr ? null : lastStagingTested({ git, host }) });
@@ -105,11 +110,19 @@ export function stagingPlanFor({ git, host, gh, branch, policy }) {
  * May this job start? kind: review | fix | ui-test. facts: { ai, branch, labels: [name], rounds: { n, limit } | null,
  * changed: [file] | null (against the base; null if unknown), pushed: [file] | null (this push only, for a review on
  * a push), mode: ai | run, hasSpec, review / ui: the verdict that stands on the head (gate.standing), explicit: a
- * person asked (a label or ticked box), which runs again whatever stands }. Returns { run: true } or { run: false, why, off?, status?, stop? }:
+ * person asked (a label or ticked box), which runs again whatever stands, budget: the story's AI budget
+ * (roles.storyBudget) or null }. Returns { run: true } or { run: false, why, off?, status?, stop?, budget? }:
  * off: the AI flag is off (say so on the PR); status: a verdict to post on the head instead; stop: the fix rounds
- * are used up (block the PR and say what a person can do). Pure.
+ * are used up (block the PR and say what a person can do); budget: the story's AI budget is spent (stopForBudget).
+ * The budget is checked last, so a job with nothing to do still says why. Pure.
  */
 export function decide(kind, f) {
+  const d = decideRun(kind, f);
+  const agent = kind !== "ui-test" || f.mode === "ai";
+  if (d.run && agent && f.budget?.over) return { run: false, budget: true, why: `the story's AI budget is spent ($${f.budget.spent.toFixed(2)} of $${f.budget.cap.toFixed(2)})` };
+  return d;
+}
+function decideRun(kind, f) {
   const ai = f.ai || {};
   const labels = f.labels || [];
   const bk = branchKind(f.branch);
@@ -121,7 +134,7 @@ export function decide(kind, f) {
     if (bk === "release" || bk === "backmerge") return { run: false, why: "release PRs and back-merges were reviewed story by story" };
     if (Array.isArray(f.pushed) && f.pushed.length && f.pushed.every((p) => p.startsWith("e2e/"))) return { run: false, why: "a spec-only push needs no review (the gate accepts e2e-only changes)" };
     if (Array.isArray(f.changed) && f.changed.length < 300 && !f.changed.some((p) => p.startsWith("force-app/") || p.startsWith("e2e/"))) {
-      return { run: false, why: "nothing reviewable", status: { context: STATUS.review, state: "success", description: "not needed: no Salesforce source or specs changed" } };
+      return { run: false, why: "nothing reviewable", status: { context: STATUS.review, state: "success", description: REVIEW.notNeeded("no Salesforce source or specs changed") } };
     }
     return { run: true };
   }
@@ -152,6 +165,24 @@ export const offMessage = (flag) => ({
   AI_UI_TEST: "AI UI test is off (repository variable `AI_UI_TEST`). Commit `e2e/story-<key>.spec.ts` yourself and label the PR `test`, or turn it on in Settings > Secrets and variables > Actions > Variables.",
 })[flag];
 
+/** The one comment when a story's AI budget is spent (sb: roles.storyBudget). Pure. */
+export const budgetMessage = (key, sb) => `⏸ Story ${key} has used $${sb.spent.toFixed(2)} of its $${sb.cap.toFixed(2)} AI budget, so no AI agent starts on it. An approver can comment \`/budget-ok <why>\` to add as much again (AI_STORY_BUDGET_USD), or a person can take it from here.`;
+
+/**
+ * Stop a story's AI work at its budget, before any runner, lane or org: the comment and `blocked` label on the PR (or
+ * the story, before it has one), once (a blocked one already says why), then the card. The Start decision and the
+ * agent's own last check (`pipe agent stop`) both end here. deps: { gh, cards }.
+ */
+export async function stopForBudget({ key, pr = null, sb }, { gh, cards = null }) {
+  const [kind, n] = pr ? ["pr", String(pr)] : ["issue", String(key)];
+  const labels = (gh([kind, "view", n, "--json", "labels"], { allowFail: true })?.labels || []).map((l) => l.name);
+  if (!labels.includes("blocked")) {
+    gh([kind, "comment", n, "--body", budgetMessage(key, sb)], { allowFail: true });
+    gh([kind, "edit", n, "--add-label", "blocked"], { allowFail: true });
+  }
+  if (cards && key) await cards.refresh(String(key), { activity: { state: "failed", what: `the story's AI budget is spent ($${sb.spent.toFixed(2)} of $${sb.cap.toFixed(2)})`, retry: "an approver comments /budget-ok <why>, or a person takes it from here" } });
+}
+
 /** The one comment when Claude's fix rounds are used up. Pure. */
 export const stopMessage = (limit) => `Claude has had ${limit} fix rounds on this change since the last push by a person, so it stops here. **What you can do:** push a fix yourself (the count starts again, and the review re-runs), or, if the AI review is wrong, comment \`/review-ok <why>\` to accept the change anyway.`;
 
@@ -161,10 +192,11 @@ const WORKFLOW = { review: "ai-review.yml", fix: "ai-fix.yml", "ui-test": "ui-te
  * Gather the facts for decide(), then act: dispatch the job on main, or post its verdict, say the flag is off, or stop
  * the fix rounds (block the PR, say what a person can do, once). The one door into review, fix and the UI test: the
  * route jobs (labels, ticked boxes, comments, auto-chain) and CI's autofix all come through here.
- * deps: { host, gh, cards, ai, jev }. jev (AI_TRIAGE, the journey's chained starts only): a fix Jev confidently
- * judges unneeded is not started (fixGate). Returns the decision.
+ * deps: { host, gh, cards, ai, jev, budgetOf }. jev (AI_TRIAGE, the journey's chained starts only): a fix Jev
+ * confidently judges unneeded is not started (fixGate). budgetOf(story): the story's AI budget (roles.storyBudget) or
+ * null (no limit, or the event log could not be read): over it, no runner starts (stopForBudget). Returns the decision.
  */
-export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, mode = "run", before = null, after = null, explicit = false, log = () => {} }) {
+export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, budgetOf = () => null, mode = "run", before = null, after = null, explicit = false, log = () => {} }) {
   const p = gh(["pr", "view", String(pr), "--json", "headRefName,baseRefName,headRefOid,labels,state"]);
   if (p.state !== "OPEN") return { run: false, why: `the PR is ${String(p.state).toLowerCase()}` };
   const labels = (p.labels || []).map((l) => l.name);
@@ -178,6 +210,7 @@ export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, mode
     pushed: kind === "review" && before ? files(before, after || p.headRefOid) : null,
     rounds: kind === "fix" ? { n: fixRoundsUsed(pr, { host, gh }), limit: MAX_FIX_ROUNDS } : null,
     hasSpec: kind === "ui-test" && mode !== "ai" ? Boolean(key && host.api("GET", `repos/${host.repo}/contents/e2e/story-${key}.spec.ts?ref=${p.headRefOid}`)?.sha) : false,
+    budget: key && (kind !== "ui-test" || mode === "ai") ? budgetOf(key) : null,
   });
   const label = { review: "ai:review", fix: "ai:fix", "ui-test": mode === "ai" ? "ai:test" : "test" }[kind];
   if (d.run && kind === "fix" && jev && !explicit) {
@@ -194,11 +227,17 @@ export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, mode
     if (kind === "ui-test" && mode === "ai") host.status(p.headRefOid, STATUS.ui, "pending", "Claude is writing and running the UI test");
     // the review too: without it the card said "run it again" and offered a second review while one ran (scenario
     // fuzz, 15 Oct); its verdict job always replaces it (pass, changes, or error when no verdict came)
-    if (kind === "review") host.status(p.headRefOid, STATUS.review, "pending", "Claude is reviewing this code");
+    if (kind === "review") host.status(p.headRefOid, STATUS.review, "pending", REVIEW.running());
     host.dispatch(WORKFLOW[kind], kind === "ui-test" ? { pr, mode } : { pr });
     return d;
   }
   log(`not started: ${d.why}`);
+  if (d.budget) {
+    if (kind === "review") host.status(p.headRefOid, STATUS.review, "error", REVIEW.budget());   // the gate and the card see why no review came
+    gh(["pr", "edit", String(pr), "--remove-label", label], { allowFail: true });
+    await stopForBudget({ key, pr, sb: budgetOf(key) }, { gh, cards });
+    return d;
+  }
   if (d.off) gh(["pr", "comment", String(pr), "--body", offMessage(d.off)], { allowFail: true });
   if (d.status) {
     host.status(p.headRefOid, d.status.context, d.status.state, d.status.description);
@@ -226,6 +265,19 @@ export async function fixGate(pr, { host, gh, jev }) {
   } catch (err) { t = { fix: true, kind: "unknown", confidence: 0, why: `could not ask Jev (${err.message})` }; }
   host.record?.("jev", { decision: "fix", pr: String(pr), skipped: !t.fix, finding: t.kind, confidence: t.confidence, why: t.why });   // not `kind`: the envelope's own (it renamed the event)
   return t;
+}
+
+/**
+ * A story PR closed without merging: does it give the story's org back (startFollowUps delete-story-org)? Only from the
+ * story's own branch (issue-9 or LIFE-12, never one that merely starts like it, issue-9-x: storyOf accepts that older
+ * form), and only when no other PR on that branch is open (a PR replaced by a new one keeps its org). Returns { story }
+ * or { why }. Pure.
+ */
+export function closedPlan({ head, openPrs = 0 }) {
+  const story = storyOf(head);
+  if (!story || storyBranch(story) !== head) return { why: `not a story's own branch (${head})` };
+  if (openPrs > 0) return { why: `${openPrs} other PR(s) on ${head} still open: the org stays` };
+  return { story };
 }
 
 /**

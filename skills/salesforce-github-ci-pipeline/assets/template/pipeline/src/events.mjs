@@ -7,6 +7,7 @@
 // path each time, so writers never conflict on a file. Readers fetch the branch once.
 
 export const BRANCH = "metrics";
+import { reviewKindOf } from "./gate.mjs";
 const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile", "overrule", "budget-ok"];
 
 /** The envelope's own fields: a payload never sets them (Jev's `run` was silently replaced by the Actions run id). */
@@ -117,7 +118,7 @@ export function summarize(events, { days = 28 } = {}) {
   for (const a of agents.filter((x) => x.role === "fix" && x.pr)) fixRounds[a.pr] = (fixRounds[a.pr] || 0) + 1;
   const firstReview = {};
   // the first real review per PR ("not needed" verdicts are not reviews)
-  for (const v of of("verdict").filter((x) => x.context === "pipeline/ai-review" && !/^not needed/.test(x.why || "")).sort((a, b) => a.at.localeCompare(b.at))) firstReview[v.pr || v.story || v.sha] ??= v.state;
+  for (const v of of("verdict").filter((x) => x.context === "pipeline/ai-review" && reviewKindOf(x.state, x.why) !== "not-needed").sort((a, b) => a.at.localeCompare(b.at))) firstReview[v.pr || v.story || v.sha] ??= v.state;
   const reviewed = Object.values(firstReview);
   // each model (and experiment arm) per role, so a team can compare: cost, and how its reviews fared (overruled by a person)
   const models = {};

@@ -141,3 +141,21 @@ test("check runs are updated when their title changes, at most once a minute; th
   assert.equal(sent.length, 3, "two progress updates in two minutes, then the result");
   assert.equal(sent.at(-1).conclusion, "success");
 });
+
+test("the code host finds a release branch's open PR once, and forgets a PR's facts after work starts on it (27 Oct review)", () => {
+  let lists = 0, views = 0;
+  const io = { gh: (a) => {
+    if (a[0] === "pr" && a[1] === "list") { lists++; return [{ number: 296 }]; }
+    if (a[0] === "pr" && a[1] === "view") { views++; return { number: 5, headRefOid: "h", headRefName: "issue-5", baseRefName: "release/w", state: "OPEN", commits: [] }; }
+    return [];
+  }, ghPages: () => [], run: () => "{}", git: () => "" };
+  const host = codeHost({ io, env: { GH_REPO: "o/r", PIPELINE_EVENTS: "off" } });
+  assert.equal(host.releasePrOf("origin/release/2027-w01"), 296);
+  assert.equal(host.releasePrOf("release/2027-w01"), 296);
+  assert.equal(lists, 1, "origin/ is the same branch: asked once");
+  assert.equal(host.releasePrOf(null), null);
+  host.prFacts(5); host.prFacts(5);
+  assert.equal(views, 1, "facts are gathered once per process");
+  host.forget(5); host.prFacts(5);
+  assert.equal(views, 2, "after forget, the next card reads fresh facts");
+});

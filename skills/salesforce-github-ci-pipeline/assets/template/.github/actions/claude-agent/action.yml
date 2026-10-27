@@ -49,19 +49,16 @@ runs:
         SPENT: ${{ steps.rules.outputs.spent }}
         CAP: ${{ steps.rules.outputs.cap }}
       run: |
-        MSG="⏸ Story $KEY has used \$$SPENT of its \$$CAP AI budget, so no AI agent starts on it. An approver can comment \`/budget-ok <why>\` to add as much again (AI_STORY_BUDGET_USD), or a person can take it from here."
-        if [ -n "$PR" ]; then gh pr comment "$PR" --body "$MSG" || true; gh pr edit "$PR" --add-label blocked || true
-        elif [ "$KEY" != N ]; then gh issue comment "$KEY" --body "$MSG" || true; gh issue edit "$KEY" --add-label blocked || true; fi
-        [ "$KEY" = N ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "the story's AI budget is spent (\$$SPENT of \$$CAP)" --failed --retry "an approver comments /budget-ok <why>, or a person takes it from here" || true
+        node .pipeline/pipeline/bin/pipe.mjs agent stop --key "$KEY" ${PR:+--pr "$PR"} || true   # comment, blocked, card (start.stopForBudget)
         echo "AI_BUDGET_STOPPED=true" >> "$GITHUB_ENV"   # the caller's later steps say so instead of "the build failed"
         echo "::error::story $KEY is over its AI budget (\$$SPENT of \$$CAP)"; exit 1
-    - name: Log in to AWS for Bedrock (GitHub's OIDC identity: no stored key)
+    - name: Log in to AWS for Bedrock (GitHub's OIDC identity, no stored key)
       if: steps.rules.outputs.auth == 'aws-oidc'
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ steps.rules.outputs.aws_role }}
         aws-region: ${{ steps.rules.outputs.aws_region }}
-    - name: Log in to Google Cloud for Vertex AI (workload identity federation: no stored key)
+    - name: Log in to Google Cloud for Vertex AI (workload identity federation, no stored key)
       if: steps.rules.outputs.auth == 'gcp-wif'
       uses: google-github-actions/auth@v2
       with:

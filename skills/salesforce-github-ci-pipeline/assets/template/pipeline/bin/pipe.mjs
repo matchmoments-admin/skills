@@ -104,7 +104,8 @@ const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, 
 // a snapshot Salesforce refused is marked with a tag (snapshot-refused-<name>) so no later run spends a daily org on it
 const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;
 const refuseSnapshot = (n) => { const sha = host.api("GET", `repos/${host.repo}/git/ref/heads/main`)?.object?.sha; if (sha) host.api("POST", `repos/${host.repo}/git/refs`, { ref: `refs/tags/snapshot-refused-${n}`, sha }); };
-const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, jev: triageJev(), log });
+const budgetOf = roles.budgetReader({ read: (onFail) => events.readLog(io, { days: 120, onFail }), base: () => Number(names.setting("AI_STORY_BUDGET_USD")), log });   // the story's AI budget
+const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, jev: triageJev(), budgetOf, log });
 const freed = async () => { try { log((await nextAfter("org-freed")).said); } catch (e) { log(`::warning::could not start what waited for a slot: ${e.message}`); } };   // UAT first, else the story waiting longest
 const orgs = () => orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, sameSource: sameSourceVia((a, b) => host.api("GET", `repos/${host.repo}/compare/${a}...${b}`)), env: { ...process.env, ...orgSettings() } });   // every setting org provisioning reads, resolved (SEED=off once never arrived)
 const { record } = host;
@@ -163,7 +164,7 @@ const commands = {
   "gate checks": () => {
     // Are the required CI checks green on a commit? (A release branch can only be cut from one that is.)
     const sha = io.git(["rev-parse", arg(0) || "HEAD"]);
-    const runs = io.ghPages(`repos/${host.repo}/commits/${sha}/check-runs?per_page=100`, "check_runs");
+    const runs = host.checkRuns(sha);
     const state = [names.CHECKS.static, names.CHECKS.apex].map((n) => [n, gate.latestCheck(runs, n)]);
     output({ green: state.every(([, c]) => gate.checkPassed(c)) });
     return say(state.map(([n, c]) => `${n}: ${c}`).join("\n"));
@@ -222,7 +223,8 @@ const commands = {
         regate: () => shipping.regate(io, host, log) });
     return say(`follow-ups: ${steps.join(" ") || "none"}`);
   },
-  "ci staging-plan": () => { const p = start.stagingPlanFor({ git: io.git, host, gh: io.gh, branch: flag("branch"), policy: names.setting("UI_REGRESSION") || "release" }); output(p); return say(p.why); },   // what this staging run does (#273)
+  "start closed": () => { const p = start.closedPlan({ head: flag("head"), openPrs: (io.gh(["pr", "list", "--head", flag("head"), "--state", "open", "--json", "number"]) || []).length }); output({ story: p.story || "" }); return say(p.story ? `story ${p.story}: its org goes back` : `nothing to give back: ${p.why}`); },   // merged.yml closed
+  "ci staging-plan": () => { const p = start.stagingPlanFor({ git: io.git, host, branch: flag("branch"), policy: names.setting("UI_REGRESSION") || "release" }); output(p); return say(p.why); },   // what this staging run does (#273)
   "ci plan": () => {   // which CI jobs need a runner, from what changed (a failed diff assumes everything)
     const base = flag("base", "main");
     const out = io.git(["diff", "--name-only", `origin/${base}...HEAD`], { allowFail: true });
@@ -245,20 +247,25 @@ const commands = {
       ...r.map((x) => `#${x.pr}: ${x.skipped || (x.started.length ? `started ${x.started.join(", ")}` : "nothing owed")}`)].join("\n") || "no open pull request");
   },
   "next ": async () => { const r = await nextAfter(flag("after"), flag("pr")); output({ next: r.steps.map((x) => x.start || x.dispatch).join(" ") }); return say(r.said); },
-  "ci results": () => { const t = roles.ciResults(io.ghPages(`repos/${host.repo}/commits/${arg(0)}/check-runs?per_page=100`, "check_runs")); if (flag("out")) writeFileSync(flag("out"), t); return say(t); },   // for an agent or Jev
+  "ci results": () => { const t = roles.ciResults(host.checkRuns(arg(0))); if (flag("out")) writeFileSync(flag("out"), t); return say(t); },   // for an agent or Jev
   "agent budget": () => {   // the role's provider, model and turns (config/ai-models.json); --changed: the PR's paths, one a line
     const files = flag("changed") && existsSync(flag("changed")) ? readFileSync(flag("changed"), "utf8").split("\n").filter(Boolean) : null;
     const b = roles.budget(arg(0), undefined, { story: flag("key") && flag("key") !== "N" ? flag("key") : "", declarative: Boolean(files) && isDeclarativeOnly(files) });
     const p = roles.providerSetup(b.provider);
-    // the story's AI budget (AI_STORY_BUDGET_USD): spent so far from the event log, read before the agent starts
-    const story = flag("key") && flag("key") !== "N" ? flag("key") : "";
-    const base = Number(names.setting("AI_STORY_BUDGET_USD"));
-    const sb = story && base > 0 ? roles.storyBudget(events.readLog(io, { days: 120, onFail: () => log(`::warning::the event log could not be read: story ${story}'s AI budget is not checked this run`) }), story, base) : null;
+    // the story's AI budget again, the agent's last check: the Start decision stopped most runs before a runner
+    const sb = budgetOf(flag("key"));
     if (sb?.over) output({ stop: "true", spent: sb.spent.toFixed(2), cap: sb.cap.toFixed(2) });
     output({ ...b, auth: p.auth, ...p.with });
     for (const [k, v] of Object.entries(p.env)) if (/[\r\n]/.test(v)) throw new Error(`${k} holds a line break: fix that repository variable`);
     if (process.env.GITHUB_ENV) for (const [k, v] of Object.entries(p.env)) appendFileSync(process.env.GITHUB_ENV, `${k}=${v}\n`);
     return say(`${arg(0)}: ${b.provider} ${b.model}${b.arm ? ` (${b.arm})` : ""}, ${b.turns} turns`);
+  },
+  "agent stop": async () => {   // the agent's own budget check stopped it (claude-agent): the same comment, label and card as the Start decision
+    const sb = budgetOf(flag("key"));
+    if (!sb?.over) return say(`story ${flag("key")} is within its AI budget`);
+    await start.stopForBudget({ key: flag("key"), pr: flag("pr") || null, sb }, { gh: io.gh, cards });
+    if (process.env.GITHUB_ENV) appendFileSync(process.env.GITHUB_ENV, "AI_BUDGET_STOPPED=true\n");   // the job's later steps say so instead of "the build failed"
+    throw new Error(`story ${flag("key")} is over its AI budget ($${sb.spent.toFixed(2)} of $${sb.cap.toFixed(2)})`);
   },
   "harness overlay": () => say(`main's ${harness.overlay(arg(0), { git: io.git, from: flag("from", ".pipeline") }).join(", ")} over the checkout, hidden from git`),
   "triage ui": async () => {
@@ -470,7 +477,7 @@ const commands = {
 };
 
 async function startCmd(kind) {
-  const d = await start.startJob(kind, flag("pr"), { host, gh: io.gh, cards, ai: names.aiFeatures(), mode: flag("mode", "run"), before: flag("before"), after: flag("after"), explicit: has("explicit"), log });
+  const d = await start.startJob(kind, flag("pr"), { host, gh: io.gh, cards, ai: names.aiFeatures(), budgetOf, mode: flag("mode", "run"), before: flag("before"), after: flag("after"), explicit: has("explicit"), log });
   output({ run: d.run, why: d.why || "" });
   return say(d.run ? `started ${kind} for PR #${flag("pr")}` : `not started: ${d.why}`);
 }

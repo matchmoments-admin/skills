@@ -107,6 +107,25 @@ export function storyBudget(events, story, base) {
   return { spent, cap, extensions, over: Number(base) > 0 && spent >= cap };
 }
 
+/**
+ * The story's AI budget as the Start decision and the agent read it: budgetOf(story) is storyBudget over the event log,
+ * read once per process, or null when there is no story ("N"), no limit (AI_STORY_BUDGET_USD 0 or unset) or the log
+ * could not be read (a warning, and the run goes on). deps: { read(onFail): events, base(): dollars, log }.
+ */
+export function budgetReader({ read, base, log = () => {} }) {
+  const seen = new Map();
+  return (story) => {
+    const b = base();
+    if (!story || story === "N" || !(b > 0)) return null;
+    if (!seen.has(story)) {
+      let failed = false;
+      const events = read(() => { failed = true; log(`::warning::the event log could not be read: story ${story}'s AI budget is not checked this run`); });
+      seen.set(story, failed ? null : storyBudget(events, story, b));
+    }
+    return seen.get(story);
+  };
+}
+
 // kept for callers that want only the id
 export const modelFor = (role, override, ctx) => choose(role, override, ctx).model;
 

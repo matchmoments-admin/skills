@@ -154,7 +154,7 @@ test("#237: a back-merge that changes nothing staging tests keeps the regression
   }
   const git = (a) => (a[0] === "rev-list" ? "p1\np2" : a[0] === "rev-parse" ? "h" : a[0] === "diff" ? (a[1] === "p1" ? backmerge.join("\n") : "") : null);
   // the live "Salesforce tests" check is what carries: it exists only where the tests really ran
-  const runs = (map) => ({ repo: "o/r", api: (m, p) => ({ check_runs: p.includes("check_name=Salesforce%20tests") ? Object.entries(map).flatMap(([sha, list]) => (p.includes(`/${sha}/`) ? list : [])) : [{ conclusion: "success", started_at: "9", status: "completed" }] }) });
+  const runs = (map) => ({ repo: "o/r", checkRuns: (sha, name) => (name === "Salesforce tests" ? map[sha] || [] : [{ conclusion: "success", started_at: "9", status: "completed" }]) });
   const done = (conclusion, started_at = "1") => ({ conclusion, started_at, status: "completed" });
   const host = runs({ p1: [done("success")] });
   assert.equal(start.stagingCarry({ git, host }), "p1");

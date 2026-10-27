@@ -130,16 +130,23 @@ export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineD
      */
     claimPool(org) {
       if (org.kind !== "story" || !(Number(env.ORG_POOL) > 0)) return null;
-      // the newest: the most days left (an org's expiry cannot be extended)
-      const r = active().filter((x) => POOL.test(x.Description || "")).sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)))[0];
-      if (!r) return null;
-      const ok = sf(["data", "update", "record", "-o", DEVHUB, "-s", "ScratchOrgInfo", "-w", `SignupUsername='${r.SignupUsername}'`, "-v", `Description='${org.description}'`], { allowFail: true });
-      // two stories starting at once may pick the same pool org: only the one whose Description stuck has it
-      const mine = ok && active().some((x) => x.SignupUsername === r.SignupUsername && x.Description === org.description);
-      if (!mine) { log(`::warning::could not claim ${r.Description}: creating ${org.alias} instead`); return null; }
-      record("org", { action: "claimed", org: org.description, from: r.Description });
-      log(`claimed warm pool org ${r.Description} for ${org.alias}`);
-      return { fromSnapshot: true, pooled: r.Description };
+      // the newest first: the most days left (an org's expiry cannot be extended). Two stories starting at once may pick
+      // the same pool org: only the one whose Description stuck has it, and the other tries the next pool org rather than
+      // spending a daily slot on a new one (27 Oct review). Up to three tries; then a new org.
+      const tried = new Set();
+      for (let i = 0; i < 3; i++) {
+        const r = active().filter((x) => POOL.test(x.Description || "") && !tried.has(x.SignupUsername)).sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)))[0];
+        if (!r) return null;
+        tried.add(r.SignupUsername);
+        const ok = sf(["data", "update", "record", "-o", DEVHUB, "-s", "ScratchOrgInfo", "-w", `SignupUsername='${r.SignupUsername}'`, "-v", `Description='${org.description}'`], { allowFail: true });
+        const mine = ok && active().some((x) => x.SignupUsername === r.SignupUsername && x.Description === org.description);
+        if (!mine) { log(`::warning::could not claim ${r.Description}: trying the next pool org`); continue; }
+        record("org", { action: "claimed", org: org.description, from: r.Description });
+        log(`claimed warm pool org ${r.Description} for ${org.alias}`);
+        return { fromSnapshot: true, pooled: r.Description };
+      }
+      log(`::warning::no pool org could be claimed: creating ${org.alias} instead`);
+      return null;
     },
     limits() {
       const raw = sf(["limits", "api", "display", "-o", DEVHUB], { allowFail: true });

@@ -5,7 +5,7 @@
 //
 // Effects: a label (applied as the pipeline App, so its workflow starts), a trusted commit status from an agent-free job
 // (the sign-off and UAT verdicts the gate reads), or a workflow dispatch.
-import { STATUS, approvalProblemFor, standing, approverList } from "./gate.mjs";
+import { STATUS, REVIEW, authorityProblemFor, authorityProblem, standing, approverList } from "./gate.mjs";
 import { setting } from "./settings.mjs";
 import { storyOf, storyBranch, nextSprint, sprintOfMilestoneTitle } from "./conventions.mjs";
 
@@ -75,10 +75,10 @@ export function mayAct({ login, type, permission }) {
 
 /**
  * Do it. where: { number, isPr, pr?: { headRefName, headRefOid, baseRefName } }; who: the login (for the record).
- * deps: { host, appGh (gh as the pipeline App), gh (gh with the Actions token), inUat(sha), mayApprove(login): why not, or
- * null (gate.approvalProblemFor on the PR's facts) }. Returns what was done.
+ * deps: { host, appGh (gh as the pipeline App), gh (gh with the Actions token), inUat(sha), authority(action, login): why
+ * this person may not approve | overrule | budget, or null (gate.authorityProblemFor on the PR's facts) }. Returns what was done.
  */
-export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprove = () => null }) {
+export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority = () => null }) {
   const a = ACTIONS[id];
   if (id === "uat-fail" || id === "uat-pass") {
     const pr = where.pr;
@@ -98,7 +98,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprov
   if (id === "ship") {
     const pr = where.pr;
     if (pr.baseRefName === "main") return { said: `Pull requests into main need a GitHub approval: **[Approve here](${host.repoUrl}/pull/${where.number}/files)** (Review changes > Approve).` };
-    const no = mayApprove(who);
+    const no = authority("approve", who);
     if (no) return { said: `Not signed off: ${no}.` };
     host.status(pr.headRefOid, STATUS.signoff, "success", `Signed off by @${who}`);
     host.dispatch("gate.yml", { pr: where.number });
@@ -107,9 +107,9 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprov
   if (id === "review-ok") {   // a person overrules the AI review on this exact commit; the reason goes on the status and the PR
     const pr = where.pr;
     if (!arg) return { said: `@${who}: to accept the change over the AI review, say why in a comment: \`/review-ok <why>\` (for example \`/review-ok THIS_YEAR is valid SOQL and CI passed\`). The reason goes on the PR's record.` };
-    const no = mayApprove(who);   // overruling the review is an approver's call, never the author's own
+    const no = authority("overrule", who);   // an approver's call, never the author's own (but solo mode's one approver)
     if (no) return { said: `The AI review stands: ${no}.` };
-    host.status(pr.headRefOid, STATUS.review, "success", `AI review overruled by @${who}${arg ? `: ${arg}` : ""}`.slice(0, 139));
+    host.status(pr.headRefOid, STATUS.review, "success", REVIEW.overruled(who, arg));
     host.record?.("overrule", { pr: Number(where.number), sha: pr.headRefOid, by: who, why: arg.slice(0, 300) });   // the metrics: how often each model's review is overruled
     host.dispatch("gate.yml", { pr: where.number });
     return { done: `AI review overruled by @${who} on ${pr.headRefOid.slice(0, 7)}`, said: `✋ @${who} accepted this change over the AI review on \`${pr.headRefOid.slice(0, 7)}\`: ${arg}. A new push needs a review again.` };
@@ -118,8 +118,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprov
     const story = where.isPr ? storyOf(where.pr.headRefName) : String(where.number);
     if (!story) return { said: "`/budget-ok` works on a story or its pull request." };
     if (!arg) return { said: `@${who}: say why in the comment: \`/budget-ok <why>\` (for example \`/budget-ok the fix round needs one more try\`). The reason goes on record.` };
-    const approvers = approverList(setting("APPROVERS"));
-    const no = where.isPr ? mayApprove(who) : (approvers.length && !approvers.includes(who) ? `only an approver (${approvers.join(", ")}) can` : null);
+    const no = authority("budget", who);
     if (no) return { said: `The budget stands: ${no}.` };
     host.record?.("budget-ok", { story, by: who, why: arg.slice(0, 300) });
     appGh([where.isPr ? "pr" : "issue", "edit", String(where.number), "--remove-label", "blocked"], { allowFail: true });
@@ -143,7 +142,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, mayApprov
   }
   if (id === "fix-story") {
     // a sprint story for what failed on the release (the failing checks' own lists), so it goes through the normal flow
-    const failed = (gh(["api", `repos/${host.repo}/commits/${where.pr.headRefOid}/check-runs?per_page=100`]) || {}).check_runs?.filter((c) => c.conclusion === "failure") || [];
+    const failed = host.checkRuns(where.pr.headRefOid).filter((c) => c.conclusion === "failure");
     const lines = failed.flatMap((c) => String(c.output?.text || "").split("\n").filter((l) => /^\| (test|component|coverage) \|/.test(l)).slice(0, 20));
     const body = ["### Summary", "", `Release PR #${where.number} cannot ship: ${failed.map((c) => c.name).join(", ") || "a check"} failed. Fix what is listed below on the sprint branch.`, "",
       "### Acceptance criteria", "", "- Every test listed under Out of scope's \"What failed\" passes in the staging regression", "- The production validation passes on the release PR", "- No production code changes beyond what the failures need", "",
@@ -210,8 +209,9 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
       const open = host.storyPr?.(storyBranch(String(number)));
       if (open?.state === "OPEN") at = { number: open.number, isPr: true, pr: io.gh(["pr", "view", String(open.number), "--json", "number,headRefName,headRefOid,baseRefName,state"]) };
     }
-    const mayApprove = (login) => (at.pr ? approvalProblemFor(host.prFacts(at.pr.number), login) : null);
-    const r = perform(id, arg, { ...at, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat: at.pr ? inUatOf(at.pr) : () => false, mayApprove });
+    // the approval policy (approval.mjs) on the PR's facts; on an issue (no PR yet) only APPROVERS applies
+    const authority = (action, login) => (at.pr ? authorityProblemFor(host.prFacts(at.pr.number), action, login) : authorityProblem(action, { approvers: approverList(setting("APPROVERS")) }, login));
+    const r = perform(id, arg, { ...at, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat: at.pr ? inUatOf(at.pr) : () => false, authority });
     if (r.said) io.gh(["issue", "comment", String(number), "--body", r.said]);
     if (r.done) { log(r.done); host.record("stage", { story: storyOf(pr?.headRefName || "") || (isPr ? undefined : String(number)), pr: isPr ? Number(number) : undefined, what: `${id} by @${who}`, state: "running" }); }
   }

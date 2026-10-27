@@ -173,6 +173,31 @@ export function carriedFrom(result, { head, passed = [], changedSince }) {
   return null;
 }
 /** A result's phase for the journey and the cards: owed (none, or one that no longer counts), running, passed, failed. */
+/**
+ * The AI review verdict's text, written only here (REVIEW) and read only by reviewKindOf, so no module matches status
+ * descriptions itself: passed, changes (asks for changes), not-needed (a success no AI looked at: nothing reviewable,
+ * or Jev judged it low risk), overruled (a person accepted the change over it, with a reason), budget (the story's AI
+ * budget is spent), running, none (no verdict came). Pure.
+ */
+export const REVIEW = {
+  passed: () => "AI review passed",
+  changes: () => "AI review asks for changes",
+  notNeeded: (why) => `not needed: ${why}`,
+  overruled: (who, why) => `AI review overruled by @${who}${why ? `: ${why}` : ""}`.slice(0, 139),
+  budget: () => "the story's AI budget is spent: an approver's /budget-ok, then Run the AI review again",
+  running: () => "Claude is reviewing this code",
+  none: () => "the review posted no verdict: tick Run the AI review again",
+};
+export function reviewKindOf(state, description) {
+  const d = String(description || "");
+  if (state === "pending") return "running";
+  if (/^not needed\b/i.test(d)) return "not-needed";
+  if (/^AI review overruled by @/.test(d)) return "overruled";
+  if (state === "success") return "passed";
+  if (/AI budget is spent/.test(d)) return "budget";
+  return state === "failure" ? "changes" : "none";
+}
+
 export const phaseOf = (v) => (!v || ["missing", "stale"].includes(v.state) ? "owed" : v.state === "pending" ? "running" : v.state === "success" ? "passed" : "failed");
 /** The verdict a status context gives the head: { state: "success" | "failure" | "stale" | "missing" | ... }. */
 export function verdictFor(context, { statuses = [], head, diffsToHead = {}, pr = null }) {
@@ -188,7 +213,8 @@ export function verdictFor(context, { statuses = [], head, diffsToHead = {}, pr 
   if (!carries(context, last.sha, head, diffsToHead[last.sha], { running: last.state === "pending" })) return { state: "stale", phase: "owed", sha: last.sha };
   // who acted, once: the sign-off's or UAT's signer, the person who overruled a review ("... by @login")
   const who = String(last.description || "").match(/@([A-Za-z0-9-]+)/)?.[1] || null;
-  return { state: last.state, phase: phaseOf(last), description: last.description || "", url: last.url || null, sha: last.sha, at: last.created_at || null, who };
+  const v = { state: last.state, phase: phaseOf(last), description: last.description || "", url: last.url || null, sha: last.sha, at: last.created_at || null, who };
+  return context === STATUS.review ? { ...v, kind: reviewKindOf(last.state, last.description) } : v;
 }
 
 /** The approving reviews that cover the code as it is now: latest decisive review per human, on the head (or e2e-only since). */
@@ -206,15 +232,19 @@ export const reviewApprovers = (ctx) => approvingReviews(ctx).map((r) => r.user.
 export const humanApproval = (ctx) => reviewApprovers(ctx).length > 0;
 
 // the approval policy (who may approve whose change, solo mode) lives in approval.mjs; re-exported for callers and tests
-export { approverOf, approverList, lastPusherOf, approvalProblem } from "./approval.mjs";
-import { approverOf, approverList, lastPusherOf, approvalProblem, isSolo } from "./approval.mjs";
+export { approverOf, approverList, lastPusherOf, approvalProblem, authorityProblem } from "./approval.mjs";
+import { approverOf, approverList, lastPusherOf, approvalProblem, authorityProblem, isSolo, soloBasis } from "./approval.mjs";
 
-/** approvalProblem() with what solo mode needs from the statuses: did a real AI review pass on this code? "not needed"
- *  (nothing reviewable changed, or Jev judged it low risk) is a success no AI looked at: it is not a second pair of eyes. */
-export function approvalProblemFor(ctx, login) {
+/** The approval policy's facts from a PR's statuses: the kind of AI review that stands on the head (REVIEW). "not
+ *  needed" is a success no AI looked at: it is not a second pair of eyes for solo mode. */
+const policyCtx = (ctx) => {
   const r = verdictFor(STATUS.review, ctx);
-  return approvalProblem({ ...ctx, aiReviewOn: Boolean(ctx.ai?.review), aiReviewPassed: r.state === "success" && !/^not needed/i.test(r.description || "") }, login);
-}
+  return { ...ctx, aiReviewOn: Boolean(ctx.ai?.review), aiReview: ["missing", "stale"].includes(r.state) ? null : r.kind };
+};
+/** approvalProblem() on a PR's facts. */
+export const approvalProblemFor = (ctx, login) => approvalProblem(policyCtx(ctx), login);
+/** authorityProblem() on a PR's facts (approve, overrule, budget). */
+export const authorityProblemFor = (ctx, action, login) => authorityProblem(action, policyCtx(ctx), login);
 
 /**
  * Does a person's approval cover the code as it is now (Sign-off)? Reviews on the head; with signOff, also a ticked
@@ -232,7 +262,7 @@ export function approval(ctx, { signOff = false } = {}) {
   for (const a of seen) {
     if (who.some((w) => w.login === a.login) || refused.some((r) => r.login === a.login)) continue;
     const why = approvalProblemFor(ctx, a.login);
-    if (why) refused.push({ login: a.login, why }); else who.push(isSolo(ctx, a.login) ? { ...a, how: `${a.how} (solo: the AI review passed)`, solo: true } : a);
+    if (why) refused.push({ login: a.login, why }); else who.push(isSolo(ctx, a.login) ? { ...a, how: `${a.how} (solo: ${soloBasis(policyCtx(ctx).aiReview)})`, solo: true } : a);
   }
   return { ok: who.length > 0, by: who.map((w) => w.login), who, refused };
 }

@@ -21,24 +21,30 @@ export function lastPusherOf(commits = [], pushes = []) {
 
 const is = (a, b) => String(a || "").toLowerCase() === String(b || "").toLowerCase();
 /** Solo mode (APPROVAL_MODE=solo): the one approver may approve a change they pushed themselves, once the AI review
- *  passed on it; nobody else is there to. The approval record says so. A team (two or more approvers) never may. */
+ *  passed on it (or they overruled it, with a reason on record); nobody else is there to. The approval record says so.
+ *  A team (two or more approvers) never may. */
 const soloAllowed = ({ approvers = [], approvalMode = "team" }, login) => approvalMode === "solo" && approvers.length === 1 && is(approvers[0], login);
 /** Did this person's approval count only by solo mode? */
 export const isSolo = (ctx, login) => is(login, ctx.lastPusher) && soloAllowed(ctx, login);
+/** What a solo approval rests on, for its record: "the AI review passed" or "AI review overruled by @x". Pure. */
+export const soloBasis = (aiReview) => (aiReview === "overruled" ? "the AI review was overruled, reason on record" : "the AI review passed");
+/** The AI review kinds a solo approval accepts as the second pair of eyes (gate.reviewKindOf). */
+const SOLO_REVIEWS = ["passed", "overruled"];
 
 /**
  * Why this person's approval does not count, or null when it does (see GLOSSARY.md: Approver). With APPROVERS unset,
  * anyone with write access approves (a team without a policy yet). With it set: never the person who pushed the
  * latest change (nobody approves their own work), and only the story's approver; with none named (a release, a
  * hotfix without one), or when the approver pushed the latest change themselves, anyone in APPROVERS. Solo mode: the one
- * approver's own push counts once the AI review passed on it (aiReviewPassed). Pure.
+ * approver's own push counts once the AI review passed on it, or they overruled it (aiReview: gate.reviewKindOf of the
+ * review's verdict on the head, null when none stands). Pure.
  */
-export function approvalProblem({ approvers = [], storyApprover = null, lastPusher = null, approvalMode = "team", aiReviewPassed = false, aiReviewOn = true }, login) {
+export function approvalProblem({ approvers = [], storyApprover = null, lastPusher = null, approvalMode = "team", aiReview = null, aiReviewOn = true }, login) {
   if (!approvers.length || !login) return null;
   const inTeam = approvers.some((a) => is(a, login));
   if (is(login, lastPusher) && soloAllowed({ approvers, approvalMode }, login)) {
     if (!aiReviewOn) return `@${login} pushed the latest change: solo approval needs the AI review as the second pair of eyes (turn on AI_REVIEW)`;
-    return aiReviewPassed ? null : `@${login} pushed the latest change: solo approval (APPROVAL_MODE=solo) needs a real AI review to pass on it first ("not needed" is not one: comment /review to run it)`;
+    return SOLO_REVIEWS.includes(aiReview) ? null : `@${login} pushed the latest change: solo approval (APPROVAL_MODE=solo) needs a real AI review to pass on it first ("not needed" is not one: comment /review to run it)`;
   }
   if (is(login, lastPusher)) return `@${login} pushed the latest change, so ${storyApprover && !is(storyApprover, login) ? `@${storyApprover} (the approver)` : "another approver"} needs to approve`;
   if (storyApprover && !is(storyApprover, login) && !(is(storyApprover, lastPusher) && inTeam)) return `@${storyApprover} is this story's approver (change the story's Approver line to hand it over)`;
@@ -46,3 +52,20 @@ export function approvalProblem({ approvers = [], storyApprover = null, lastPush
   return null;
 }
 
+
+/**
+ * Why this person may not take an action that needs an approver's authority, or null when they may. action:
+ *   approve   approve the change (approvalProblem)
+ *   overrule  accept the change over the AI review (/review-ok): the approval rule without its AI review condition
+ *             (an overrule replaces the review), so in solo mode the one approver may, even on their own push
+ *   budget    give a story more AI budget (/budget-ok): spending, not code, so anyone in APPROVERS
+ * With APPROVERS unset, anyone with write access. Pure.
+ */
+export function authorityProblem(action, ctx, login) {
+  const { approvers = [] } = ctx || {};
+  if (action === "approve") return approvalProblem(ctx, login);
+  if (!approvers.length || !login) return null;
+  if (action === "budget") return approvers.some((a) => is(a, login)) ? null : `only an approver (${approvers.map((a) => `@${a}`).join(", ")}) can`;
+  if (action === "overrule") return soloAllowed(ctx, login) ? null : approvalProblem({ ...ctx, approvalMode: "team" }, login);
+  throw new Error(`authorityProblem: unknown action "${action}" (approve, overrule, budget)`);
+}
