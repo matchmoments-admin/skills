@@ -56,6 +56,7 @@ import * as tests from "../src/tests.mjs";
 import * as production from "../src/production.mjs";
 import { orgRegistry, personaOf as orgPersona, packageList, sameSourceVia } from "../src/org.mjs";
 import { orgCommands } from "./commands/org.mjs";
+import { evalCommands } from "./commands/eval.mjs";
 import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
@@ -74,7 +75,7 @@ import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "floor", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind", "changed", "provider", "arm"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind", "changed", "provider", "arm", "cases"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -112,7 +113,6 @@ const { record } = host;
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 const triageJev = () => (names.setting("AI_TRIAGE") === "true" && process.env.TYPESAFE_API_KEY ? jev() : null);   // the fix gate (start.fixGate)
 
-
 const commands = {
   "context ": () => {
     const labels = (flag("labels") || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -127,7 +127,7 @@ const commands = {
 
   // ---- orgs and lanes (commands/org.mjs)
   ...orgCommands({ io, host, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record: (...a) => record(...a), freed }),
-
+  ...evalCommands({ flag, say, record: (...a) => record(...a) }),   // the reviewer eval set (commands/eval.mjs)
   // ---- the gate
   "gate evaluate": async () => {
     const pr = arg(0);

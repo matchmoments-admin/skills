@@ -1,0 +1,1 @@
+{ "verdict": "CHANGES", "finds": ["hard.?coded|custom metadata|record id|user id"], "why": "REVIEW.md blocker: hard-coded record ID" }

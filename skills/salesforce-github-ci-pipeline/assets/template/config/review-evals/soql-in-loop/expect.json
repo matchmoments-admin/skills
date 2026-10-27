@@ -1,0 +1,1 @@
+{ "verdict": "CHANGES", "finds": ["loop"], "why": "REVIEW.md blocker: missing bulk safety (a query inside a loop)" }

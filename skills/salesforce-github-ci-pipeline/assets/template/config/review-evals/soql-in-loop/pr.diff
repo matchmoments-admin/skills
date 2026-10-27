@@ -1,0 +1,37 @@
+diff --git a/force-app/main/default/classes/AccountCaseCounter.cls b/force-app/main/default/classes/AccountCaseCounter.cls
+new file mode 100644
+--- /dev/null
++++ b/force-app/main/default/classes/AccountCaseCounter.cls
+@@ -0,0 +1,14 @@
++public with sharing class AccountCaseCounter {
++    // Called from AccountTriggerHandler.beforeUpdate
++    public static void countOpenCases(List<Account> accounts) {
++        for (Account acc : accounts) {
++            Integer open = [
++                SELECT COUNT()
++                FROM Case
++                WHERE AccountId = :acc.Id AND IsClosed = FALSE
++                WITH USER_MODE
++            ];
++            acc.Open_Cases__c = open;
++        }
++    }
++}
+diff --git a/force-app/main/default/classes/AccountCaseCounterTest.cls b/force-app/main/default/classes/AccountCaseCounterTest.cls
+new file mode 100644
+--- /dev/null
++++ b/force-app/main/default/classes/AccountCaseCounterTest.cls
+@@ -0,0 +1,14 @@
++@IsTest(testFor='ApexClass:AccountCaseCounter')
++private class AccountCaseCounterTest {
++    @IsTest
++    static void countsOpenCases() {
++        Account a = new Account(Name = 'Acme');
++        insert a;
++        insert new Case(AccountId = a.Id, Subject = 'x', Status = 'New');
++        Test.startTest();
++        AccountCaseCounter.countOpenCases(new List<Account>{ a });
++        Test.stopTest();
++        Assert.areEqual(1, a.Open_Cases__c, 'one open case');
++    }
++}

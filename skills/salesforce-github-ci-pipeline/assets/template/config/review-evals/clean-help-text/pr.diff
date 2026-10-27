@@ -1,0 +1,11 @@
+diff --git a/force-app/main/default/objects/Case/fields/Escalation_Reason__c.field-meta.xml b/force-app/main/default/objects/Case/fields/Escalation_Reason__c.field-meta.xml
+--- a/force-app/main/default/objects/Case/fields/Escalation_Reason__c.field-meta.xml
++++ b/force-app/main/default/objects/Case/fields/Escalation_Reason__c.field-meta.xml
+@@ -2,6 +2,7 @@
+ <CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+     <fullName>Escalation_Reason__c</fullName>
+     <externalId>false</externalId>
++    <inlineHelpText>Why this case needs a senior agent</inlineHelpText>
+     <label>Escalation Reason</label>
+     <length>255</length>
+     <required>false</required>

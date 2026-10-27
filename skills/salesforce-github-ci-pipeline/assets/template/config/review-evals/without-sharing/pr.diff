@@ -1,0 +1,19 @@
+diff --git a/force-app/main/default/classes/StaleTaskCloser.cls b/force-app/main/default/classes/StaleTaskCloser.cls
+new file mode 100644
+--- /dev/null
++++ b/force-app/main/default/classes/StaleTaskCloser.cls
+@@ -0,0 +1,14 @@
++public without sharing class StaleTaskCloser {
++    public static Integer closeStale() {
++        List<Task> stale = [
++            SELECT Id, Status
++            FROM Task
++            WHERE Status = 'Not Started' AND CreatedDate < LAST_N_DAYS:90
++        ];
++        for (Task t : stale) {
++            t.Status = 'Completed';
++        }
++        update stale;
++        return stale.size();
++    }
++}

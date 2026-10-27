@@ -1,0 +1,1 @@
+{ "verdict": "CHANGES", "finds": ["assert|cannot fail|only covers"], "why": "REVIEW.md blocker: a test with no Assert (cannot fail)" }

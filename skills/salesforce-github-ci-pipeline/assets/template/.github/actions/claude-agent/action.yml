@@ -15,6 +15,7 @@ inputs:
   changed-files: { required: false, default: "", description: "A file listing the PR's changed paths, one a line: a review of a change with no code, access or automation may use a cheaper model" }
   github-token: { required: true, description: "Token Claude acts with on GitHub" }
   allowed-bots: { required: false, default: "", description: "Bot actors allowed to trigger this run (vars.PIPELINE_BOTS)" }
+  label: { required: false, default: "", description: "Added to the transcript's artifact name, so several runs in one workflow (a matrix) keep theirs apart" }
   model: { required: false, default: "", description: "Model override for this run ('model', 'alias' or 'provider:model'); empty = config/ai-models.json, AI_MODEL_<ROLE> and AI_MODEL" }
 runs:
   using: composite
@@ -111,7 +112,7 @@ runs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: claude-transcript-${{ inputs.role }}-${{ github.run_id }}
+        name: claude-transcript-${{ inputs.role }}-${{ github.run_id }}${{ inputs.label && format('-{0}', inputs.label) || '' }}
         path: ${{ runner.temp }}/claude-execution-output.json
         retention-days: 30   # the weekly metrics read cost and turns from these
         if-no-files-found: ignore

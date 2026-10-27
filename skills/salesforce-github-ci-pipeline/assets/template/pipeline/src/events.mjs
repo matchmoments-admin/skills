@@ -8,7 +8,7 @@
 
 export const BRANCH = "metrics";
 import { reviewKindOf } from "./gate.mjs";
-const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile", "overrule", "budget-ok"];
+const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile", "overrule", "budget-ok", "eval"];
 
 /** The envelope's own fields: a payload never sets them (Jev's `run` was silently replaced by the Actions run id). */
 export const RESERVED = ["v", "at", "kind", "run", "workflow", "job"];
@@ -128,6 +128,9 @@ export function summarize(events, { days = 28 } = {}) {
     m.runs++; m.usd += Number(a.usd) || 0; if (a.ok === false) m.failed++; if (a.pr) m.prs.add(a.pr);
   }
   const overruled = new Set(of("overrule").map((o) => o.pr));
+  // the reviewer eval set (review-eval.yml): the latest score per provider and model
+  const evals = {};
+  for (const e of [...of("eval")].sort((a, b) => a.at.localeCompare(b.at))) evals[`${e.provider || "anthropic"}|${e.model || "?"}`] = e;
   const spend = {};
   for (const a of agents.filter((x) => x.story)) spend[a.story] = (spend[a.story] || 0) + (Number(a.usd) || 0);
 
@@ -160,6 +163,7 @@ export function summarize(events, { days = 28 } = {}) {
       medianStoryUsd: r1(median(Object.values(spend))),
       byStory: Object.entries(spend).map(([story, usd]) => ({ story, usd: Math.round(usd * 100) / 100 })).sort((a, b) => b.usd - a.usd).slice(0, 5),
       budgetExtensions: of("budget-ok").length,
+      evals: Object.values(evals).map((e) => ({ provider: e.provider || "anthropic", model: e.model || "?", at: e.at, caught: Number(e.caught) || 0, defects: Number(e.defects) || 0, falseAlarms: Number(e.falseAlarms) || 0, clean: Number(e.clean) || 0 })),
       logRetries: events.reduce((t, e) => t + (Number(e.retries) || 0), 0),
       jev: { decisions: of("jev").length, skippedReviews: of("jev").filter((j) => j.decision === "review" && j.skipped).length, skippedFixes: of("jev").filter((j) => j.decision === "fix" && j.skipped).length },
     },
@@ -192,6 +196,7 @@ export function toMarkdown(s) {
     "| Role | provider | model | arm | runs | cost | per run | failed runs | reviews overruled |", "|---|---|---|---|---|---|---|---|---|",
     ...s.ai.byModel.map((m) => `| ${m.role} | ${m.provider} | ${m.model} | ${m.arm || "-"} | ${m.runs} | $${m.usd.toFixed(2)} | $${m.perRunUsd.toFixed(2)} | ${m.failed} | ${m.overruled ?? "-"} |`), "",
     `Most AI spend by story: ${s.ai.byStory.map((x) => `#${x.story} $${x.usd.toFixed(2)}`).join(", ") || "none"}; ${s.ai.budgetExtensions} budget extension(s) (/budget-ok). Event log write collisions retried: ${s.ai.logRetries}.`,
+    `Review eval (defects caught, false alarms; latest per model): ${s.ai.evals.map((e) => `${e.provider} ${e.model} ${e.caught}/${e.defects}, ${e.falseAlarms}/${e.clean}`).join("; ") || "none run (review-eval.yml)"}.`,
     `AI review passed first time on ${v(s.ai.passedFirstReview, "%")} of PRs; median AI fix rounds ${v(s.ai.medianFixRounds)}.`,
     `Jev (AI_TRIAGE) made ${s.ai.jev.decisions} decisions: ${s.ai.jev.skippedReviews} reviews and ${s.ai.jev.skippedFixes} fix rounds not needed.`,
   ].join("\n");

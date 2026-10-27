@@ -264,6 +264,14 @@ per stage. Cards change when a stage starts, succeeds or fails, not while it run
 check (the Salesforce tests check while CI tests), and waits for a busy org back off from 30 seconds to 3 minutes. Recording is best effort and never fails a step;
 `PIPELINE_EVENTS=off` (a repository variable) turns it off.
 
+**Is a cheaper review model good enough?** Cost and overrules alone cannot say. Run *Actions › review-eval › Run
+workflow* with a model (`haiku`, or `provider:model`; empty is the review's own model). Claude reviews each change in
+`config/review-evals/` the way it reviews a PR: six with a defect REVIEW.md blocks (a query in a loop, a user's query in
+system mode, unexplained `without sharing`, a hard-coded ID, a test that cannot fail, an Update inside a Flow loop) and
+one clean change. The run summary shows the defects caught and the false alarms. A defect counts as caught only when the
+review asks for changes and names it. The weekly metrics show the latest score per model next to its cost. Add a case
+whenever a review misses something real.
+
 ## When something fails
 
 **The pipeline improves itself.** When a pipeline job fails for the pipeline's own reasons (an org could not be made,
@@ -321,7 +329,7 @@ An honest rating against an enterprise Salesforce delivery setup (re-rated 27 Oc
 | **Enterprise fit** | 7/10 | Enterprises run this kind of release train, hotfix path, back-merge flow, org shape and DORA metrics. The provider choice (Bedrock, Vertex, a gateway) fits a company's own AI contracts. Missing: a UAT or full-copy sandbox stage before production, data seeding, unlocked packages for modular teams, and more than one production org. |
 | **Scaling** | 6/10 today, 9/10 on a bigger Dev Hub | Staging tests one run per batch of merges (relevant tests per merge, everything on the release PR). A closed story gives its org back at once, and one `allocate()` hands out every org, with an optional warm pool. The Developer Edition Dev Hub still allows only 3 active and 6 new scratch orgs a day, so about two stories in flight. Enterprise Edition allows 40 and 80, Unlimited 100 and 200, which is where the pool pays off. None of this has run at volume yet. |
 | **Reliability and running cost** | 7/10 | Hourly reconcile with no Salesforce key re-runs runs that billing blocked (once each) and stops re-validating rejected releases. Routing at the job level keeps idle Actions minutes near zero. Missing: budget alerts (the $40 cap stops usage silently), and GitHub's scheduler runs it late (the first scheduled run came at 23:18 UTC on 26 Oct, not 19:41). |
-| **AI cost and model choice** | 7/10 | Model and turns per role in one config, five providers, A/B arms by story, Haiku for declarative-only reviews, a $5 budget per story with `/budget-ok`, and per-model cost, first-time-green and overrule metrics. Missing: a reviewer eval set (cost is measured, quality only through overrules), model ids for Bedrock and Vertex, and a first real story through the budget. |
+| **AI cost and model choice** | 7/10 | Model and turns per role in one config, five providers, A/B arms by story, Haiku for declarative-only reviews, a $5 budget per story with `/budget-ok`, and per-model cost, first-time-green and overrule metrics. A reviewer eval set (`review-eval.yml`) scores a model on seeded defects caught and false alarms. Missing: model ids for Bedrock and Vertex, a first eval run, and a first real story through the budget. |
 | **Ease for developers** | 8/10 | Push and approve; the pipeline opens PRs, picks orgs, merges and ships. A solo developer no longer needs an admin merge for story work. |
 | **Ease for non-technical users** | 7/10 | Issue forms, the story card (next step, live diagram, **Approve here**), comment commands, an optional delivery board. It is still GitHub-shaped (the optional Slack notices say when it is your turn), and opening an org needs the CLI. |
 
