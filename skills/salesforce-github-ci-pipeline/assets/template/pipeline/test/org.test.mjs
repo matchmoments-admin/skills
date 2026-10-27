@@ -783,6 +783,21 @@ test("the warm pool (ORG_POOL): a story claims a pool org instead of creating on
   assert.equal(live[1].Description, "issue-9", "the newest pool org (the most days left) is the story's now");
   assert.ok(!calls.includes("org create scratch"), "no new org");
   assert.ok(calls.includes("org login jwt") && calls.includes("project deploy start"), "logged in under the story's alias, then deployed");
+  // a race: another story's write lands on the newest pool org after ours; we take the next one, not a new org
+  const live2 = pool.map((r) => ({ ...r })), calls3 = [];
+  const racing = (args, x) => {
+    calls3.push(args.slice(0, 3).join(" "));
+    if (args[0] === "data" && args[1] === "update" && args.includes("ScratchOrgInfo")) {
+      const who = args[args.indexOf("-w") + 1].match(/'(.+)'/)[1], to = args[args.indexOf("-v") + 1].match(/'(.+)'/)[1];
+      live2.find((r) => r.SignupUsername === who).Description = who === "p2@x" ? "issue-77" : to;   // story 77 won p2
+      return { success: true };
+    }
+    if (args[0] === "data" && args[1] === "query" && !/FROM User/.test(args.at(-1))) return { records: live2 };
+    return sf(args, x);
+  };
+  orgRegistry({ sf: racing, log: () => {}, sleep: () => {}, packages: [], record: () => {}, env: { ORG_POOL: "2", BASELINE: "off", SEED: "off" } }).ensure("story:11");
+  assert.deepEqual(live2.map((r) => r.Description), ["issue-11", "issue-77"], "the loser took the next pool org");
+  assert.ok(!calls3.includes("org create scratch"), "no daily slot spent");
   // pool off: a story creates as before
   const c2 = [];
   orgRegistry({ sf: (a, x) => { c2.push(a.slice(0, 3).join(" ")); return sf(a, x); }, log: () => {}, sleep: () => {}, packages: [], record: () => {}, env: { BASELINE: "off", SEED: "off" } }).ensure("story:10");
@@ -790,5 +805,11 @@ test("the warm pool (ORG_POOL): a story claims a pool org instead of creating on
   // wiring: the janitor tops it up after its sweep; a story PR closed without merging gives its org back at once
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
   assert.match(wf("scratch-janitor"), /org sweep\n\s+node pipeline\/bin\/pipe\.mjs org pool/);
-  assert.match(wf("merged"), /closed:\n[\s\S]*merged == false && github\.event\.pull_request\.head\.repo\.full_name == github\.repository[\s\S]*--state open --json number[\s\S]*\^\(issue-\[0-9\]\+[\s\S]*start followups --after delete-story-org/);
+  assert.match(wf("merged"), /closed:\n[\s\S]*merged == false && github\.event\.pull_request\.head\.repo\.full_name == github\.repository[\s\S]*pipe\.mjs start closed --head[\s\S]*start followups --after delete-story-org/);
+  // the decision is start.closedPlan (27 Oct review: merged.yml had its own branch regex, storyOf another)
+  assert.deepEqual(start.closedPlan({ head: "issue-9" }), { story: "9" });
+  assert.deepEqual(start.closedPlan({ head: "LIFE-12" }), { story: "LIFE-12" });
+  assert.match(start.closedPlan({ head: "issue-9-x" }).why, /not a story's own branch/, "storyOf accepts it; the org is not its");
+  assert.match(start.closedPlan({ head: "fix-ci" }).why, /not a story's own branch/);
+  assert.match(start.closedPlan({ head: "issue-9", openPrs: 1 }).why, /still open: the org stays/);
 });

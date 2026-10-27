@@ -52,13 +52,13 @@ runs:
         node .pipeline/pipeline/bin/pipe.mjs agent stop --key "$KEY" ${PR:+--pr "$PR"} || true   # comment, blocked, card (start.stopForBudget)
         echo "AI_BUDGET_STOPPED=true" >> "$GITHUB_ENV"   # the caller's later steps say so instead of "the build failed"
         echo "::error::story $KEY is over its AI budget (\$$SPENT of \$$CAP)"; exit 1
-    - name: Log in to AWS for Bedrock (GitHub's OIDC identity: no stored key)
+    - name: Log in to AWS for Bedrock (GitHub's OIDC identity, no stored key)
       if: steps.rules.outputs.auth == 'aws-oidc'
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ steps.rules.outputs.aws_role }}
         aws-region: ${{ steps.rules.outputs.aws_region }}
-    - name: Log in to Google Cloud for Vertex AI (workload identity federation: no stored key)
+    - name: Log in to Google Cloud for Vertex AI (workload identity federation, no stored key)
       if: steps.rules.outputs.auth == 'gcp-wif'
       uses: google-github-actions/auth@v2
       with:

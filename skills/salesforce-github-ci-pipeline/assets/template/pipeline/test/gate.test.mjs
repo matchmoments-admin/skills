@@ -249,7 +249,7 @@ test("correctness wiring: story PR base from the story, UAT never reset by a red
   assert.match(wf("story-pr"), /pipe.mjs story base "\$KEY"/);
   assert.doesNotMatch(wf("story-pr"), /merge-base --is-ancestor/);
   assert.match(wf("uat-deploy"), /UAT already has/);
-  assert.match(wf("staging-deploy"), /superseded by/);
+  assert.match(start.stagingPlan({ tip: "a".repeat(40) }).why, /superseded by aaaaaaa/);
   assert.match(wf("staging-deploy"), /pipe.mjs finish staging --branch "\$REL"/, "UAT only when the journey owes it: staging passed on the head, UAT lacks it (finish asks it)");
   assert.deepEqual(gate.gateStatus({ mergeable: true, validate: true, reasons: [] }), { state: "pending", description: "Ready: validating against production before merging" });
   assert.doesNotMatch(wf("gate"), /STATE=pending/, "the decision's status is mapped in one place (gateStatus)");

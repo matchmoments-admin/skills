@@ -34,6 +34,15 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
     /** A story branch's latest PR (any state), or null. */
     storyPr: (branch) => once(`pr:${branch}`, () => (io.gh(["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "number,state,title,baseRefName,headRefOid"]) || [])[0] || null),
 
+    /** A release branch's open release PR into main (its number), or null. */
+    releasePrOf: (branch) => {
+      const b = String(branch || "").replace(/^origin\//, "");
+      return b ? once(`release-pr:${b}`, () => (io.gh(["pr", "list", "--head", b, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || [])[0]?.number || null) : null;
+    },
+
+    /** Drop what this process remembered about a PR, after starting work on it, so its card is built from fresh facts. */
+    forget: (number) => { memo.delete(`facts:${number}`); },
+
     /** The facts the gate decides on, gathered once per process (a card refreshed every minute reuses them). Always
      *  with the same options (the open release, the AI flags, UAT): a caller that passed fewer once made a later card
      *  show "AI review off" from the cached facts. */

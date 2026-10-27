@@ -78,7 +78,7 @@ export async function next(after, pr, deps) {
 async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, jev = null, budgetOf, log = () => {} }) {
   if (!pr) {
     const rel = String(host.openRelease() || "").replace(/^origin\//, "");
-    pr = rel ? (gh(["pr", "list", "--head", rel, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || [])[0]?.number : null;
+    pr = rel ? host.releasePrOf(rel) : null;
   }
   if (!pr) return { steps: [], said: `nothing starts after ${after}: no pull request` };
   const facts = host.prFacts(pr);

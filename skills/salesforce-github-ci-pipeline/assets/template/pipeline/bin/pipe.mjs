@@ -223,7 +223,8 @@ const commands = {
         regate: () => shipping.regate(io, host, log) });
     return say(`follow-ups: ${steps.join(" ") || "none"}`);
   },
-  "ci staging-plan": () => { const p = start.stagingPlanFor({ git: io.git, host, gh: io.gh, branch: flag("branch"), policy: names.setting("UI_REGRESSION") || "release" }); output(p); return say(p.why); },   // what this staging run does (#273)
+  "start closed": () => { const p = start.closedPlan({ head: flag("head"), openPrs: (io.gh(["pr", "list", "--head", flag("head"), "--state", "open", "--json", "number"]) || []).length }); output({ story: p.story || "" }); return say(p.story ? `story ${p.story}: its org goes back` : `nothing to give back: ${p.why}`); },   // merged.yml closed
+  "ci staging-plan": () => { const p = start.stagingPlanFor({ git: io.git, host, branch: flag("branch"), policy: names.setting("UI_REGRESSION") || "release" }); output(p); return say(p.why); },   // what this staging run does (#273)
   "ci plan": () => {   // which CI jobs need a runner, from what changed (a failed diff assumes everything)
     const base = flag("base", "main");
     const out = io.git(["diff", "--name-only", `origin/${base}...HEAD`], { allowFail: true });

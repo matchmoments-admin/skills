@@ -260,8 +260,8 @@ test("the journey decides what starts next from Standing: after a review, after 
 test("journey.next finds the open release PR when none is named, and acts through the start decision or a dispatch", async () => {
   const did = [];
   const facts = { pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: "success", started_at: "t" }], statuses: [], reviews: [], compare: { prFiles: ["force-app/x"] } };
-  const host = { openRelease: () => "origin/release/2026-w1", prFacts: () => facts, dispatch: (w, i, ref) => did.push([w, i, ref]) };
-  const gh = (a) => (a[0] === "pr" && a[1] === "list" ? [{ number: 197 }] : null);
+  const host = { openRelease: () => "origin/release/2026-w1", releasePrOf: (b) => (b === "release/2026-w1" ? 197 : null), prFacts: () => facts, dispatch: (w, i, ref) => did.push([w, i, ref]) };
+  const gh = () => null;
   const r = await journey.next("org-freed", null, { host, gh, ai: {}, uat: true, startJob: async () => {} });
   assert.deepEqual(did, [["staging-deploy.yml", {}, "release/2026-w1"], ["uat-deploy.yml", { pr: "197" }, undefined]], "the UI regression (on the release branch) beside UAT");
   assert.match(r.said, /uat-deploy/);
@@ -350,7 +350,8 @@ test("the UI regression runs once per release (#273): Apex on every staging run,
   const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   assert.match(wf, /id: uirun\n\s+if: steps\.fresh\.outputs\.ui == 'run'/);
   assert.match(wf, /concurrency:\n\s+group: staging-\$\{\{ github\.ref \}\}\n\s+cancel-in-progress: false/, "merges queue without a runner; a newer one replaces the waiting run");
-  assert.match(wf, /SCOPE: \$\{\{ steps\.fresh\.outputs\.scope \}\}/);
+  assert.match(wf, /TESTS: \$\{\{ steps\.fresh\.outputs\.tests \}\}/);
+  assert.deepEqual([start.stagingPlan({ tested: "abc1234def" }).tests, start.stagingPlan({ releaseOpen: true }).tests], ["--base abc1234def", "--all --base HEAD"]);
   assert.match(wf, /ui: \$\{\{ steps\.uirun\.outcome \}\}/);
   const nudge = wf.slice(wf.indexOf("  nudge:"));
   assert.match(nudge, /pipe\.mjs finish staging --branch "\$REL" --sha "\$GITHUB_SHA" --outcome "\$\{\{ needs\.staging\.outputs\.ui \}\}"/, "one finish: the verdict before the journey asks what is owed (finish.mjs's order)");
@@ -359,19 +360,27 @@ test("the UI regression runs once per release (#273): Apex on every staging run,
 test("the staging plan reads the gate's own Standing for the UI regression, so plan, journey and gate agree (code review, 14 Oct)", async () => {
   const ui = (state, extra = {}) => ({ sha: "h", context: gate.STATUS.uiRegression, state, created_at: "t", creator: { login: "github-actions[bot]" }, ...extra });
   const facts = (statuses, headRefOid = "h") => ({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid }, checkRuns: [], statuses, reviews: [] });
-  const plan = (f, head = "h") => start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? head : a[0] === "rev-list" ? "" : ""), host: { repo: "o/r", prFacts: () => f, api: () => ({ check_runs: [] }) },
-    gh: () => [{ number: 7 }], branch: "release/2026-w1", policy: "release" });
+  const plan = (f, head = "h") => start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? head : a[0] === "rev-list" ? "" : ""), host: { repo: "o/r", releasePrOf: () => 7, prFacts: () => f, api: () => ({ check_runs: [] }) },
+    branch: "release/2026-w1", policy: "release" });
   assert.equal(plan(facts([ui("success")])).ui, "skip", "passed on the release head: done");
   assert.equal(plan(facts([ui("success", { trusted: false })])).ui, "run", "a status a story branch's workflow posted does not count");
   assert.equal(plan(facts([ui("failure")])).ui, "run", "failed: runs again on this run");
   assert.equal(plan(facts([])).ui, "run");
   assert.deepEqual([plan(facts([]), "older").done, plan(facts([]), "older").why], [true, "superseded: the release PR's head moved on; its own run tests it"]);
-  const noPr = start.stagingPlanFor({ git: () => "", host: { repo: "o/r", api: () => ({ check_runs: [] }) }, gh: () => [], branch: "release/2026-w1", policy: "release" });
+  const noPr = start.stagingPlanFor({ git: () => "", host: { repo: "o/r", releasePrOf: () => null, api: () => ({ check_runs: [] }) }, branch: "release/2026-w1", policy: "release" });
   assert.equal(noPr.ui, "skip", "no release PR yet: not due");
   // the workflow: issues read for the PR's facts; the lane stays held after the UI run; a planned run that never ran fails
   const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   assert.match(wf, /issues: read/);
-  assert.match(wf, /if: always\(\) && steps\.current\.outputs\.superseded != 'true' && steps\.fresh\.outputs\.ui != 'run'/);
+  assert.match(wf, /if: always\(\) && steps\.fresh\.outputs\.ui != 'run'/);
+  // superseded is the plan's, before the lane (27 Oct review: two rules, one in bash): the tip, then the release PR's head
+  const tipPlan = (tip) => start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? "h" : ""), host: { repo: "o/r", releasePrOf: () => 7, prFacts: () => facts([]), api: (m, p) => (/commits\/release/.test(p) ? { sha: tip } : { check_runs: [] }) },
+    branch: "release/2026-w1", policy: "release" });
+  assert.deepEqual([tipPlan("t".repeat(40)).done, tipPlan("t".repeat(40)).why], [true, "superseded by ttttttt: its own run tests it"]);
+  assert.equal(tipPlan("h").done, false, "the tip is this run's commit: it tests");
+  assert.ok(wf.indexOf("ci staging-plan") < wf.indexOf("lane acquire"), "a superseded run never waits for the lane");
+  assert.doesNotMatch(wf, /steps\.current|ARGS=/, "no superseded or test-scope rule left in bash");
+  assert.match(wf, /tests run staging \$TESTS/);
   assert.match(wf, /needs\.staging\.outputs\.ui-planned \}\}" = run \] && echo --planned/);
   const { verdictOf } = await import("../src/finish.mjs");
   assert.match(verdictOf("staging", { outcome: "", planned: true }).description, /the UI regression could not run/);

@@ -2,7 +2,7 @@
 // (or CI's static job), before the long job starts: GitHub bills every job at least a minute, a 75-minute job that
 // starts only to find it has nothing to do costs a runner and a lane wait, and a rule in a release branch's YAML stays
 // stale until a back-merge. decide() and ciPlan() are pure; `pipe start` and `pipe ci plan` gather the facts and act.
-import { storyOf, sprintOf, uiNeeded } from "./conventions.mjs";
+import { storyOf, storyBranch, sprintOf, uiNeeded } from "./conventions.mjs";
 import { STATUS, REVIEW, standing, carriedFrom, RESULTS } from "./gate.mjs";
 import { CHECKS, LIVE_TESTS_CHECK } from "./conventions.mjs";
 import { fixRoundsUsed, MAX_FIX_ROUNDS, REVIEW_LINE, reviewComments } from "./verdict.mjs";
@@ -72,17 +72,19 @@ export const lastStagingTested = ({ git, host }) => passedTests("staging", { sha
  * What a staging run does (#273). Apex and Flow on every run, unless they passed on this code (or one it carries to).
  * The UI regression (every UI spec) only when it is due, UI_REGRESSION: "release" (the default) once the release PR is
  * open, so once per release; "every" on every run. And not if it already passed on this code. superseded: the release
- * PR's head moved on since this run started (its own run tests that). Scope: a story merge mid-sprint runs the tests
- * for what changed since the last tested commit (`tested`), the release PR every local test; no tested commit, every
- * test. Pure.
+ * PR's head moved on since this run started; tip: the release branch's tip when it is not this run's commit (each merge
+ * queues a run, only the newest tests). Either way its own run tests that. Scope: a story merge mid-sprint runs the
+ * tests for what changed since the last tested commit (`tested`), the release PR every local test; no tested commit,
+ * every test. `tests` is that scope as `pipe tests run staging` arguments. Pure.
  */
-export function stagingPlan({ policy = "release", releaseOpen = false, apexPassed = false, uiPassed = false, superseded = false, tested = null }) {
-  if (superseded) return { apex: "skip", ui: "skip", done: true, why: "superseded: the release PR's head moved on; its own run tests it" };
+export function stagingPlan({ policy = "release", releaseOpen = false, apexPassed = false, uiPassed = false, superseded = false, tip = null, tested = null }) {
+  if (tip) return { apex: "skip", ui: "skip", done: true, tests: "", why: `superseded by ${tip.slice(0, 7)}: its own run tests it` };
+  if (superseded) return { apex: "skip", ui: "skip", done: true, tests: "", why: "superseded: the release PR's head moved on; its own run tests it" };
   const due = policy === "every" || releaseOpen;
   const apex = apexPassed ? "skip" : "run", ui = due && !uiPassed ? "run" : "skip";
   const scope = releaseOpen || !tested ? "all" : "relevant";
   const why = `Apex and Flow: ${apexPassed ? "already passed on this code" : scope === "all" ? "every test" : `the tests for what changed since ${tested.slice(0, 7)}`}; UI regression: ${ui === "run" ? "run" : !due ? "not yet (it runs once per release, when the release PR opens)" : "already passed on this code"}`;
-  return { apex, ui, scope, base: scope === "relevant" ? tested : "", done: apex === "skip" && ui === "skip", why };
+  return { apex, ui, scope, base: scope === "relevant" ? tested : "", tests: scope === "relevant" ? `--base ${tested}` : "--all --base HEAD", done: apex === "skip" && ui === "skip", why };
 }
 
 /**
@@ -91,11 +93,14 @@ export function stagingPlan({ policy = "release", releaseOpen = false, apexPasse
  * disagreement looped staging runs: code review, 14 Oct). Without an open release PR it is not due (UI_REGRESSION
  * release) or runs (every).
  */
-export function stagingPlanFor({ git, host, gh, branch, policy }) {
-  const pr = branch ? (gh(["pr", "list", "--head", branch, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || [])[0]?.number : null;
+export function stagingPlanFor({ git, host, branch, policy }) {
+  const pr = host.releasePrOf(branch);
   const st = pr ? standing(host.prFacts(pr)) : null;
   const head = git(["rev-parse", "HEAD"], { allowFail: true })?.trim();
   const superseded = Boolean(st?.ctx?.pr?.headRefOid && head && st.ctx.pr.headRefOid !== head);
+  const tipSha = branch ? host.api("GET", `repos/${host.repo}/commits/${encodeURIComponent(branch)}`)?.sha : null;
+  const tip = tipSha && head && tipSha !== head ? tipSha : null;
+  if (tip) return stagingPlan({ tip });
   // the release's own regression is every test: a pass of only a merge's tests does not carry to it
   return stagingPlan({ policy, releaseOpen: Boolean(pr), superseded, apexPassed: Boolean(stagingCarry({ git, host, all: Boolean(pr) })), uiPassed: st?.uiRegression?.state === "success",
     tested: pr ? null : lastStagingTested({ git, host }) });
@@ -260,6 +265,19 @@ export async function fixGate(pr, { host, gh, jev }) {
   } catch (err) { t = { fix: true, kind: "unknown", confidence: 0, why: `could not ask Jev (${err.message})` }; }
   host.record?.("jev", { decision: "fix", pr: String(pr), skipped: !t.fix, finding: t.kind, confidence: t.confidence, why: t.why });   // not `kind`: the envelope's own (it renamed the event)
   return t;
+}
+
+/**
+ * A story PR closed without merging: does it give the story's org back (startFollowUps delete-story-org)? Only from the
+ * story's own branch (issue-9 or LIFE-12, never one that merely starts like it, issue-9-x: storyOf accepts that older
+ * form), and only when no other PR on that branch is open (a PR replaced by a new one keeps its org). Returns { story }
+ * or { why }. Pure.
+ */
+export function closedPlan({ head, openPrs = 0 }) {
+  const story = storyOf(head);
+  if (!story || storyBranch(story) !== head) return { why: `not a story's own branch (${head})` };
+  if (openPrs > 0) return { why: `${openPrs} other PR(s) on ${head} still open: the org stays` };
+  return { story };
 }
 
 /**

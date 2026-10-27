@@ -396,3 +396,14 @@ test("every workflow dispatched for a PR names it in its run title, so reconcile
     assert.match(src.match(/^run-name: .*$/m)?.[0] || "", /#\{\d\}/, `${f}: a pr input but no "#N" in run-name (finish.mjs reconcile busy())`);
   }
 });
+
+test("every workflow and composite action is valid YAML (claude-agent's Bedrock step name broke the action from #394 until 27 Oct)", () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const gh = new URL("../../.github/", import.meta.url);
+  const files = [
+    ...readdirSync(new URL("workflows/", gh)).filter((f) => f.endsWith(".yml")).map((f) => `workflows/${f}`),
+    ...readdirSync(new URL("actions/", gh)).filter((d) => existsSync(new URL(`actions/${d}/action.yml`, gh))).map((d) => `actions/${d}/action.yml`),
+  ];
+  assert.ok(files.some((f) => f.includes("claude-agent")), "the actions are checked too");
+  for (const f of files) assert.doesNotThrow(() => yaml.load(readFileSync(new URL(f, gh), "utf8")), `${f} does not parse`);
+});

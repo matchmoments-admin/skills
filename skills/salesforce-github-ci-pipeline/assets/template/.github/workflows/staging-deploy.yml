@@ -43,61 +43,51 @@ jobs:
         run: |
           node pipeline/bin/pipe.mjs context
           node pipeline/bin/pipe.mjs context | grep -q '^RELEASE_BRANCH=.' || { echo "::error::No open sprint"; exit 1; }
-      - name: Still the release branch's tip? (each merge queues a run; only the newest needs to test)
-        id: current
-        run: |
-          TIP=$(gh api "repos/$GH_REPO/commits/${{ steps.ctx.outputs.RELEASE_BRANCH }}" --jq .sha)
-          if [ "$TIP" != "$GITHUB_SHA" ]; then echo "superseded=true" >> "$GITHUB_OUTPUT"; echo "superseded by ${TIP:0:7}: its own run tests it"; fi
-      - name: Wait for the staging org's lane (nobody is dropped)
-        if: steps.current.outputs.superseded != 'true'
-        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "sprint:${{ steps.ctx.outputs.SPRINT }}"
       - uses: actions/checkout@v4
-        if: steps.current.outputs.superseded != 'true'
         with: { ref: "${{ github.sha }}", path: candidate, fetch-depth: 20, persist-credentials: false }   # exactly the commit this run is for (and the ones before it: #237)
-      - name: What this run does (Apex unless passed on this code; the UI regression once per release, UI_REGRESSION)
+      - name: What this run does (nothing when a newer merge superseded it; Apex unless passed on this code; the UI regression once per release, UI_REGRESSION)
         id: fresh
-        if: steps.current.outputs.superseded != 'true'
         working-directory: candidate
         run: node ../.pipeline/pipeline/bin/pipe.mjs ci staging-plan --branch "${{ steps.ctx.outputs.RELEASE_BRANCH }}"
+      - name: Wait for the staging org's lane (nobody is dropped)
+        if: steps.fresh.outputs.done != 'true'
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "sprint:${{ steps.ctx.outputs.SPRINT }}"
       - uses: ./.pipeline/.github/actions/sf-auth
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.done != 'true'
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Deploy the release branch to staging and prepare it
-        if: steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.done != 'true'
         working-directory: candidate
         run: |
           node ../.pipeline/pipeline/bin/pipe.mjs org ready "sprint:${{ steps.ctx.outputs.SPRINT }}"   # this candidate, deployed and prepared
       - name: Regression (every Apex and Flow test for the release; a story merge's own tests otherwise), live on the release head as "Salesforce tests"
-        if: steps.fresh.outputs.apex == 'run' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.apex == 'run'
         working-directory: candidate
         env:
-          BASE: ${{ steps.fresh.outputs.base }}     # a story merge: the tests for what changed since the last tested commit
-          SCOPE: ${{ steps.fresh.outputs.scope }}   # the release PR (or nothing tested yet): every test
-        run: |
-          if [ "$SCOPE" = relevant ] && [ -n "$BASE" ]; then ARGS=(--base "$BASE"); else ARGS=(--all --base HEAD); fi
-          node ../.pipeline/pipeline/bin/pipe.mjs tests run staging "${ARGS[@]}" --sha "$(git rev-parse HEAD)" --out test-results
+          TESTS: ${{ steps.fresh.outputs.tests }}   # a story merge: --base <last tested>; the release PR (or nothing tested yet): --all (stagingPlan)
+        run: node ../.pipeline/pipeline/bin/pipe.mjs tests run staging $TESTS --sha "$(git rev-parse HEAD)" --out test-results
       - name: Drop production access before running the branch's specs
-        if: steps.fresh.outputs.ui == 'run' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.ui == 'run'
         run: |
           # loginAs reads these: once the Dev Hub is logged out, `sf org display` fails
           sf org display -o staging --json | jq -r '.result | "SCRATCH_ORG_ID=\(.id)\nSCRATCH_INSTANCE_URL=\(.instanceUrl)"' >> "$GITHUB_ENV"
           sf org logout -o devhub --no-prompt >/dev/null 2>&1 || true
           rm -f "${SF_CI_KEY_FILE:-}"
       - name: The test harness from main (login, personas, evidence), not the release branch's copy
-        if: steps.fresh.outputs.ui == 'run' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.ui == 'run'
         working-directory: candidate
         run: node ../.pipeline/pipeline/bin/pipe.mjs harness overlay staging --from ../.pipeline
       - uses: ./.pipeline/.github/actions/playwright
-        if: steps.fresh.outputs.ui == 'run' && steps.current.outputs.superseded != 'true' && hashFiles('candidate/e2e/*.spec.ts') != ''
+        if: steps.fresh.outputs.ui == 'run' && hashFiles('candidate/e2e/*.spec.ts') != ''
         env:
           GH_TOKEN: ""          # installs the branch's packages: no token
         with: { working-directory: candidate }
       - name: UI regression (every spec in e2e/)
         id: uirun
-        if: steps.fresh.outputs.ui == 'run' && steps.current.outputs.superseded != 'true'
+        if: steps.fresh.outputs.ui == 'run'
         working-directory: candidate
         env:
           GH_TOKEN: ""
@@ -111,11 +101,11 @@ jobs:
         # After the UI regression the lane stays held until this run ends (the holder is then stale, lane.mjs): the
         # nudge job records pipeline/ui-regression first, so a queued run reads the result instead of repeating the
         # suite (code review, 14 Oct).
-        if: always() && steps.current.outputs.superseded != 'true' && steps.fresh.outputs.ui != 'run'
+        if: always() && steps.fresh.outputs.ui != 'run'
         working-directory: .pipeline
         run: node pipeline/bin/pipe.mjs lane release "sprint:${{ steps.ctx.outputs.SPRINT }}" || true
       - uses: actions/upload-artifact@v4
-        if: always() && steps.fresh.outputs.done != 'true' && steps.current.outputs.superseded != 'true'
+        if: always() && steps.fresh.outputs.done != 'true'
         with:
           name: staging-results
           # failures only need the log and the report; never a trace (it holds the org's session: playwright.config.ts)

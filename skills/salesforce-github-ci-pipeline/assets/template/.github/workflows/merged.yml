@@ -71,11 +71,7 @@ jobs:
         with: { ref: main }
       - name: Is it a story with no other open PR?
         id: s
-        run: |
-          KEY=$(node pipeline/bin/pipe.mjs context --branch "$HEAD" | sed -n 's/^STORY=//p')
-          OPEN=$(gh pr list --head "$HEAD" --state open --json number --jq 'length')
-          # only the story's own branch (issue-9 or LIFE-12), never one that merely starts like it (issue-9-x)
-          if [ -n "$KEY" ] && [ "$OPEN" = 0 ] && [[ "$HEAD" =~ ^(issue-[0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]]; then echo "story=$KEY" >> "$GITHUB_OUTPUT"; else echo "nothing to give back (story: ${KEY:-none}, open PRs on $HEAD: $OPEN)"; fi
+        run: node pipeline/bin/pipe.mjs start closed --head "$HEAD"   # start.closedPlan: the story's own branch, no other open PR
       - uses: ./.github/actions/sf-auth
         if: steps.s.outputs.story != ''
         with:

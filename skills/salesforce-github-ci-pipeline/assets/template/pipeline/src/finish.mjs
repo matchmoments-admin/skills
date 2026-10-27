@@ -57,7 +57,7 @@ export function verdictOf(stage, { outcome = "", detail = "", weak = "", kind = 
 export async function finish(stage, { pr = null, branch = null, sha = null, url = null, ...f }, { host, gh, cards, next, record = () => {}, log = () => {} }) {
   const s = STAGE[stage];
   const v = verdictOf(stage, f);
-  if (!pr && branch) pr = (gh(["pr", "list", "--head", branch, "--base", "main", "--state", "open", "--json", "number"], { allowFail: true }) || [])[0]?.number || null;
+  if (!pr && branch) pr = host.releasePrOf(branch);
   const done = [];
   if (v && sha) {
     host.status(sha, s.context, v.state, v.description, url || host.runUrl);
@@ -101,6 +101,7 @@ export async function reconcile({ host, gh, cards, next, record = () => {}, log 
     started.push(...(r?.steps || []).map((s) => s.start || s.dispatch));
     if (started.length) {
       record("reconcile", { pr: p.number, started: started.join(",") });
+      host.forget?.(p.number);   // the card shows what was just started, not the facts read before it
       await cards.refreshPr(p.number);
       log(`reconcile #${p.number}: started ${started.join(", ")}`);
     }
