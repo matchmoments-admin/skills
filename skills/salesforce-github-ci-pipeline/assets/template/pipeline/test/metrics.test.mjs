@@ -229,7 +229,7 @@ test("delivery record (enterprise D): the shipped story's trail, read from GitHu
     [`${R}/issues/180/comments?per_page=100`]: [{ body: `✋ @alice accepted this change over the AI review on \`abc1234\`: ${reason}. A new push needs a review again.` }],
     "pr list release/2026-w47": [{ number: 181, headRefOid: "r181", mergedAt: "2026-10-10T00:00:00Z" }],
     [`${R}/commits/r181/statuses?per_page=100`]: [{ context: "pipeline/uat", state: "success", description: "Signed off in UAT by @carol", created_at: "2026-10-09T20:00:00Z", creator: BOT }],
-    [`${R}/commits/r181/check-runs?per_page=100`]: { check_runs: [{ name: "Production validation", conclusion: "success", output: { summary: "**Check-only deploy to production** `0AfAB000001xyz` with **RunRelevantTests**." } }] },
+    [`${R}/commits/r181/check-runs?per_page=100&check_name=Production%20validation`]: { check_runs: [{ name: "Production validation", conclusion: "success", output: { summary: "**Check-only deploy to production** `0AfAB000001xyz` with **RunRelevantTests**." } }] },
   };
   const io = deliveryIo(data);
   const saved = process.env.PIPELINE_VARS;

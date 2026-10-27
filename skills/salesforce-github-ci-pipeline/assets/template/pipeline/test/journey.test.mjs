@@ -194,9 +194,9 @@ test("Standing's carry rules are one table: specs-only, exact head, and no-force
   assert.deepEqual([p.sf, p.org, p.carried], [true, false, "c3"]);
   // ciCarry reads the branch's commits and their checks through git and the host
   const git = (a) => (a[0] === "rev-list" ? "c3\nc2" : a[0] === "rev-parse" ? "h" : a[0] === "diff" ? (a[2] === "c3" ? "e2e/s.spec.ts" : "force-app/x") : null);
-  const host = { repo: "o/r", api: (m, path) => ({ check_runs: path.includes("/c3/") || path.includes("/c2/") ? [{ conclusion: "success", started_at: "1", status: "completed" }] : [] }) };
+  const host = { repo: "o/r", checkRuns: (sha) => (["c3", "c2"].includes(sha) ? [{ conclusion: "success", started_at: "1", status: "completed" }] : []) };
   assert.equal(start.ciCarry({ ref: "issue-4", base: "release/w1", git, host }), "c3");
-  const rerunFailed = { repo: "o/r", api: () => ({ check_runs: [{ conclusion: "success", started_at: "1", status: "completed" }, { conclusion: "failure", started_at: "2", status: "completed" }] }) };
+  const rerunFailed = { repo: "o/r", checkRuns: () => [{ conclusion: "success", started_at: "1", status: "completed" }, { conclusion: "failure", started_at: "2", status: "completed" }] };
   assert.equal(start.ciCarry({ ref: "issue-4", base: "release/w1", git, host: rerunFailed }), null, "the newest run on that commit is the truth");
   assert.equal(start.ciCarry({ ref: "release/2026-w1", base: "main", git, host }), null, "release PRs test in staging");
   const wf = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -326,11 +326,11 @@ test("the UI regression runs once per release (#273): Apex on every staging run,
   // a pass of only a merge's tests never carries to the release's own regression
   const runs = { s1: { conclusion: "success", status: "completed", started_at: "1", output: { summary: "**Scope:** tests for this change (x)." } },
     s2: { conclusion: "success", status: "completed", started_at: "1", output: { summary: "**Scope:** all local tests (x)." } } };
-  const host = { repo: "o/r", api: (m, path) => ({ check_runs: [runs[path.split("/")[4]]].filter(Boolean) }) };
+  const host = { repo: "o/r", checkRuns: (sha) => [runs[sha]].filter(Boolean) };
   const git = (args) => (args[0] === "rev-list" ? "s1\ns2" : args[0] === "rev-parse" ? "s1" : "");
   assert.equal(start.lastStagingTested({ git, host }), "s1", "the newest tested commit, whatever its scope");
   assert.equal(Boolean(start.stagingCarry({ git, host })), true);
-  const onlyRelevant = { repo: "o/r", api: (m, path) => ({ check_runs: path.includes("/s1/") ? [runs.s1] : [] }) };
+  const onlyRelevant = { repo: "o/r", checkRuns: (sha) => (sha === "s1" ? [runs.s1] : []) };
   assert.equal(start.stagingCarry({ git, host: onlyRelevant, all: true }), null, "the release needs every test");
   // the journey starts it when the release PR is open, beside UAT; a pass or a failure on the head stops it
   const rel = (statuses = []) => gate.standing({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: "success", started_at: "t" }], statuses, reviews: [] });
@@ -360,21 +360,21 @@ test("the UI regression runs once per release (#273): Apex on every staging run,
 test("the staging plan reads the gate's own Standing for the UI regression, so plan, journey and gate agree (code review, 14 Oct)", async () => {
   const ui = (state, extra = {}) => ({ sha: "h", context: gate.STATUS.uiRegression, state, created_at: "t", creator: { login: "github-actions[bot]" }, ...extra });
   const facts = (statuses, headRefOid = "h") => ({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid }, checkRuns: [], statuses, reviews: [] });
-  const plan = (f, head = "h") => start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? head : a[0] === "rev-list" ? "" : ""), host: { repo: "o/r", releasePrOf: () => 7, prFacts: () => f, api: () => ({ check_runs: [] }) },
+  const plan = (f, head = "h") => start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? head : a[0] === "rev-list" ? "" : ""), host: { repo: "o/r", releasePrOf: () => 7, prFacts: () => f, api: () => ({}), checkRuns: () => [] },
     branch: "release/2026-w1", policy: "release" });
   assert.equal(plan(facts([ui("success")])).ui, "skip", "passed on the release head: done");
   assert.equal(plan(facts([ui("success", { trusted: false })])).ui, "run", "a status a story branch's workflow posted does not count");
   assert.equal(plan(facts([ui("failure")])).ui, "run", "failed: runs again on this run");
   assert.equal(plan(facts([])).ui, "run");
   assert.deepEqual([plan(facts([]), "older").done, plan(facts([]), "older").why], [true, "superseded: the release PR's head moved on; its own run tests it"]);
-  const noPr = start.stagingPlanFor({ git: () => "", host: { repo: "o/r", releasePrOf: () => null, api: () => ({ check_runs: [] }) }, branch: "release/2026-w1", policy: "release" });
+  const noPr = start.stagingPlanFor({ git: () => "", host: { repo: "o/r", releasePrOf: () => null, api: () => ({}), checkRuns: () => [] }, branch: "release/2026-w1", policy: "release" });
   assert.equal(noPr.ui, "skip", "no release PR yet: not due");
   // the workflow: issues read for the PR's facts; the lane stays held after the UI run; a planned run that never ran fails
   const wf = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
   assert.match(wf, /issues: read/);
   assert.match(wf, /if: always\(\) && steps\.fresh\.outputs\.ui != 'run'/);
   // superseded is the plan's, before the lane (27 Oct review: two rules, one in bash): the tip, then the release PR's head
-  const tipPlan = (tip) => start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? "h" : ""), host: { repo: "o/r", releasePrOf: () => 7, prFacts: () => facts([]), api: (m, p) => (/commits\/release/.test(p) ? { sha: tip } : { check_runs: [] }) },
+  const tipPlan = (tip) => start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? "h" : ""), host: { repo: "o/r", releasePrOf: () => 7, prFacts: () => facts([]), api: (m, p) => (/commits\/release/.test(p) ? { sha: tip } : {}), checkRuns: () => [] },
     branch: "release/2026-w1", policy: "release" });
   assert.deepEqual([tipPlan("t".repeat(40)).done, tipPlan("t".repeat(40)).why], [true, "superseded by ttttttt: its own run tests it"]);
   assert.equal(tipPlan("h").done, false, "the tip is this run's commit: it tests");

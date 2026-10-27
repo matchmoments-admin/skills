@@ -164,7 +164,7 @@ const commands = {
   "gate checks": () => {
     // Are the required CI checks green on a commit? (A release branch can only be cut from one that is.)
     const sha = io.git(["rev-parse", arg(0) || "HEAD"]);
-    const runs = io.ghPages(`repos/${host.repo}/commits/${sha}/check-runs?per_page=100`, "check_runs");
+    const runs = host.checkRuns(sha);
     const state = [names.CHECKS.static, names.CHECKS.apex].map((n) => [n, gate.latestCheck(runs, n)]);
     output({ green: state.every(([, c]) => gate.checkPassed(c)) });
     return say(state.map(([n, c]) => `${n}: ${c}`).join("\n"));
@@ -247,7 +247,7 @@ const commands = {
       ...r.map((x) => `#${x.pr}: ${x.skipped || (x.started.length ? `started ${x.started.join(", ")}` : "nothing owed")}`)].join("\n") || "no open pull request");
   },
   "next ": async () => { const r = await nextAfter(flag("after"), flag("pr")); output({ next: r.steps.map((x) => x.start || x.dispatch).join(" ") }); return say(r.said); },
-  "ci results": () => { const t = roles.ciResults(io.ghPages(`repos/${host.repo}/commits/${arg(0)}/check-runs?per_page=100`, "check_runs")); if (flag("out")) writeFileSync(flag("out"), t); return say(t); },   // for an agent or Jev
+  "ci results": () => { const t = roles.ciResults(host.checkRuns(arg(0))); if (flag("out")) writeFileSync(flag("out"), t); return say(t); },   // for an agent or Jev
   "agent budget": () => {   // the role's provider, model and turns (config/ai-models.json); --changed: the PR's paths, one a line
     const files = flag("changed") && existsSync(flag("changed")) ? readFileSync(flag("changed"), "utf8").split("\n").filter(Boolean) : null;
     const b = roles.budget(arg(0), undefined, { story: flag("key") && flag("key") !== "N" ? flag("key") : "", declarative: Boolean(files) && isDeclarativeOnly(files) });

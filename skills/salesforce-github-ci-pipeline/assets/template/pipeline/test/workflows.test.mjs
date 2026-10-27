@@ -374,6 +374,8 @@ test("Standing is the only reader of results: no other module or workflow reads 
   for (const f of srcs.filter((x) => x !== "src/gate.mjs" && x !== "src/github.mjs")) {
     const s = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
     assert.doesNotMatch(s, /\/statuses(\?|`)/, `${f} reads commit statuses: ask gate.standing (or gate.statusOn for one exact commit)`);
+    // check runs too, through the code host (host.checkRuns, github.checkRunsOn): the 27 Oct review found five readers
+    assert.doesNotMatch(s, /\/check-runs\?/, `${f} reads check runs itself: use host.checkRuns`);
   }
   for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((x) => x.endsWith(".yml"))) {
     const runs = readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8").split("\n").filter((l) => !/^\s*#/.test(l));

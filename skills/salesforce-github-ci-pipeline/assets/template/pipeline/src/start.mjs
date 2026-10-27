@@ -48,7 +48,7 @@ function passedTests(result, { shas, host, all = false }) {
   const name = RESULTS[result].proof;
   const latest = (runs) => [...runs].filter((r) => r.status === "completed").sort((a, b) => String(a.started_at).localeCompare(String(b.started_at))).pop();
   return shas.filter((sha) => {
-    const run = latest(host.api("GET", `repos/${host.repo}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}`)?.check_runs || []);
+    const run = latest(host.checkRuns(sha, name));
     return run?.conclusion === "success" && (!all || /all local tests/.test(run.output?.summary || ""));
   });
 }

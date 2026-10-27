@@ -142,7 +142,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority
   }
   if (id === "fix-story") {
     // a sprint story for what failed on the release (the failing checks' own lists), so it goes through the normal flow
-    const failed = (host.api("GET", `repos/${host.repo}/commits/${where.pr.headRefOid}/check-runs?per_page=100`) || {}).check_runs?.filter((c) => c.conclusion === "failure") || [];
+    const failed = host.checkRuns(where.pr.headRefOid).filter((c) => c.conclusion === "failure");
     const lines = failed.flatMap((c) => String(c.output?.text || "").split("\n").filter((l) => /^\| (test|component|coverage) \|/.test(l)).slice(0, 20));
     const body = ["### Summary", "", `Release PR #${where.number} cannot ship: ${failed.map((c) => c.name).join(", ") || "a check"} failed. Fix what is listed below on the sprint branch.`, "",
       "### Acceptance criteria", "", "- Every test listed under Out of scope's \"What failed\" passes in the staging regression", "- The production validation passes on the release PR", "- No production code changes beyond what the failures need", "",

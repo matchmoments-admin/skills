@@ -7,6 +7,11 @@ import { openRelease as pickOpenRelease, aiFeatures, setting } from "./conventio
 import { recorder } from "./events.mjs";
 import { appToken } from "./board.mjs";
 
+/** A commit's check runs (every page; name: only that check), through the io seam. host.checkRuns, and close-out,
+ *  which has io but no host. */
+export const checkRunsOn = ({ ghPages }, repo, sha, name = null) =>
+  (ghPages(`repos/${repo}/commits/${sha}/check-runs?per_page=100${name ? `&check_name=${encodeURIComponent(name)}` : ""}`, "check_runs") || []).filter((c) => !name || c.name === name);
+
 export function codeHost({ io, env = process.env, sleep = () => {}, log = () => {}, fetcher = globalThis.fetch, now = () => Date.now() }) {
   const repo = env.GH_REPO || env.GITHUB_REPOSITORY;
   const repoUrl = `${env.GITHUB_SERVER_URL || "https://github.com"}/${repo}`;
@@ -33,6 +38,9 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
 
     /** A story branch's latest PR (any state), or null. */
     storyPr: (branch) => once(`pr:${branch}`, () => (io.gh(["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", "number,state,title,baseRefName,headRefOid"]) || [])[0] || null),
+
+    /** A commit's check runs, every page, or only the named check's runs (in no promised order: sort by started_at). */
+    checkRuns: (sha, name = null) => checkRunsOn(io, repo, sha, name),
 
     /** A release branch's open release PR into main (its number), or null. */
     releasePrOf: (branch) => {
