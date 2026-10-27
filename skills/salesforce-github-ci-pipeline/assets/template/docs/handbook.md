@@ -288,7 +288,7 @@ Start from the **story card**: a ❌ row links to what failed. Every run is unde
 | **Apex tests / coverage** | step *Apex tests and coverage gate*; artifact **apex-results** has the full JUnit report | reproduce in the story's org (below) |
 | **Flow tests** | step *Flow tests*: `Fail <Flow>.<Test>` lines | a Flow test's record must meet the Flow's entry criteria; test "does not run" paths in Apex |
 | **Flow scanner** (`flow:TriggerEntryCriteria` and similar) | step *Code analyzer* | put the run conditions in the trigger's entry criteria, not a Decision |
-| **UI evidence** | with `UI_EVIDENCE`, the **UI evidence** comment on the story (the card's UI test row links it): one screenshot per acceptance criterion, each with a link to the record in the story's scratch org (tick **Send me a login to this story's scratch org** first). Stored on the `evidence` branch, only the latest passing commit per story; the janitor drops closed stories' screenshots and says so in their comment. The weekly metrics count posts, screenshots, refused files and KB |
+| **UI evidence** | with `UI_EVIDENCE`, the **UI evidence** comment on the story (the card's UI test row links it): one screenshot per acceptance criterion, each with a link to the record in the story's scratch org (tick **Send me a login to this story's scratch org** first). Stored on the `evidence` branch, only the latest passing commit per story; the hourly reconcile drops closed stories' screenshots and says so in their comment. The weekly metrics count posts, screenshots, refused files and KB |
 | **UI test** | artifact **playwright-report** (screenshots, error context; open `index.html`); with `AI_TRIAGE` a comment says flake, test or feature | run the spec locally against the story's org (below) |
 | **staging regression** | the `staging-deploy` run; artifact **staging-results** | a story that passed alone broke with the others: fix on a new story branch |
 | **production validation** (gate) | the PR comment "production rejected this change" quotes each error | production differs from the scratch org: fix, or refresh the shape (*Actions › org-shape-refresh*) |
@@ -313,15 +313,21 @@ Re-run anything from the run page (*Re-run failed jobs*), or re-add its label (`
 
 ## How good is it?
 
-An honest rating against an enterprise Salesforce delivery setup.
+An honest rating against an enterprise Salesforce delivery setup (re-rated 27 October 2026, after PRs #388–#399).
 
 | Area | Score | Why |
 | --- | --- | --- |
-| **Controls and safety** | 8/10 | Branch rules, required checks, approval on the exact code, production validation of the exact merge result, quick deploy of that validation, rollback, pipeline code isolated from PR code, App identity, full audit trail. Missing: separate approver groups (CODEOWNERS teams), a change-management ticket link, secret rotation. |
-| **Enterprise fit** | 7/10 | The release train, hotfix path, back-merges, org shape and DORA metrics are what enterprises run. Missing: a UAT or full-copy sandbox stage before production, data seeding, unlocked packages for modular teams, more than one production org. |
-| **Scaling** | 5/10 today, 8/10 on a bigger Dev Hub | A Developer Edition Dev Hub allows 3 active and 6 new scratch orgs a day, so about two stories in flight. Enterprise Edition allows 40 and 80, Unlimited 100 and 200. One open sprint and one staging org by design; parallel trains need a staging org each. |
-| **Ease for developers** | 8/10 | Push and approve; the pipeline opens PRs, picks orgs, merges and ships. |
-| **Ease for non-technical users** | 7/10 | Issue forms, the story card (next step, live diagram, **Approve here**), comment commands, an optional delivery board. Still GitHub-shaped (Slack notices, optional, say when it is your turn), and opening an org needs the CLI. |
+| **Controls and safety** | 8/10 | Branch rules, required checks, approval on the exact code, production validation of the exact merge result, quick deploy of that validation, rollback, pipeline code isolated from PR code, App identity and a full audit trail. Since the last rating: plan, spec, review and reconcile no longer hold the production key (the build, fix and UI-test agents still do), and each story's AI runs have a spending limit (not runs without a story, and not while the event log cannot be read). Solo mode is explicit and recorded, and it needs a real AI review on that commit, but it is weaker than a second person. Missing: a separate production credential, approver groups (CODEOWNERS teams), a change-management ticket link and secret rotation. |
+| **Enterprise fit** | 7/10 | Enterprises run this kind of release train, hotfix path, back-merge flow, org shape and DORA metrics. The provider choice (Bedrock, Vertex, a gateway) fits a company's own AI contracts. Missing: a UAT or full-copy sandbox stage before production, data seeding, unlocked packages for modular teams, and more than one production org. |
+| **Scaling** | 6/10 today, 9/10 on a bigger Dev Hub | Staging tests one run per batch of merges (relevant tests per merge, everything on the release PR). A closed story gives its org back at once, and one `allocate()` hands out every org, with an optional warm pool. The Developer Edition Dev Hub still allows only 3 active and 6 new scratch orgs a day, so about two stories in flight. Enterprise Edition allows 40 and 80, Unlimited 100 and 200, which is where the pool pays off. None of this has run at volume yet. |
+| **Reliability and running cost** | 7/10 | Hourly reconcile with no Salesforce key re-runs runs that billing blocked (once each) and stops re-validating rejected releases. Routing at the job level keeps idle Actions minutes near zero. Missing: budget alerts (the $40 cap stops usage silently), and GitHub's scheduler runs it late (the first scheduled run came at 23:18 UTC on 26 Oct, not 19:41). |
+| **AI cost and model choice** | 7/10 | Model and turns per role in one config, five providers, A/B arms by story, Haiku for declarative-only reviews, a $5 budget per story with `/budget-ok`, and per-model cost, first-time-green and overrule metrics. Missing: a reviewer eval set (cost is measured, quality only through overrules), model ids for Bedrock and Vertex, and a first real story through the budget. |
+| **Ease for developers** | 8/10 | Push and approve; the pipeline opens PRs, picks orgs, merges and ships. A solo developer no longer needs an admin merge for story work. |
+| **Ease for non-technical users** | 7/10 | Issue forms, the story card (next step, live diagram, **Approve here**), comment commands, an optional delivery board. It is still GitHub-shaped (the optional Slack notices say when it is your turn), and opening an org needs the CLI. |
+
+**Overall: about 7.5/10**, up from about 7. The biggest gains since the last rating are fewer jobs holding the production key, AI spend
+control and batch efficiency. The biggest gaps are the shared production credential, the small Dev Hub, the missing
+UAT sandbox stage, and features not yet proven on a real story.
 
 ### Making it the easiest pipeline to use
 
@@ -340,7 +346,7 @@ Next:
 GitHub bills every job as at least one whole minute, so the pipeline decides whether a job has work **before** a
 runner starts (a job-level `if:`), not inside it. A pipeline or docs change starts no scratch-org job (it shows as
 skipped, which passes the required check), no code analyzer and no AI review; Claude's own pushes start no story-PR
-job; the janitor runs twice a day. Review, fix and the UI test start through one short route job, `pipe start`
+job; the janitor runs every 6 hours, and reconcile, which holds no Salesforce key, runs hourly. Review, fix and the UI test start through one short route job, `pipe start`
 (`pipeline/src/start.mjs`, main's code): the flag is off, a release or back-merge, a spec-only push, nothing
 reviewable, the `blocked` label, the fix rounds used up, no committed spec. Each of those ends there, with the
 verdict or the reason posted, so the long job never starts only to stop. A result that still stands on the head is
@@ -416,7 +422,7 @@ is one CLI, so the Salesforce steps can run on Buildkite agents if a company alr
   exactly that tree; otherwise (an emergency merge, or anything else that moved `main`) it validates again. It tags that
   SHA, not whatever `main` is by then, and closes out from it.
 - **Nothing queued is lost:** GitHub keeps only the newest waiting run in a concurrency group. After every ship the gate
-  re-runs itself for the other approved PRs into the same base, and twice a day the **watchdog** starts a release for
+  re-runs itself for the other approved PRs into the same base, and every hour the **watchdog** (`reconcile.yml`) starts a release for
   Salesforce changes on `main` that never shipped (it reports instead after a rollback, or when that release failed).
 - `/uat-pass` signs off only a commit UAT is actually running (the one **Ready for UAT** names).
 
