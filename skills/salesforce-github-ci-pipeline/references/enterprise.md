@@ -148,11 +148,18 @@ without creating users (production licences cost money), run its Playwright spec
 Release 2027-w02 checked FFLib's Escalated flag this way: a High priority Phone case read ✓ and an Email case didn't.
 It also found that no production user held the story's permission set, which is why §6d exists.
 
+## Credentials
+One JWT key (`SF_CI_PRIVATE_KEY`) logs CI into production and into the scratch and sandbox orgs. That is a choice, not
+a gap, for a small team: plan, spec, review and reconcile already run without it. Best practice for a regulated or
+larger team is two keys: production's, in the `production` environment and held only by the jobs that validate,
+deploy and release to production; and another for the Dev Hub, scratch orgs and sandboxes, which the build, fix and
+UI-test agents use. Then no agent that writes code ever holds a production login. List today's holders with
+`grep -l SF_CI_PRIVATE_KEY .github/workflows/*.yml`.
+
 ## Next steps (not built yet)
 - An automatic smoke check after each release (6e), once there is a production test user with the persona groups.
 - Solo mode: with one name in `APPROVERS`, the approver's own push should not dead-end the gate (today: an audited
   admin merge).
-- Separate credentials for production and for scratch and sandbox orgs (today one JWT key does both).
 
 - Parallel release trains (one staging per train) for teams shipping more than one release at a time.
 - Secrets from a company vault over OIDC instead of GitHub secrets.
