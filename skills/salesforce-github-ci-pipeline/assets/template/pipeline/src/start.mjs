@@ -105,11 +105,19 @@ export function stagingPlanFor({ git, host, gh, branch, policy }) {
  * May this job start? kind: review | fix | ui-test. facts: { ai, branch, labels: [name], rounds: { n, limit } | null,
  * changed: [file] | null (against the base; null if unknown), pushed: [file] | null (this push only, for a review on
  * a push), mode: ai | run, hasSpec, review / ui: the verdict that stands on the head (gate.standing), explicit: a
- * person asked (a label or ticked box), which runs again whatever stands }. Returns { run: true } or { run: false, why, off?, status?, stop? }:
+ * person asked (a label or ticked box), which runs again whatever stands, budget: the story's AI budget
+ * (roles.storyBudget) or null }. Returns { run: true } or { run: false, why, off?, status?, stop?, budget? }:
  * off: the AI flag is off (say so on the PR); status: a verdict to post on the head instead; stop: the fix rounds
- * are used up (block the PR and say what a person can do). Pure.
+ * are used up (block the PR and say what a person can do); budget: the story's AI budget is spent (stopForBudget).
+ * The budget is checked last, so a job with nothing to do still says why. Pure.
  */
 export function decide(kind, f) {
+  const d = decideRun(kind, f);
+  const agent = kind !== "ui-test" || f.mode === "ai";
+  if (d.run && agent && f.budget?.over) return { run: false, budget: true, why: `the story's AI budget is spent ($${f.budget.spent.toFixed(2)} of $${f.budget.cap.toFixed(2)})` };
+  return d;
+}
+function decideRun(kind, f) {
   const ai = f.ai || {};
   const labels = f.labels || [];
   const bk = branchKind(f.branch);
@@ -152,6 +160,24 @@ export const offMessage = (flag) => ({
   AI_UI_TEST: "AI UI test is off (repository variable `AI_UI_TEST`). Commit `e2e/story-<key>.spec.ts` yourself and label the PR `test`, or turn it on in Settings > Secrets and variables > Actions > Variables.",
 })[flag];
 
+/** The one comment when a story's AI budget is spent (sb: roles.storyBudget). Pure. */
+export const budgetMessage = (key, sb) => `⏸ Story ${key} has used $${sb.spent.toFixed(2)} of its $${sb.cap.toFixed(2)} AI budget, so no AI agent starts on it. An approver can comment \`/budget-ok <why>\` to add as much again (AI_STORY_BUDGET_USD), or a person can take it from here.`;
+
+/**
+ * Stop a story's AI work at its budget, before any runner, lane or org: the comment and `blocked` label on the PR (or
+ * the story, before it has one), once (a blocked one already says why), then the card. The Start decision and the
+ * agent's own last check (`pipe agent stop`) both end here. deps: { gh, cards }.
+ */
+export async function stopForBudget({ key, pr = null, sb }, { gh, cards = null }) {
+  const [kind, n] = pr ? ["pr", String(pr)] : ["issue", String(key)];
+  const labels = (gh([kind, "view", n, "--json", "labels"], { allowFail: true })?.labels || []).map((l) => l.name);
+  if (!labels.includes("blocked")) {
+    gh([kind, "comment", n, "--body", budgetMessage(key, sb)], { allowFail: true });
+    gh([kind, "edit", n, "--add-label", "blocked"], { allowFail: true });
+  }
+  if (cards && key) await cards.refresh(String(key), { activity: { state: "failed", what: `the story's AI budget is spent ($${sb.spent.toFixed(2)} of $${sb.cap.toFixed(2)})`, retry: "an approver comments /budget-ok <why>, or a person takes it from here" } });
+}
+
 /** The one comment when Claude's fix rounds are used up. Pure. */
 export const stopMessage = (limit) => `Claude has had ${limit} fix rounds on this change since the last push by a person, so it stops here. **What you can do:** push a fix yourself (the count starts again, and the review re-runs), or, if the AI review is wrong, comment \`/review-ok <why>\` to accept the change anyway.`;
 
@@ -161,10 +187,11 @@ const WORKFLOW = { review: "ai-review.yml", fix: "ai-fix.yml", "ui-test": "ui-te
  * Gather the facts for decide(), then act: dispatch the job on main, or post its verdict, say the flag is off, or stop
  * the fix rounds (block the PR, say what a person can do, once). The one door into review, fix and the UI test: the
  * route jobs (labels, ticked boxes, comments, auto-chain) and CI's autofix all come through here.
- * deps: { host, gh, cards, ai, jev }. jev (AI_TRIAGE, the journey's chained starts only): a fix Jev confidently
- * judges unneeded is not started (fixGate). Returns the decision.
+ * deps: { host, gh, cards, ai, jev, budgetOf }. jev (AI_TRIAGE, the journey's chained starts only): a fix Jev
+ * confidently judges unneeded is not started (fixGate). budgetOf(story): the story's AI budget (roles.storyBudget) or
+ * null (no limit, or the event log could not be read): over it, no runner starts (stopForBudget). Returns the decision.
  */
-export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, mode = "run", before = null, after = null, explicit = false, log = () => {} }) {
+export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, budgetOf = () => null, mode = "run", before = null, after = null, explicit = false, log = () => {} }) {
   const p = gh(["pr", "view", String(pr), "--json", "headRefName,baseRefName,headRefOid,labels,state"]);
   if (p.state !== "OPEN") return { run: false, why: `the PR is ${String(p.state).toLowerCase()}` };
   const labels = (p.labels || []).map((l) => l.name);
@@ -178,6 +205,7 @@ export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, mode
     pushed: kind === "review" && before ? files(before, after || p.headRefOid) : null,
     rounds: kind === "fix" ? { n: fixRoundsUsed(pr, { host, gh }), limit: MAX_FIX_ROUNDS } : null,
     hasSpec: kind === "ui-test" && mode !== "ai" ? Boolean(key && host.api("GET", `repos/${host.repo}/contents/e2e/story-${key}.spec.ts?ref=${p.headRefOid}`)?.sha) : false,
+    budget: key && (kind !== "ui-test" || mode === "ai") ? budgetOf(key) : null,
   });
   const label = { review: "ai:review", fix: "ai:fix", "ui-test": mode === "ai" ? "ai:test" : "test" }[kind];
   if (d.run && kind === "fix" && jev && !explicit) {
@@ -199,6 +227,12 @@ export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, mode
     return d;
   }
   log(`not started: ${d.why}`);
+  if (d.budget) {
+    if (kind === "review") host.status(p.headRefOid, STATUS.review, "error", REVIEW.budget());   // the gate and the card see why no review came
+    gh(["pr", "edit", String(pr), "--remove-label", label], { allowFail: true });
+    await stopForBudget({ key, pr, sb: budgetOf(key) }, { gh, cards });
+    return d;
+  }
   if (d.off) gh(["pr", "comment", String(pr), "--body", offMessage(d.off)], { allowFail: true });
   if (d.status) {
     host.status(p.headRefOid, d.status.context, d.status.state, d.status.description);

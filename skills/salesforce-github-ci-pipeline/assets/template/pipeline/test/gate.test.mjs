@@ -474,7 +474,7 @@ test("AI budget per story: spend from the agents' own reports; over the cap no a
   assert.deepEqual(did[1], ["gh", "pr", "edit", "40", "--remove-label", "blocked"]);
   assert.deepEqual(actions.command("/budget-ok because"), { id: "budget-ok", arg: "because" });
   const a = readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8");
-  assert.match(a, /if: steps\.rules\.outputs\.stop == 'true'[\s\S]*?--add-label blocked[\s\S]*?AI_BUDGET_STOPPED=true[\s\S]*?over its AI budget/, "the stop labels and explains, then fails the job");
+  assert.match(a, /if: steps\.rules\.outputs\.stop == 'true'[\s\S]*?pipe\.mjs agent stop[\s\S]*?AI_BUDGET_STOPPED=true[\s\S]*?over its AI budget/, "the agent's last check: the same stop (start.stopForBudget), then it fails the job");
   // the workspace checkout's own credentials fetch the log: a second Authorization header made GitHub refuse it (400)
   assert.doesNotMatch(a, /GIT_CONFIG_|extraheader/);
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
@@ -483,6 +483,41 @@ test("AI budget per story: spend from the agents' own reports; over the cap no a
   assert.match(wf("ai-review"), /V=budget/);
   const { verdictOf } = await import("../src/finish.mjs");
   assert.match(verdictOf("review", { outcome: "budget" }).description, /AI budget is spent: an approver's \/budget-ok/);
+});
+
+test("the AI budget stops a story before any runner, lane or org (27 Oct review): the Start decision, and ai-implement before its lane", async () => {
+  const over = { spent: 5.2, cap: 5, extensions: 0, over: true }, under = { spent: 1, cap: 5, extensions: 0, over: false };
+  const base = { ai: { ...FULL_AI, fix: true }, branch: "issue-12", labels: [], changed: ["force-app/main/default/classes/A.cls"] };
+  assert.deepEqual(start.decide("review", { ...base, budget: under }), { run: true });
+  assert.match(start.decide("review", { ...base, budget: over }).why, /AI budget is spent \(\$5\.20 of \$5\.00\)/);
+  assert.equal(start.decide("fix", { ...base, budget: over }).budget, true);
+  assert.equal(start.decide("ui-test", { ...base, mode: "ai", budget: over }).budget, true);
+  assert.equal(start.decide("ui-test", { ...base, mode: "run", hasSpec: true, budget: over }).run, true, "the committed spec runs: no agent");
+  assert.ok(start.decide("review", { ...base, changed: ["docs/x.md"], budget: over }).status, "nothing reviewable still says not needed, with no agent");
+  // the stop: comment and label once, then the card
+  const calls = [], cards = { refresh: async (k, o) => calls.push(["card", k, o.activity.what]) };
+  const gh = (labels) => (a) => { calls.push(a.join(" ")); return a[2] === "view" || a[1] === "view" ? { labels: labels.map((name) => ({ name })) } : null; };
+  await start.stopForBudget({ key: "12", pr: 40, sb: over }, { gh: gh([]), cards });
+  assert.match(calls.find((c) => /pr comment 40/.test(c)), /used \$5\.20 of its \$5\.00 AI budget/);
+  assert.ok(calls.includes("pr edit 40 --add-label blocked"));
+  assert.deepEqual(calls.at(-1), ["card", "12", "the story's AI budget is spent ($5.20 of $5.00)"]);
+  calls.length = 0;
+  await start.stopForBudget({ key: "12", sb: over }, { gh: gh(["blocked"]), cards });
+  assert.deepEqual(calls.filter((c) => typeof c === "string" && /comment|edit/.test(c)), [], "already blocked: no second comment");
+  // the reader: once per story, null when there is no limit, no story, or no log
+  let reads = 0;
+  const r = roles.budgetReader({ read: () => { reads++; return [{ kind: "agent", story: "12", usd: 6 }]; }, base: () => 5 });
+  assert.equal(r("12").over, true); r("12"); assert.equal(reads, 1);
+  assert.equal(r("N"), null);
+  assert.equal(roles.budgetReader({ read: () => [], base: () => 0 })("12"), null, "0: no limit");
+  const warned = [];
+  assert.equal(roles.budgetReader({ read: (onFail) => { onFail(); return []; }, base: () => 5, log: (m) => warned.push(m) })("12"), null, "an unreadable log never stops a story");
+  assert.match(warned[0], /not checked this run/);
+  // ai-implement stops before the lane and the org; every start door passes the budget
+  const impl = readFileSync(new URL("../../.github/workflows/ai-implement.yml", import.meta.url), "utf8");
+  assert.ok(impl.indexOf("pipe.mjs agent stop") > 0 && impl.indexOf("pipe.mjs agent stop") < impl.indexOf("lane acquire"), "the budget before the lane");
+  const pipe = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  assert.equal((pipe.match(/startJob[,(][^\n]*budgetOf/g) || []).length, 2, "startCmd and the journey both pass the budget");
 });
 
 test("metrics by model: each role, provider, model and arm with cost, failures and overruled reviews; spend by story; log collisions", () => {

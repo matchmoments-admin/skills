@@ -65,6 +65,10 @@ jobs:
         run: |
           [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
           node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
+      - name: Stop before the org's lane and the org when the story's AI budget is spent (start.stopForBudget)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .pipeline/pipeline/bin/pipe.mjs agent stop --key "$KEY"
       - name: The story card says Claude is building it
         env:
           GH_TOKEN: ${{ github.token }}
