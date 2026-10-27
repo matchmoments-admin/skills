@@ -136,9 +136,9 @@ export function gatherDelivery(key, io, { tag, sprint = null, now = new Date(), 
   const a = st.approval.who?.[0] || null;
   const approved = recorded || (a ? { by: a.login, at: a.at, how: a.how } : null);
   const review = ["missing", "stale"].includes(st.review.state) ? null : st.review;
-  const overruled = /overruled by @([A-Za-z0-9-]+)/.exec(review?.description || "");
-  const reason = overruled ? (api(`repos/${repo}/issues/${pr.number}/comments?per_page=100`) || []).map((c) => String(c.body || ""))
-    .reverse().find((b) => b.startsWith(`✋ @${overruled[1]} accepted this change`))?.replace(/^.*?`[0-9a-f]{7}`: /s, "").replace(/\. A new push needs a review again\.$/, "") : null;
+  const overruledBy = review?.kind === "overruled" ? review.who : null;
+  const reason = overruledBy ? (api(`repos/${repo}/issues/${pr.number}/comments?per_page=100`) || []).map((c) => String(c.body || ""))
+    .reverse().find((b) => b.startsWith(`✋ @${overruledBy} accepted this change`))?.replace(/^.*?`[0-9a-f]{7}`: /s, "").replace(/\. A new push needs a review again\.$/, "") : null;
   const ui = ["missing", "stale"].includes(st.ui.state) ? null : st.ui;
   // the release (or, for a hotfix, the PR itself): UAT sign-off and the production validation's deploy id
   const rel = sprint ? (gh(["pr", "list", "--head", releaseBranch(sprint), "--base", "main", "--state", "merged", "--json", "number,headRefOid,mergedAt"], { allowFail: true }) || [])[0] : { headRefOid: pr.headRefOid, mergedAt: pr.mergedAt };
@@ -148,7 +148,7 @@ export function gatherDelivery(key, io, { tag, sprint = null, now = new Date(), 
   return {
     key: String(key), title: issue.title || "", tag, sprint, pr: pr.number,
     approver: approverOf(issue.body), lastPusher: facts.lastPusher, approved,
-    review: review ? { state: review.state, overruledBy: overruled?.[1] || null, reason, text: review.description || "" } : null,
+    review: review ? { state: review.state, overruledBy, reason, text: review.description || "" } : null,
     ui: ui ? { state: ui.state, url: ui.url || null } : null,
     uat: uat?.state === "success" ? uat.who || "signed off" : null,
     validation,

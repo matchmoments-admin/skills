@@ -5,7 +5,7 @@
 // a planned UI regression that failed to start recorded nothing).
 // reconcile() is level-triggered: on each open PR nothing is running for, it asks Standing what is owed and starts it,
 // so a dropped workflow_run (GitHub lost them for half an hour on 13 Oct) costs one hourly tick (reconcile.yml), not a stalled story.
-import { STATUS, standing, nudge, route } from "./gate.mjs";
+import { STATUS, REVIEW, standing, nudge, route } from "./gate.mjs";
 import { notStarted } from "./improve.mjs";
 
 /** What each stage posts: its result's status context, the labels people read, and the journey step after it. */
@@ -28,11 +28,11 @@ export const STAGE = {
  */
 export function verdictOf(stage, { outcome = "", detail = "", weak = "", kind = "", hasSpec = true, planned = false, story = "" } = {}) {
   if (stage === "review") {
-    if (outcome === "pass") return { state: "success", description: "AI review passed", label: true };
-    if (outcome === "changes") return { state: "failure", description: "AI review asks for changes", label: true };
-    if (outcome === "not-needed") return { state: "success", description: `not needed: ${detail}` };
-    if (outcome === "budget") return { state: "error", description: "the story's AI budget is spent: an approver's /budget-ok, then Run the AI review again" };
-    return { state: "error", description: "the review posted no verdict: tick Run the AI review again" };
+    if (outcome === "pass") return { state: "success", description: REVIEW.passed(), label: true };
+    if (outcome === "changes") return { state: "failure", description: REVIEW.changes(), label: true };
+    if (outcome === "not-needed") return { state: "success", description: REVIEW.notNeeded(detail) };
+    if (outcome === "budget") return { state: "error", description: REVIEW.budget() };
+    return { state: "error", description: REVIEW.none() };
   }
   if (stage === "ui-test") {
     if (!hasSpec) return { state: "failure", description: `no spec e2e/story-${story}.spec.ts committed`, label: true };

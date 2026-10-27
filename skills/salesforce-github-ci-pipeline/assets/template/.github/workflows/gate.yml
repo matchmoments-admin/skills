@@ -1,4 +1,5 @@
 name: gate
+run-name: "${{ format('gate PR #{0}', inputs.pr || github.event.pull_request.number) }}"   # reconcile's busy check finds a dispatched gate by "#N" (finish.mjs)
 # BUTTON: approve the PR (or label it `ready` if you wrote it yourself; GitHub will not let you approve your own).
 # One gate for every route (pipeline/src/gate.mjs): feature -> release branch (squash), hotfix -> main (squash, then
 # release), release -> main (merge commit, then release), back-merge -> release branch (merge commit).

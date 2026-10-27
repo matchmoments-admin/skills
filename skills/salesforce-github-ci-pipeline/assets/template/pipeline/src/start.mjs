@@ -3,7 +3,7 @@
 // starts only to find it has nothing to do costs a runner and a lane wait, and a rule in a release branch's YAML stays
 // stale until a back-merge. decide() and ciPlan() are pure; `pipe start` and `pipe ci plan` gather the facts and act.
 import { storyOf, sprintOf, uiNeeded } from "./conventions.mjs";
-import { STATUS, standing, carriedFrom, RESULTS } from "./gate.mjs";
+import { STATUS, REVIEW, standing, carriedFrom, RESULTS } from "./gate.mjs";
 import { CHECKS, LIVE_TESTS_CHECK } from "./conventions.mjs";
 import { fixRoundsUsed, MAX_FIX_ROUNDS, REVIEW_LINE, reviewComments } from "./verdict.mjs";
 import { triageFix, fixSkippedMessage } from "./jev.mjs";
@@ -121,7 +121,7 @@ export function decide(kind, f) {
     if (bk === "release" || bk === "backmerge") return { run: false, why: "release PRs and back-merges were reviewed story by story" };
     if (Array.isArray(f.pushed) && f.pushed.length && f.pushed.every((p) => p.startsWith("e2e/"))) return { run: false, why: "a spec-only push needs no review (the gate accepts e2e-only changes)" };
     if (Array.isArray(f.changed) && f.changed.length < 300 && !f.changed.some((p) => p.startsWith("force-app/") || p.startsWith("e2e/"))) {
-      return { run: false, why: "nothing reviewable", status: { context: STATUS.review, state: "success", description: "not needed: no Salesforce source or specs changed" } };
+      return { run: false, why: "nothing reviewable", status: { context: STATUS.review, state: "success", description: REVIEW.notNeeded("no Salesforce source or specs changed") } };
     }
     return { run: true };
   }
@@ -194,7 +194,7 @@ export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, mode
     if (kind === "ui-test" && mode === "ai") host.status(p.headRefOid, STATUS.ui, "pending", "Claude is writing and running the UI test");
     // the review too: without it the card said "run it again" and offered a second review while one ran (scenario
     // fuzz, 15 Oct); its verdict job always replaces it (pass, changes, or error when no verdict came)
-    if (kind === "review") host.status(p.headRefOid, STATUS.review, "pending", "Claude is reviewing this code");
+    if (kind === "review") host.status(p.headRefOid, STATUS.review, "pending", REVIEW.running());
     host.dispatch(WORKFLOW[kind], kind === "ui-test" ? { pr, mode } : { pr });
     return d;
   }

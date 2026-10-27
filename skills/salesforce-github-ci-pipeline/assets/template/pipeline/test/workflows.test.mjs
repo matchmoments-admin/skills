@@ -386,3 +386,13 @@ test("CI's deploy with deletions tolerates what is already gone (a re-run in the
   assert.match(ci, /DESTRUCTIVE="--post-destructive-changes delta\/destructiveChanges\/destructiveChanges\.xml --ignore-warnings"/);
 });
 
+
+test("every workflow dispatched for a PR names it in its run title, so reconcile sees the run going (gate had none: 27 Oct review)", () => {
+  const dir = new URL("../../.github/workflows/", import.meta.url);
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".yml"))) {
+    const src = readFileSync(new URL(f, dir), "utf8");
+    const dispatch = (src.split(/\n  workflow_dispatch:/)[1] || "").split(/\n  [a-z_]+:/)[0];
+    if (!/\n {6}pr:/.test(dispatch)) continue;
+    assert.match(src.match(/^run-name: .*$/m)?.[0] || "", /#\{\d\}/, `${f}: a pr input but no "#N" in run-name (finish.mjs reconcile busy())`);
+  }
+});

@@ -207,7 +207,7 @@ test("approver (enterprise B): Sign off and /review-ok refuse an approval that w
   const did = [];
   const host = { repoUrl: "https://github.com/o/r", status: (...a) => did.push(a), dispatch: () => {} };
   const story = { headRefName: "issue-106", headRefOid: "h1", baseRefName: "release/w45" };
-  const deps = { host, appGh: () => {}, gh: () => {}, inUat: () => false, mayApprove: (who) => (who === "bob" ? "@bob pushed the latest change, so @alice (the approver) needs to approve" : null) };
+  const deps = { host, appGh: () => {}, gh: () => {}, inUat: () => false, authority: (action, who) => (who === "bob" ? "@bob pushed the latest change, so @alice (the approver) needs to approve" : null) };
   assert.match(actions.perform("ship", "", { number: 108, isPr: true, pr: story }, "bob", deps).said, /Not signed off: @bob pushed the latest change/);
   assert.match(actions.perform("review-ok", "it is fine", { number: 108, isPr: true, pr: story }, "bob", deps).said, /The AI review stands/);
   assert.equal(did.length, 0, "no status was written for a refused approval");
