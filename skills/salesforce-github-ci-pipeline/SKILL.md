@@ -41,6 +41,10 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
 12. **Who may hold production credentials?** Default and recommendation: nobody but CI. People keep their own
     production logins for Setup; the pipeline's key (`secrets/ci.key`) is made once, stored as a secret, and deleted
     from the machine that made it. Admins reach a story's scratch org with **Send me an admin login**, never the key.
+    One JWT key serves production and the scratch and sandbox orgs; that is enough for a small team. A team that
+    must keep production apart (regulated, or many builders) can give production its own key, held only by the
+    production validate, deploy and release jobs, and keep the build, fix and UI-test agents on the other: ask, since it
+    changes secrets ([`references/enterprise.md`](references/enterprise.md), *Credentials*).
 13. **Approvers.** Who approves stories (`APPROVERS`, default first, e.g. the lead). With it set, nobody approves a
     change they pushed, and each story names its approver ([`references/enterprise.md`](references/enterprise.md), *People*).
 
