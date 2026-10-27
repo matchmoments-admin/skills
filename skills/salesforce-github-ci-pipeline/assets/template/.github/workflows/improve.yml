@@ -9,7 +9,7 @@ on:
   workflow_run:
     types: [completed]
     workflows: [ai-fix, ai-implement, ai-plan, ai-review, ai-spec, back-merge, card-actions, ci, commands, gate, issue-start,
-      labels, lane-wake, merged, metrics, org-shape-refresh, prod-baseline, reconcile, release-cut, release, rollback, scratch-janitor,
+      labels, lane-wake, merged, metrics, org-shape-refresh, prod-baseline, reconcile, release-cut, release, review-eval, rollback, scratch-janitor,
       seed-fold, slack, slack-test, snapshot-refresh, sprint-start, staging-deploy, story-pr, story-retrieve, uat-deploy, uat-login, uat-sample, ui-test]
   workflow_dispatch:
     inputs:

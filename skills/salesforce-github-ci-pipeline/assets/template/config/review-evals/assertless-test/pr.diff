@@ -1,0 +1,41 @@
+diff --git a/force-app/main/default/classes/OpportunityNextStep.cls b/force-app/main/default/classes/OpportunityNextStep.cls
+new file mode 100644
+--- /dev/null
++++ b/force-app/main/default/classes/OpportunityNextStep.cls
+@@ -0,0 +1,10 @@
++public with sharing class OpportunityNextStep {
++    // Called from OpportunityTriggerHandler.beforeInsert
++    public static void defaultNextStep(List<Opportunity> opps) {
++        for (Opportunity o : opps) {
++            if (String.isBlank(o.NextStep)) {
++                o.NextStep = 'Qualify';
++            }
++        }
++    }
++}
+diff --git a/force-app/main/default/classes/OpportunityNextStepTest.cls b/force-app/main/default/classes/OpportunityNextStepTest.cls
+new file mode 100644
+--- /dev/null
++++ b/force-app/main/default/classes/OpportunityNextStepTest.cls
+@@ -0,0 +1,22 @@
++@IsTest(testFor='ApexClass:OpportunityNextStep')
++private class OpportunityNextStepTest {
++    @IsTest
++    static void defaultsNextStep() {
++        List<Opportunity> opps = new List<Opportunity>();
++        for (Integer i = 0; i < 200; i++) {
++            opps.add(new Opportunity(Name = 'O' + i, StageName = 'Prospecting', CloseDate = Date.today()));
++        }
++        Test.startTest();
++        OpportunityNextStep.defaultNextStep(opps);
++        Test.stopTest();
++    }
++
++    @IsTest
++    static void keepsExistingNextStep() {
++        Opportunity o = new Opportunity(Name = 'O', StageName = 'Prospecting', CloseDate = Date.today(), NextStep = 'Demo');
++        Test.startTest();
++        OpportunityNextStep.defaultNextStep(new List<Opportunity>{ o });
++        Test.stopTest();
++    }
++}

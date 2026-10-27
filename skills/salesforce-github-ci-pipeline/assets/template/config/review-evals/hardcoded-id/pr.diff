@@ -1,0 +1,17 @@
+diff --git a/force-app/main/default/classes/WebCaseRouter.cls b/force-app/main/default/classes/WebCaseRouter.cls
+new file mode 100644
+--- /dev/null
++++ b/force-app/main/default/classes/WebCaseRouter.cls
+@@ -0,0 +1,12 @@
++public with sharing class WebCaseRouter {
++    private static final Id TEAM_LEAD = '0055g00000ABCDEAA2';
++
++    // Called from CaseTriggerHandler.beforeInsert
++    public static void route(List<Case> cases) {
++        for (Case c : cases) {
++            if (c.Origin == 'Web') {
++                c.OwnerId = TEAM_LEAD;
++            }
++        }
++    }
++}

@@ -1,0 +1,17 @@
+diff --git a/force-app/main/default/classes/EscalatedCasesController.cls b/force-app/main/default/classes/EscalatedCasesController.cls
+new file mode 100644
+--- /dev/null
++++ b/force-app/main/default/classes/EscalatedCasesController.cls
+@@ -0,0 +1,12 @@
++public with sharing class EscalatedCasesController {
++    @AuraEnabled(cacheable=true)
++    public static List<Case> escalatedCases(Id accountId) {
++        return [
++            SELECT Id, Subject, Status, Internal_Notes__c
++            FROM Case
++            WHERE AccountId = :accountId AND IsEscalated = TRUE
++            ORDER BY CreatedDate DESC
++            LIMIT 50
++        ];
++    }
++}

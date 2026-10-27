@@ -1,0 +1,66 @@
+diff --git a/force-app/main/default/flows/Account_Owner_Change_Reassign_Cases.flow-meta.xml b/force-app/main/default/flows/Account_Owner_Change_Reassign_Cases.flow-meta.xml
+new file mode 100644
+--- /dev/null
++++ b/force-app/main/default/flows/Account_Owner_Change_Reassign_Cases.flow-meta.xml
+@@ -0,0 +1,66 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
++    <apiVersion>67.0</apiVersion>
++    <label>Account Owner Change Reassign Cases</label>
++    <processType>AutoLaunchedFlow</processType>
++    <status>Active</status>
++    <start>
++        <object>Account</object>
++        <recordTriggerType>Update</recordTriggerType>
++        <triggerType>RecordAfterSave</triggerType>
++        <filterLogic>and</filterLogic>
++        <filters>
++            <field>OwnerId</field>
++            <operator>IsChanged</operator>
++            <value><booleanValue>true</booleanValue></value>
++        </filters>
++        <connector><targetReference>Get_Open_Cases</targetReference></connector>
++    </start>
++    <recordLookups>
++        <name>Get_Open_Cases</name>
++        <object>Case</object>
++        <getFirstRecordOnly>false</getFirstRecordOnly>
++        <storeOutputAutomatically>true</storeOutputAutomatically>
++        <filterLogic>and</filterLogic>
++        <filters>
++            <field>AccountId</field>
++            <operator>EqualTo</operator>
++            <value><elementReference>$Record.Id</elementReference></value>
++        </filters>
++        <filters>
++            <field>IsClosed</field>
++            <operator>EqualTo</operator>
++            <value><booleanValue>false</booleanValue></value>
++        </filters>
++        <connector><targetReference>Each_Case</targetReference></connector>
++        <faultConnector><targetReference>Log_Fault</targetReference></faultConnector>
++    </recordLookups>
++    <loops>
++        <name>Each_Case</name>
++        <collectionReference>Get_Open_Cases</collectionReference>
++        <iterationOrder>Asc</iterationOrder>
++        <nextValueConnector><targetReference>Update_Case_Owner</targetReference></nextValueConnector>
++    </loops>
++    <recordUpdates>
++        <name>Update_Case_Owner</name>
++        <inputReference>Each_Case</inputReference>
++        <inputAssignments>
++            <field>OwnerId</field>
++            <value><elementReference>$Record.OwnerId</elementReference></value>
++        </inputAssignments>
++        <connector><targetReference>Each_Case</targetReference></connector>
++        <faultConnector><targetReference>Log_Fault</targetReference></faultConnector>
++    </recordUpdates>
++    <customErrors>
++        <name>Log_Fault</name>
++        <customErrorMessages>
++            <errorMessage>{!$Flow.FaultMessage}</errorMessage>
++            <isFieldError>false</isFieldError>
++        </customErrorMessages>
++    </customErrors>
++</Flow>

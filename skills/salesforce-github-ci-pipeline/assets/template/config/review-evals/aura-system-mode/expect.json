@@ -1,0 +1,1 @@
+{ "verdict": "CHANGES", "finds": ["USER_MODE|user mode|system mode|stripInaccessible"], "why": "REVIEW.md blocker: a query a user triggers runs in system mode (@AuraEnabled)" }

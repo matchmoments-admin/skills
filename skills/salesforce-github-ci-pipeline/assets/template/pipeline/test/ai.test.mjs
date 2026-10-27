@@ -331,3 +331,35 @@ test("model policy (config/ai-models.json): overrides, experiments, a declarativ
     assert.deepEqual(roles.providerSetup("gateway", policy).env, { ANTHROPIC_BASE_URL: "https://llm.example.invalid" });
   } finally { if (prev === undefined) delete process.env.PIPELINE_VARS; else process.env.PIPELINE_VARS = prev; }
 });
+
+test("reviewer eval set (27 Oct review): a model is scored on defects caught and false alarms, recorded, and shown beside its cost", async () => {
+  const ev = await import("../src/review-eval.mjs");
+  const dir = new URL("../../config/review-evals/", import.meta.url).pathname;
+  const cases = ev.loadCases(dir);
+  assert.ok(cases.length >= 7 && cases.some((c) => c.expect.verdict === "PASS") && cases.filter((c) => c.expect.verdict === "CHANGES").length >= 6);
+  for (const c of cases) {
+    assert.ok(existsSync(`${dir}${c.name}/story.md`) && existsSync(`${dir}${c.name}/pr.diff`), c.name);
+    assert.match(readFileSync(`${dir}${c.name}/pr.diff`, "utf8"), /^diff --git a\//, `${c.name}: a unified diff`);
+    for (const f of c.expect.finds) assert.doesNotThrow(() => new RegExp(f, "i"), `${c.name}: ${f}`);
+  }
+  const loop = { verdict: "CHANGES", finds: ["loop"] }, clean = { verdict: "PASS", finds: [] };
+  assert.equal(ev.scoreCase("a", loop, "[blocker] the query runs inside the loop\n\nAI-REVIEW: CHANGES").caught, true);
+  assert.deepEqual(ev.scoreCase("a", loop, "[major] a missing test\n\nAI-REVIEW: CHANGES").missing, ["loop"], "the right verdict for the wrong reason is not a catch");
+  assert.equal(ev.scoreCase("a", loop, "AI-REVIEW: PASS").ok, false);
+  assert.equal(ev.scoreCase("c", clean, "**AI-REVIEW: CHANGES**").falseAlarm, true);
+  assert.equal(ev.scoreCase("c", clean, "").verdict, "none", "no review written");
+  const results = [ev.scoreCase("a", loop, "loop\nAI-REVIEW: CHANGES"), ev.scoreCase("b", loop, "AI-REVIEW: PASS"), ev.scoreCase("c", clean, "AI-REVIEW: PASS")];
+  const s = ev.summarize(results, { model: "claude-haiku-5-5", provider: "anthropic" });
+  assert.deepEqual([s.caught, s.defects, s.falseAlarms, s.clean, s.wrong], [1, 2, 0, 1, ["b"]]);
+  assert.match(ev.toMarkdown(s, results), /Defects caught: 1 of 2\.\*\* False alarms on clean changes: 0 of 1/);
+  // the weekly metrics show the latest score per model
+  const at = "2026-10-27T00:00:00Z";
+  const m = events.summarize([{ kind: "eval", at, provider: "anthropic", model: "claude-haiku-5-5", caught: 4, defects: 6, falseAlarms: 0, clean: 1 },
+    { kind: "eval", at: "2026-10-28T00:00:00Z", provider: "anthropic", model: "claude-haiku-5-5", caught: 5, defects: 6, falseAlarms: 1, clean: 1 }], { days: 28, now: new Date("2026-10-29T00:00:00Z") });
+  assert.match(events.toMarkdown(m), /Review eval \(defects caught, false alarms; latest per model\): anthropic claude-haiku-5-5 5\/6, 1\/1\./);
+  // the workflow: one job per case, an agent that only reads and writes a file, an agent-free score
+  const wf = readFileSync(new URL("../../.github/workflows/review-eval.yml", import.meta.url), "utf8");
+  assert.match(wf, /label: eval-\$\{\{ matrix\.case \}\}/, "a matrix keeps each transcript (claude-agent's label)");
+  assert.match(wf, /allowed-tools: "Read,Glob,Grep,Write"/);
+  assert.match(wf, /pipe\.mjs eval review --dir reviews/);
+});

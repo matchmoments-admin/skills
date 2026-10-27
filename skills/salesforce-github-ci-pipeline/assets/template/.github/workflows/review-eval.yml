@@ -1,0 +1,104 @@
+name: review-eval
+# BUTTON: Actions > review-eval > Run workflow (a model to try, or empty for the review's own model).
+# The reviewer eval set (pipeline/src/review-eval.mjs): every change in config/review-evals/ has a known defect, or none.
+# Claude reviews each one as ai-review reviews a PR (main's REVIEW.md, CLAUDE.md, docs/agents) and writes its review to
+# a file. The score job counts the defects caught and the false alarms, records them (an `eval` event, read by the
+# weekly metrics next to each model's cost) and shows them in the run's summary. No PR, no org, no Salesforce key.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model to try ('alias' or 'provider:model'); empty = the review's model from config/ai-models.json"
+        required: false
+        default: ""
+permissions:
+  contents: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
+jobs:
+  cases:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      names: ${{ steps.list.outputs.names }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: config/review-evals, persist-credentials: false }
+      - id: list
+        run: echo "names=$(ls config/review-evals | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+  review:
+    needs: cases
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The agent reads files and writes one: no write token, no verdicts, no workflows (the trust rules, ADR 0001).
+    permissions:
+      contents: read
+      id-token: write   # Bedrock and Vertex sign in with GitHub's OIDC identity (claude-agent)
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        case: ${{ fromJSON(needs.cases.outputs.names) }}
+    steps:
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nconfig\n.github/actions\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+      - name: The case as the review sees a PR (the story, the diff, CI's results, the access check)
+        env:
+          CASE: ${{ matrix.case }}
+        run: |
+          C=".pipeline/config/review-evals/$CASE"
+          cp "$C/story.md" "$RUNNER_TEMP/story.md"
+          cp "$C/pr.diff" "$RUNNER_TEMP/pr.diff"
+          echo "- static checks (no org): passed; Salesforce tests: passed on this commit" > "$RUNNER_TEMP/ci.md"
+          echo "No access check findings." > "$RUNNER_TEMP/access.md"
+          sed -n 's#^+++ b/##p' "$C/pr.diff" > "$RUNNER_TEMP/changed.txt"   # the model policy: a declarative-only change gets the cheaper review, as on a PR
+      - uses: ./.pipeline/.github/actions/claude-agent
+        with:
+          role: review
+          label: eval-${{ matrix.case }}
+          model: ${{ inputs.model }}
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
+          changed-files: ${{ runner.temp }}/changed.txt
+          github-token: ${{ github.token }}
+          allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots; a person dispatches this
+          allowed-tools: "Read,Glob,Grep,Write"
+          prompt: |
+            Review this change following .pipeline/REVIEW.md, .pipeline/CLAUDE.md and .pipeline/docs/agents/salesforce.md. The story and its acceptance criteria are in ${{ runner.temp }}/story.md; the full diff is in ${{ runner.temp }}/pr.diff; the access check's findings are in ${{ runner.temp }}/access.md; CI's results are in ${{ runner.temp }}/ci.md (read all four with the Read tool). There is no pull request and no checkout of the change: judge it from the diff alone.
+            Write each finding as you would an inline comment (start it with [blocker], [major] or [minor], name the file and line, say how to fix it) into the summary, then write the summary (ending with the verdict line) to ${{ runner.temp }}/review.md with the Write tool.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-${{ matrix.case }}
+          path: ${{ runner.temp }}/review.md
+          if-no-files-found: ignore
+          retention-days: 14
+  score:
+    # Agent-free: reads the reviews, scores them, writes the event.
+    needs: review
+    if: always() && needs.review.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write   # the event log (the metrics branch)
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
+      - uses: actions/download-artifact@v4
+        with: { pattern: review-*, path: reviews }
+      - name: Which model reviewed (config/ai-models.json, or the one asked for)
+        id: model
+        env:
+          AI_MODEL: ${{ inputs.model }}
+        run: node pipeline/bin/pipe.mjs agent budget review
+      - name: Score the reviews (defects caught, false alarms) and record them
+        env:
+          MODEL: ${{ steps.model.outputs.model }}
+          PROVIDER: ${{ steps.model.outputs.provider }}
+        run: |
+          for d in reviews/review-*; do [ -d "$d" ] && mv "$d" "reviews/${d#reviews/review-}"; done   # one folder per case
+          node pipeline/bin/pipe.mjs eval review --dir reviews --model "$MODEL" --provider "$PROVIDER"
