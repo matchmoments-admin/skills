@@ -168,16 +168,12 @@ jobs:
           # API error fails the step: CI never deploys into an org another job holds
           L=$(node .pipeline/pipeline/bin/pipe.mjs lane acquire "$TARGET" --optional)
           [ -z "$L" ] || echo "lane=$TARGET" >> "$GITHUB_OUTPUT"
-          if ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$TARGET"); then echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
-          else
-            ALIAS="ci-${{ github.run_id }}"
-            echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"; echo "temp=true" >> "$GITHUB_OUTPUT"
-            node .pipeline/pipeline/bin/pipe.mjs org temp "$ALIAS"
-            node .pipeline/pipeline/bin/pipe.mjs org deploy "$ALIAS"
-          fi
+          # the story's org (attached; completed or rebuilt once when it is half-made or gone); a temporary org only for a
+          # branch with no org, or when the story org cannot be made now (org.mjs ci): a push never spends a daily org it need not
+          node .pipeline/pipeline/bin/pipe.mjs org ci "$TARGET" --alias "ci-${{ github.run_id }}" --pr "${{ github.event.pull_request.number }}"
       - name: Deploy what changed against the base (deletions included)
         id: deploy
-        if: steps.delta.outputs.none != 'true'
+        if: steps.delta.outputs.none != 'true' && steps.org.outputs.full != 'true'   # full: the org was just built from this checkout
         env:
           BASE: ${{ steps.delta.outputs.base }}
           ALIAS: ${{ steps.org.outputs.alias }}
