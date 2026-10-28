@@ -176,7 +176,8 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       self.installPackages(org.alias);
       // an org made from a snapshot that holds this production baseline already has it: only force-app is deployed (the
       // baseline redeploy cost a minute or two per org, and retried components a fresh org could not take)
-      self.deploy(org.alias, { manifest, skipBaseline: Boolean(how?.baseline && how.baseline === baseline()) });
+      try { self.deploy(org.alias, { manifest, skipBaseline: Boolean(how?.baseline && how.baseline === baseline()) }); }
+      catch (e) { e.phase = "deploy"; throw e; }   // the change's own deploy failed (CI: a code failure, so autofix may start)
       self.prepare(org.alias);
       self.seed(org.alias, seedFor);
       if (org.kind === "sprint") self.volume(org.alias, Number(env.VOLUME_RECORDS ?? 5000));   // staging only

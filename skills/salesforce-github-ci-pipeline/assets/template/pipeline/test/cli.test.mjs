@@ -86,3 +86,15 @@ test("every flag a command reads with a value is declared as one (a bare --resul
   const read = new Set([...src.matchAll(/\bflag\("([a-z-]+)"/g)].map((m) => m[1]));
   assert.deepEqual([...read].filter((f) => !declared.has(f)), [], "add these to VALUE_FLAGS in pipe.mjs");
 });
+
+test("every gate.X, facts.X and journey.X the commands call exists (a moved landedOf once let every blocked story start, 28 Oct)", async () => {
+  const mods = { gate: await import("../src/gate.mjs"), facts: await import("../src/facts.mjs"), journey: await import("../src/journey.mjs"), start: await import("../src/start.mjs") };
+  const files = ["../bin/pipe.mjs", ...readdirSync(new URL("../bin/commands/", import.meta.url)).map((f) => `../bin/commands/${f}`)];
+  for (const f of files) {
+    const src = readFileSync(new URL(f, import.meta.url), "utf8");
+    for (const [, mod, name] of src.matchAll(/\b(gate|facts|journey|start)\.([A-Za-z_]\w*)\b(?!["'`])/g)) {
+      if (["mjs", "yml", "json", "md"].includes(name) || !new RegExp(`import \\* as ${mod} from`).test(src)) continue;   // a file name; a local variable of the same name
+      assert.ok(name in mods[mod], `${f}: ${mod}.${name} is not exported by ${mod}.mjs`);
+    }
+  }
+});

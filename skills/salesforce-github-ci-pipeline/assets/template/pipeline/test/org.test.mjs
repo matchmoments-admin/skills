@@ -879,3 +879,14 @@ test("the org registry reads the Dev Hub's active orgs once until it changes the
   assert.equal(n.devhub, 1, "the delete finds the org in the list already read; after it, one fresh read");
   assert.ok(queries(f.calls) >= 2);
 });
+
+test("org.ci: the change's own deploy failing inside ready() is marked as a deploy failure (CI's code-failed, so autofix still starts)", () => {
+  const f = fakeSf([{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }], { ready: false });
+  const broken = (args, o) => { if (args[0] === "project" && args[1] === "deploy") throw new Error("Deploy failed: Variable does not exist: x"); return f.sf(args, o); };
+  let err;
+  try { orgRegistry({ sf: broken, log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } }).ci("issue-12", { name: "ci-1" }); } catch (e) { err = e; }
+  assert.equal(err?.phase, "deploy");
+  const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(ci, /code-failed: .*steps\.org\.outputs\.deploy-failed == 'true'/);
+  assert.match(readFileSync(new URL("../bin/commands/org.mjs", import.meta.url), "utf8"), /"no open PR for this run"/, "a hand-run CI with no open PR never rebuilds a story org");
+});

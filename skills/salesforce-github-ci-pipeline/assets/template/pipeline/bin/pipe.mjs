@@ -45,7 +45,7 @@ import { join } from "node:path";
 import { io, PIPELINE_ROOT } from "../src/io.mjs";
 import * as names from "../src/conventions.mjs";
 import { orgSettings, settingsTable } from "../src/settings.mjs";
-import * as gate from "../src/gate.mjs";
+import * as gate from "../src/gate.mjs"; import { landedOf } from "../src/facts.mjs";   // the decisions; a fact one command reads
 import * as verdict from "../src/verdict.mjs";
 import * as closeout from "../src/closeout.mjs";
 import * as metrics from "../src/metrics.mjs";
@@ -343,7 +343,7 @@ const commands = {
     const story = specs.storyOfSpec(specs.currentSpec(await tracker.comments(arg(0)).catch(() => []))); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true }); if (story) await tracker.comment(story, specs.revisedNote(arg(0)));
     await tracker.card(arg(0), specs.specComment(readFileSync(flag("file"), "utf8"), { story }), specs.SPEC_MARK); await cards.newStory(arg(0), { spec: true, stage: story ? "story" : "spec", stories: [story].filter(Boolean), questions: specs.questionsOf(readFileSync(flag("file"), "utf8")) }); return say(`spec on #${arg(0)}`); },
   "story blockers": async () => {   // before a branch and org exist: blockers merged? A failed check lets it start (the gate checks at merge)
-    let waiting = []; try { waiting = gate.blockersOf((await tracker.story(arg(0))).body).filter((n) => !gate.landedOf(n, io.gh)); } catch (e) { log(`::warning::blockers not checked (${e.message}): starting; the gate still checks them at merge`); }
+    let waiting = []; try { waiting = gate.blockersOf((await tracker.story(arg(0))).body).filter((n) => !landedOf(n, io.gh)); } catch (e) { log(`::warning::blockers not checked (${e.message}): starting; the gate still checks them at merge`); }
     output({ ok: !waiting.length, waiting: waiting.join(" ") }); if (!waiting.length) return say("no unmerged blockers");
     io.gh(["issue", "edit", arg(0), "--remove-label", "start"], { allowFail: true }); io.gh(["issue", "comment", arg(0), "--body", gate.blockedMessage(waiting)]);
     await cards.newStory(arg(0)); return say(`blocked by ${waiting.join(", ")}`);   // the card offers Start again
