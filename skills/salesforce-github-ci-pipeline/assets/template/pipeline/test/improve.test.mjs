@@ -182,6 +182,7 @@ test("a run GitHub never started (billing, 22-24 Oct) opens no ticket, and recon
     { id: 12, name: "ci", run_attempt: 2, event: "pull_request" },          // re-run already: leave it
     { id: 13, name: "scratch-janitor", run_attempt: 1, event: "schedule" }, // its next tick runs anyway
     { id: 14, name: "ci", run_attempt: 1, event: "pull_request" },          // a real failure
+    { id: 15, name: "ci", run_attempt: 1, event: "pull_request", run_started_at: "2026-10-26T10:00:00Z", updated_at: "2026-10-26T10:20:00Z" },   // ran 20 minutes: its jobs are never read
   ];
   const calls = [];
   const host = { repo: "o/r", api(method, path) {
@@ -196,4 +197,5 @@ test("a run GitHub never started (billing, 22-24 Oct) opens no ticket, and recon
   assert.ok(calls.includes("POST repos/o/r/actions/runs/11/rerun"));
   assert.ok(calls.some((c) => /created=>=2026-10-24T00:00:00/.test(c)), "the last three days only");
   assert.deepEqual(events, [["reconcile", { rerun: 11, rerunOf: "ci" }]]);
+  assert.ok(!calls.some((c) => c.includes("runs/15/jobs")), "a run that took minutes really ran: the sweep does not read its jobs every hour");
 });

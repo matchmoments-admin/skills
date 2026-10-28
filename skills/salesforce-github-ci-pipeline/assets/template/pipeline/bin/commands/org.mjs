@@ -6,7 +6,8 @@ import * as names from "../../src/conventions.mjs";
 import * as capacity from "../../src/capacity.mjs";
 import * as sample from "../../src/sample.mjs";
 import { personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered, foldSeeds } from "../../src/org.mjs";
-import { lane, jobId, wakeAll } from "../../src/lane.mjs";
+import { lane, jobId, wakeAll, stillOwed, wakeDue } from "../../src/lane.mjs";
+import { standing } from "../../src/gate.mjs";
 import { sfFailure } from "../../src/io.mjs";
 import { readLog, summarize } from "../../src/events.mjs";
 
@@ -83,14 +84,29 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
     return say(r.username);
   },
   "lane acquire": () => {   // --park <kind>: if busy, park (the runner is given back; lane-wake re-runs the job) and output parked=true
+    // --optional: a target with no org (a maintenance branch: CI's temporary org) prints nothing; any other failure (a
+    // timeout, an API error) fails the step, so a job never uses an org another job holds
+    if (has("optional") && !names.orgFor(arg(0))) return log(`no lane: ${arg(0)} has no org of its own`);
     const { org, l } = orgLane(arg(0), { card: !has("no-card") }), t0 = Date.now(), id = flag("park") && jobId({ api: host.api, repo: host.repo });   // --no-card: a read-only job
-    const p = id ? l.park(org.lock, { kind: flag("park"), jobId: id }) : (l.acquire(org.lock, { timeoutMinutes: Number(flag("minutes", "45")) }), { held: true });
+    const head = id ? io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim() || null : null;   // the PR head this job works on (stillOwed on wake)
+    const p = id ? l.park(org.lock, { kind: flag("park"), jobId: id, head }) : (l.acquire(org.lock, { timeoutMinutes: Number(flag("minutes", "45")) }), { held: true });
     if (!p.held) { output({ parked: true }); return say(`${p.dropped ? `a ${flag("park")} job already waits for` : "parked until lane-wake re-runs it:"} ${org.lock} (run ${p.waitingFor.run} holds it)`); }
     const waited = Math.round((Date.now() - t0) / 1000);
     if (waited > 30) record("lane", { lane: org.lock, waitedSeconds: waited, story: org.key });
     output({ lane: org.lock }); return say(org.lock);
   },
   "lane release": () => { const { org, l } = orgLane(arg(0)); if (l.release(org.lock) && l.waiters(org.lock).length) host.repoDispatch("lane-freed"); },
-  "lane wake": () => say(`re-ran ${wakeAll({ api: host.api, repo: host.repo, l: lane({ api: host.api, repo: host.repo, holder: {}, sleep, log }), sleep, log }).length} parked job(s)`),
+  "lane wake": async () => {   // --wait M: minutes to wait for a parked run to end (reconcile passes 1)
+    const l = lane({ api: host.api, repo: host.repo, holder: {}, sleep, log }), dropped = [];
+    const prOf = (w) => /PR #(\d+)/.exec(host.api("GET", `repos/${host.repo}/actions/runs/${w.run}`)?.display_title || "")?.[1] || null;   // ai-fix and ui-test run-names
+    const owed = (w) => { const n = prOf(w); if (!n) return { owed: true, why: "no PR in the run's name" }; w.pr = n; const f = host.prFacts(n); return stillOwed({ kind: w.kind, parkedHead: w.head, pr: f.pr, st: standing(f) }); };
+    const woken = wakeAll({ api: host.api, repo: host.repo, l, sleep, log, owed, onDropped: (w) => dropped.push(w.pr), waitMinutes: Number(flag("wait", "5")) });
+    for (const n of new Set(dropped.filter(Boolean))) { host.forget(n); await cards.refreshPr(n); }   // the card stops saying it waits for the org
+    return say(`re-ran ${woken.length} parked job(s)${dropped.length ? `; ${dropped.length} no longer owed` : ""}`);
+  },
+  "lane due": () => {   // reconcile: start lane-wake when a parked job waits for a free lane (its holder died without letting go)
+    if (!wakeDue({ api: host.api, repo: host.repo, l: lane({ api: host.api, repo: host.repo, holder: {}, sleep, log }) })) return say("no parked job waits for a free lane");
+    host.dispatch("lane-wake.yml"); return say("a parked job waits for a free lane: started lane-wake");
+  },
   };
 }

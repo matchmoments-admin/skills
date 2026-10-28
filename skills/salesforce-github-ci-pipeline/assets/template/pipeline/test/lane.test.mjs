@@ -24,7 +24,7 @@ import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
 import * as shipping from "../src/shipping.mjs";
 import * as closeout from "../src/closeout.mjs";
-import { lane, jobId, wakeAll, waiterJob } from "../src/lane.mjs";
+import { lane, jobId, wakeAll, waiterJob, stillOwed, wakeDue } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
 import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
@@ -184,4 +184,52 @@ test("clarity: a carried-over story says how to pick it up again; a waiting job 
   mk("1").acquire("org-issue-2");
   assert.throws(() => mk("2", (h) => waits.push(h.job)).acquire("org-issue-2", { timeoutMinutes: 5 }));
   assert.deepEqual(waits, ["ci#1"], "said once per holder");
+});
+
+test("lane wake: a parked job re-runs only while its work is owed (stillOwed); its ref points at the head it parked on", () => {
+  const human = (l) => l === "dev";
+  const pr = (head, commits) => ({ state: "OPEN", headRefOid: head, commits: commits.map(([oid, login]) => ({ oid, authors: [{ login }] })) });
+  assert.equal(stillOwed({ kind: "fix", parkedHead: "a", pr: { ...pr("a", [["a", "dev"]]), state: "MERGED" } }).owed, false, "closed");
+  assert.equal(stillOwed({ kind: "fix", parkedHead: "a", pr: pr("b", [["a", "dev"], ["b", "dev"]]), isHuman: human }).owed, false, "a person pushed since");
+  assert.equal(stillOwed({ kind: "fix", parkedHead: "a", pr: pr("b", [["a", "dev"], ["b", "pipeline-bot"]]), isHuman: human }).owed, true, "Claude's spec push: nothing else would fix it");
+  assert.equal(stillOwed({ kind: "fix", parkedHead: "x", pr: pr("b", [["b", "dev"]]), isHuman: human }).owed, true, "a force push: unsure, owed");
+  assert.equal(stillOwed({ kind: "fix", parkedHead: "a", pr: pr("a", [["a", "dev"]]) }).owed, true);
+  assert.equal(stillOwed({ kind: "write", parkedHead: "a", pr: pr("a", []), st: { ui: { state: "success" } } }).owed, false, "a UI test passed since");
+  assert.equal(stillOwed({ kind: "run", parkedHead: "a", pr: pr("b", []), st: { ui: { state: "pending" } } }).owed, false, "a newer UI test runs on the new head");
+  assert.equal(stillOwed({ kind: "write", parkedHead: "a", pr: pr("a", []), st: { ui: { state: "pending" } } }).owed, true, "its own pending status");
+  assert.equal(stillOwed({ kind: "fix", pr: null }).owed, true, "unknown PR: as before");
+
+  // the waiter ref points at the PR head; wake drops a job that is not owed (its ref goes, nobody re-runs it)
+  const f = fakeRefs();
+  const runs = { 2: { path: ".github/workflows/ai-fix.yml", event: "workflow_dispatch", run_attempt: 1, status: "completed" }, 3: { path: ".github/workflows/ui-test.yml", event: "workflow_dispatch", run_attempt: 1, status: "completed" } };
+  const jobs = { 22: { run_id: 2, name: "fix", status: "completed", run_attempt: 1 }, 33: { run_id: 3, name: "write", status: "completed", run_attempt: 1 } };
+  const reran = [];
+  const api = (m, path, body) => {
+    let x;
+    if (m === "GET" && (x = /actions\/runs\/(\d+)$/.exec(path)) && runs[x[1]]) return runs[x[1]];
+    if (m === "GET" && (x = /actions\/jobs\/(\d+)$/.exec(path))) return jobs[x[1]] || { status: 404 };
+    if (m === "POST" && path.includes("/actions/jobs/")) { reran.push(path.split("/")[5]); return {}; }
+    return f.api(m, path, body);
+  };
+  const holder = lane({ api, repo: "o/r", holder: { run: "9", job: "ci#1", sha: "base" }, now: () => 0, sleep: () => {}, log: () => {} });
+  holder.acquire("org-issue-4");
+  const fix = lane({ api, repo: "o/r", holder: { run: "2", job: "fix#1", sha: "base" }, now: () => 10, sleep: () => {}, log: () => {} });
+  const ui = lane({ api, repo: "o/r", holder: { run: "3", job: "write#1", sha: "base" }, now: () => 20, sleep: () => {}, log: () => {} });
+  assert.equal(fix.park("org-issue-4", { kind: "fix", jobId: "22", head: "h1" }).parked, true);
+  assert.equal(ui.park("org-issue-4", { kind: "write", jobId: "33", head: "h1" }).parked, true);
+  assert.deepEqual(fix.waiters("org-issue-4").map((w) => w.head), ["h1", "h1"], "the ref points at the head it parked on");
+  const l = lane({ api, repo: "o/r", holder: {}, now: () => 30, sleep: () => {}, log: () => {} });
+  assert.equal(wakeDue({ api, repo: "o/r", l }), false, "the holder still runs: no wake owed");
+  holder.release("org-issue-4");
+  assert.equal(wakeDue({ api, repo: "o/r", l }), true, "free lane, parked jobs: reconcile starts a wake");
+  const dropped = [];
+  const woken = wakeAll({ api, repo: "o/r", l, sleep: () => {}, owed: (w) => (w.kind === "write" ? { owed: false, why: "passed" } : { owed: true }), onDropped: (w, why) => dropped.push([w.jobId, why]) });
+  assert.deepEqual(woken.map((w) => w.jobId), ["22"]);
+  assert.deepEqual(reran, ["22"], "the UI test that is no longer owed is not re-run");
+  assert.deepEqual(dropped, [["33", "passed"]]);
+  assert.equal(l.waiters("org-issue-4").length, 0, "both refs gone");
+  assert.equal(wakeDue({ api, repo: "o/r", l }), false);
+  // an owed check that cannot tell (it throws) re-runs the job, as before
+  f.api("POST", "repos/o/r/git/refs", { ref: "refs/lane-waits/org-issue-4/40-fix-2-22", sha: "h2" });
+  assert.deepEqual(wakeAll({ api, repo: "o/r", l, sleep: () => {}, owed: () => { throw new Error("API down"); } }).map((w) => w.jobId), ["22"]);
 });

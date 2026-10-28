@@ -158,13 +158,16 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: The story card says CI is running
         if: steps.delta.outputs.none != 'true'
-        run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "$REF" --now "CI is deploying the change to its scratch org and testing it"
+        run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "$REF" --now "CI is deploying the change to its scratch org and testing it (progress on the Salesforce tests check)"
       - name: The branch's org (a temporary one, with the full source, if it has none)
         if: steps.delta.outputs.none != 'true'
         id: org
         run: |
           TARGET="${{ needs.static.outputs.target }}"   # a story: its own org; a release PR or back-merge: the sprint's staging org
-          if node .pipeline/pipeline/bin/pipe.mjs lane acquire "$TARGET"; then echo "lane=$TARGET" >> "$GITHUB_OUTPUT"; fi   # not an org target: a temporary org needs no lane
+          # not an org target (a maintenance branch): no lane, a temporary org. A lane that stays busy (45 minutes) or an
+          # API error fails the step: CI never deploys into an org another job holds
+          L=$(node .pipeline/pipeline/bin/pipe.mjs lane acquire "$TARGET" --optional)
+          [ -z "$L" ] || echo "lane=$TARGET" >> "$GITHUB_OUTPUT"
           if ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$TARGET"); then echo "alias=$ALIAS" >> "$GITHUB_OUTPUT"
           else
             ALIAS="ci-${{ github.run_id }}"

@@ -100,7 +100,7 @@ export function fakeRefs({ runs = {} } = {}) {
   let n = 0;
   const api = (method, path, body) => {
     if (method === "GET" && path.endsWith("/commits/main")) return { sha: "base", commit: { tree: { sha: "T" } } };
-    if (method === "GET" && path.includes("/git/matching-refs/")) { const pre = `refs/${path.split("/git/matching-refs/")[1]}`; return Object.keys(refs).filter((r) => r.startsWith(pre)).map((ref) => ({ ref })); }
+    if (method === "GET" && path.includes("/git/matching-refs/")) { const pre = `refs/${path.split("/git/matching-refs/")[1]}`; return Object.keys(refs).filter((r) => r.startsWith(pre)).map((ref) => ({ ref, object: { sha: refs[ref] } })); }
     if (method === "POST" && path.endsWith("/git/commits") && failClaims > 0) { failClaims--; return { status: 422, message: "tree not found" }; }
     if (method === "POST" && path.endsWith("/git/commits")) { const sha = `c${++n}`; commits[sha] = { message: body.message, parents: body.parents, tree: { sha: body.tree } }; return { sha }; }
     if (method === "GET" && path.includes("/git/commits/")) return commits[path.split("/").pop()];
