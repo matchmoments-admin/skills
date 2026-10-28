@@ -71,7 +71,7 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
   "org limits": () => { const l = orgs().limits(); return say(`active scratch orgs ${l.active.remaining}/${l.active.max} free, created today ${l.daily.max - l.daily.remaining}/${l.daily.max}`); },
   "org sweep": async () => {
     // every orphan: CI orgs whose run died, merged or closed stories' orgs, staging and UAT orgs of sprints no longer open
-    const live = io.sf(["data", "query", "-o", "devhub", "-q", "SELECT Description, CreatedDate FROM ScratchOrgInfo WHERE Status = 'Active'"]).records || [];
+    const live = orgs().live();   // the registry's own read, which sweep() then reuses
     const done = await doneStoryOrgs(live, { tracker, gh: io.gh, log });
     const gone = orgs().sweep({ isStoryDone: (d) => done.has(d), openSprint: names.sprintOf(host.openRelease() || ""), poolSize: Number(names.setting("ORG_POOL")) || 0 });
     for (const g of gone) record("org", { action: "deleted", org: g.description, why: g.why });

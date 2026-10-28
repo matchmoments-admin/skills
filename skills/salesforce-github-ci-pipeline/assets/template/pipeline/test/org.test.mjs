@@ -853,3 +853,29 @@ test("CI's org (org.ci, B2): attached when live; completed when half-made; a gon
   assert.throws(() => mk(noLogin).ci("issue-12", { name: "ci-5" }), /Could not log in/);
   assert.ok(!f.calls.includes("org create scratch"));
 });
+
+test("the org registry reads the Dev Hub's active orgs once until it changes them (28 Oct): ready() on a live org, one query; a create or a claim reads again", () => {
+  const live = [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }];
+  const queries = (calls) => calls.filter((c) => c === "data query -o").length;
+  const n = { devhub: 0 };
+  const count = (f) => (args, o) => { if (args[0] === "data" && args[1] === "query" && /ScratchOrgInfo/.test(args.at(-1))) n.devhub++; if (args[0] === "org" && args[1] === "display" && args[3] === "devhub") n.display = (n.display || 0) + 1; return f(args, o); };
+  let f = fakeSf(live);
+  const r = orgRegistry({ sf: count(f.sf), log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } });
+  r.ready("issue-12", { commit: "abc123456789ffff" });
+  r.attach("issue-12");
+  assert.equal(n.devhub, 1, "find, attach and a second attach share one read");
+  assert.equal(n.display, 1, "the Dev Hub's client id once");
+  // a new org changes the list: the next find reads again
+  n.devhub = 0; f = fakeSf([]);
+  const r2 = orgRegistry({ sf: count(f.sf), log: () => {}, sleep: () => {}, packages: [], env: { BASELINE: "off", SEED: "off" } });
+  r2.find("issue-9"); r2.find("issue-9");
+  assert.equal(n.devhub, 1);
+  r2.create({ kind: "story", alias: "issue-9", description: "issue-9", days: 7, definition: "config/scratch-dev.json" });
+  r2.find("issue-9");
+  assert.equal(n.devhub, 2, "read again after the create");
+  n.devhub = 0;
+  r.removeTagged("issue-12");   // deletes the live org: the list changed
+  r.find("issue-12");
+  assert.equal(n.devhub, 1, "the delete finds the org in the list already read; after it, one fresh read");
+  assert.ok(queries(f.calls) >= 2);
+});
