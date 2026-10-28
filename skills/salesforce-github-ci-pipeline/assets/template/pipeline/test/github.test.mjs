@@ -118,6 +118,21 @@ test("the GitHub tracker finds a marked comment once, then edits it directly", a
   assert.equal(calls.filter((c) => c === "api -X PATCH").length, 2);
 });
 
+test("the GitHub tracker lists an issue's comments once per refresh (plan, card before, card), and again after a write or 20 s", async () => {
+  let lists = 0, t0 = 0;
+  const t = githubTracker({ repo: "o/r", now: () => t0, gh: () => null, ghPages: () => { lists++; return [{ id: 11, body: "<!-- mark --> old", user: { login: "a" } }]; } });
+  await t.comments(84); await t.prior(84, "<!-- mark -->"); await t.card(84, "new", "<!-- mark -->");
+  assert.equal(lists, 1, "one list for the three reads");
+  await t.comments(84);
+  assert.equal(lists, 2, "the card write drops what was read");
+  await t.comments(84); t0 += 21e3; await t.comments(84);
+  assert.equal(lists, 3, "stale after 20 s");
+  await t.comment(84, "hi"); await t.comments(84);
+  assert.equal(lists, 4, "a comment drops it too");
+  await t.comments(85);
+  assert.equal(lists, 5, "per issue");
+});
+
 test("actions: commands and ticked boxes name the same actions; only write access, never a bot", () => {
   assert.deepEqual(actions.command("/uat-fail the totals are wrong\nmore"), { id: "uat-fail", arg: "the totals are wrong" });
   assert.deepEqual(actions.command("/SHIP"), { id: "ship", arg: "" });

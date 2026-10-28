@@ -93,7 +93,9 @@ export function stagingPlan({ policy = "release", releaseOpen = false, apexPasse
  * disagreement looped staging runs: code review, 14 Oct). Without an open release PR it is not due (UI_REGRESSION
  * release) or runs (every).
  */
-export function stagingPlanFor({ git, host, branch, policy }) {
+export function stagingPlanFor({ git, host: h, branch, policy }) {
+  // the carry walk and the last-tested walk read the same commits' check runs: once each (about 15 calls a run saved)
+  const runs = new Map(), host = { ...h, checkRuns: (sha, name) => { const k = `${sha}|${name}`; if (!runs.has(k)) runs.set(k, h.checkRuns(sha, name)); return runs.get(k); } };
   const pr = host.releasePrOf(branch);
   const st = pr ? standing(host.prFacts(pr)) : null;
   const head = git(["rev-parse", "HEAD"], { allowFail: true })?.trim();
