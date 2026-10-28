@@ -31,7 +31,11 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
   "org advance": () => say(orgs().advance(arg(0), flag("sha"), (held) => advanceCovered(io.git, { held, head: flag("sha"), base: flag("base") })) ? `${arg(0)} holds ${flag("sha").slice(0, 7)}` : `${arg(0)} left as it was`),   // CI tested this commit
   "org ci": () => {   // CI's org for <target> (org.mjs ci): attached, completed, rebuilt once, or a temporary one (--alias) only when it must be
     const name = flag("alias");
-    const o = orgs().ci(arg(0), { name, commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), refusal: storyRefusal(io.gh, flag("pr")), onTemp: () => output({ alias: name, temp: true }) });
+    // no open PR (a hand-run CI on a merged story): the story org is not rebuilt, a temporary org runs it, as before
+    const refusal = flag("pr") ? storyRefusal(io.gh, flag("pr")) : () => "no open PR for this run";
+    let o;
+    try { o = orgs().ci(arg(0), { name, commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), refusal, onTemp: () => output({ alias: name, temp: true }) }); }
+    catch (e) { if (e.phase === "deploy") output({ "deploy-failed": true }); throw e; }   // the change's deploy: ci.yml's code-failed
     if (o.temp) record("org", { action: "created", org: o.description });
     else if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
     output({ alias: o.alias, temp: o.temp, full: o.full }); return say(o.alias);

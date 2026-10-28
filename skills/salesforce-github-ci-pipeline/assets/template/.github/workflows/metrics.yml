@@ -33,7 +33,7 @@ jobs:
         with: { ref: main }
       - name: Measure
         run: |
-          [[ "$DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "::error::days must be a number"; exit 1; }
+          [[ "$DAYS" =~ ^[0-9]{1,3}$ ]] && [ "$DAYS" -le 180 ] || { echo "::error::days must be a number up to 180 (the event log's tip keeps 180 days)"; exit 1; }
           node pipeline/bin/pipe.mjs metrics --days "$DAYS" --out metrics.md
           cat metrics.md >> "$GITHUB_STEP_SUMMARY"
       - name: Keep the event log's tip to 180 days (readers fetch only the tip; history keeps the rest)

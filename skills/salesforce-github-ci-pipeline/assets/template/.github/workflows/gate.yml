@@ -151,7 +151,9 @@ jobs:
           if [ "$ROUTE" = "release" ]; then gh pr merge "$PR" --merge --match-head-commit "$HEAD_SHA"
           else gh pr merge "$PR" "--$METHOD" --delete-branch --match-head-commit "$HEAD_SHA"; fi
           # the commit that ships: the release checks it has the tree validated above, or validates again
-          for _ in 1 2 3 4 5; do SHA=$(gh pr view "$PR" --json mergeCommit --jq '.mergeCommit.oid // empty'); [ -n "$SHA" ] && break; sleep 3; done
+          # the merge commit (the release quick-deploys exactly it); GitHub can take a while to report it, and without it the
+          # release takes main's tip, which a merge landing meanwhile would send through a second validation
+          for _ in $(seq 1 12); do SHA=$(gh pr view "$PR" --json mergeCommit --jq '.mergeCommit.oid // empty'); [ -n "$SHA" ] && break; sleep 5; done
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
       - name: Record the approval the gate accepted (the delivery record reads this, not the rule as it is later)
         env:

@@ -45,7 +45,7 @@ import { join } from "node:path";
 import { io, PIPELINE_ROOT } from "../src/io.mjs";
 import * as names from "../src/conventions.mjs";
 import { orgSettings, settingsTable } from "../src/settings.mjs";
-import * as gate from "../src/gate.mjs";
+import * as gate from "../src/gate.mjs"; import { landedOf } from "../src/facts.mjs";   // the decisions; a fact one command reads
 import * as verdict from "../src/verdict.mjs";
 import * as closeout from "../src/closeout.mjs";
 import * as metrics from "../src/metrics.mjs";
@@ -107,7 +107,7 @@ const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, 
 const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;
 const refuseSnapshot = (n) => { const sha = host.api("GET", `repos/${host.repo}/git/ref/heads/main`)?.object?.sha; if (sha) host.api("POST", `repos/${host.repo}/git/refs`, { ref: `refs/tags/snapshot-refused-${n}`, sha }); };
 const budgetOf = roles.budgetReader({ read: (onFail) => events.readLog(io, { days: 120, onFail }), base: () => Number(names.setting("AI_STORY_BUDGET_USD")), log });   // the story's AI budget
-const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, jev: triageJev(), budgetOf, log });
+const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, jev: triageJev(), budgetOf, freeSlots: () => { const a = orgs().limits().active; return a.remaining === undefined ? 1 : a.remaining - (Number(names.setting("ORG_RESERVE")) || 0); }, log });
 const freed = async () => { try { log((await nextAfter("org-freed")).said); } catch (e) { log(`::warning::could not start what waited for a slot: ${e.message}`); } };   // UAT first, else the story waiting longest
 let registry; const orgs = () => (registry ||= orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, sameSource: sameSourceVia((a, b) => host.api("GET", `repos/${host.repo}/compare/${a}...${b}`)), env: { ...process.env, ...orgSettings() } }));   // one per process (its Dev Hub reads are shared); every setting org provisioning reads, resolved (SEED=off once never arrived)
 const { record } = host;
@@ -343,7 +343,7 @@ const commands = {
     const story = specs.storyOfSpec(specs.currentSpec(await tracker.comments(arg(0)).catch(() => []))); io.gh(["issue", "edit", arg(0), "--add-label", "spec"], { allowFail: true }); if (story) await tracker.comment(story, specs.revisedNote(arg(0)));
     await tracker.card(arg(0), specs.specComment(readFileSync(flag("file"), "utf8"), { story }), specs.SPEC_MARK); await cards.newStory(arg(0), { spec: true, stage: story ? "story" : "spec", stories: [story].filter(Boolean), questions: specs.questionsOf(readFileSync(flag("file"), "utf8")) }); return say(`spec on #${arg(0)}`); },
   "story blockers": async () => {   // before a branch and org exist: blockers merged? A failed check lets it start (the gate checks at merge)
-    let waiting = []; try { waiting = gate.blockersOf((await tracker.story(arg(0))).body).filter((n) => !gate.landedOf(n, io.gh)); } catch (e) { log(`::warning::blockers not checked (${e.message}): starting; the gate still checks them at merge`); }
+    let waiting = []; try { waiting = gate.blockersOf((await tracker.story(arg(0))).body).filter((n) => !landedOf(n, io.gh)); } catch (e) { log(`::warning::blockers not checked (${e.message}): starting; the gate still checks them at merge`); }
     output({ ok: !waiting.length, waiting: waiting.join(" ") }); if (!waiting.length) return say("no unmerged blockers");
     io.gh(["issue", "edit", arg(0), "--remove-label", "start"], { allowFail: true }); io.gh(["issue", "comment", arg(0), "--body", gate.blockedMessage(waiting)]);
     await cards.newStory(arg(0)); return say(`blocked by ${waiting.join(", ")}`);   // the card offers Start again

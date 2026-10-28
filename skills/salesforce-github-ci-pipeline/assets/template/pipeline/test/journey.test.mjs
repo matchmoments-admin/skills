@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as names from "../src/conventions.mjs";
 import * as gate from "../src/gate.mjs";
+import * as facts from "../src/facts.mjs";
 import * as verdict from "../src/verdict.mjs";
 import * as roles from "../src/roles.mjs";
 import * as journey from "../src/journey.mjs";
@@ -77,11 +78,11 @@ test("a story made from a spec carries the whole spec to every agent; blockers m
 
   assert.deepEqual(gate.blockersOf("Blocked by #12, #14 and #3.\nBlocked by #12"), [12, 14, 3]);
   const gh = (state, merged) => (a) => (a[0] === "issue" ? { state } : a[0] === "pr" ? (merged ? [{ headRefName: merged }] : []) : null);
-  assert.equal(gate.landedOf(12, gh("OPEN", false)), false, "started (in-sprint) is not landed");
-  assert.equal(gate.landedOf(12, gh("OPEN", "issue-12")), true, "its story PR merged");
-  assert.equal(gate.landedOf(12, gh("OPEN", "issue-12-region-field")), true, "an older issue-N-slug branch counts too");
-  assert.equal(gate.landedOf(12, gh("OPEN", "issue-123")), false, "issue-123 is not issue-12");
-  assert.equal(gate.landedOf(12, gh("CLOSED", false)), true);
+  assert.equal(facts.landedOf(12, gh("OPEN", false)), false, "started (in-sprint) is not landed");
+  assert.equal(facts.landedOf(12, gh("OPEN", "issue-12")), true, "its story PR merged");
+  assert.equal(facts.landedOf(12, gh("OPEN", "issue-12-region-field")), true, "an older issue-N-slug branch counts too");
+  assert.equal(facts.landedOf(12, gh("OPEN", "issue-123")), false, "issue-123 is not issue-12");
+  assert.equal(facts.landedOf(12, gh("CLOSED", false)), true);
   assert.match(gate.blockedMessage([12]), /blocked by #12, which has not merged yet\. Nothing was created/);
   const wf = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
   assert.match(wf, /start:\n\s+needs: blockers\n\s+if: needs\.blockers\.outputs\.ok == 'true'/);
@@ -292,6 +293,14 @@ test("no free scratch-org slot: the story waits in line (no runner waits) and th
   assert.deepEqual(dispatched, [["jira-start", { key: "7", labels: "feature" }]], "the one waiting longest");
   assert.ok(edited.some((a) => a.includes("--remove-label") && a.includes("waiting:org")));
   assert.match(r.said, /story #7/);
+  // a sweep that freed two slots on a bigger Dev Hub starts the two waiting longest, not one per janitor tick
+  dispatched.length = 0;
+  const two = await journey.next("org-freed", null, { host, gh, ai: {}, uat: true, freeSlots: () => 2 });
+  assert.deepEqual(dispatched.map(([, p]) => p.key), ["7", "9"]);
+  assert.match(two.said, /stories #7, #9/);
+  dispatched.length = 0;
+  await journey.next("org-freed", null, { host, gh, ai: {}, uat: true, freeSlots: () => { throw new Error("no Dev Hub login"); } });
+  assert.equal(dispatched.length, 1, "slots unknown: one, as before");
   const wf = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
   assert.match(wf, /steps\.org\.outputs\.waiting == 'true'[\s\S]*--add-label waiting:org/);
   assert.ok(names.LABELS["waiting:org"]);
