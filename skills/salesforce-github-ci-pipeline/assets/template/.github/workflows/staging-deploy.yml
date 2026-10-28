@@ -26,7 +26,7 @@ jobs:
       pull-requests: read   # the release PR: is it open, and its standing (the UI regression is due once it is)
       statuses: read        # has the UI regression already passed on this code (the gate's own reading)
       issues: read          # the release PR's facts (gate.gather reads its events and comments)
-    timeout-minutes: 75   # 45 of them may be waiting for the staging org's lane (release-PR CI, a back-merge)
+    timeout-minutes: 130   # up to 45 waiting for the staging org's lane, about 10 deploying, 30 for Apex, 45 for the UI step (its own budget)
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -88,6 +88,7 @@ jobs:
       - name: UI regression (every spec in e2e/)
         id: uirun
         if: steps.fresh.outputs.ui == 'run'
+        timeout-minutes: 45   # capacity.MEASURED.uiStepMinutes: the staging plan warns at 70% of it (time to shard)
         working-directory: candidate
         env:
           GH_TOKEN: ""

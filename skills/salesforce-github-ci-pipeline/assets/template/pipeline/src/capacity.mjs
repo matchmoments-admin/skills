@@ -16,7 +16,15 @@ export const MEASURED = {
   aiUsdPerStory: 2.5,       // Claude build, review, fix and UI test, all switches on
   reservedOrgs: 1,          // staging holds an active scratch org all sprint; UAT's comes at release, after story orgs end
   uiWarnMinutes: 20,        // a staging UI regression longer than this is worth a look (it grows with every story)
+  uiStepMinutes: 45,        // the UI regression step's own timeout in staging-deploy.yml (the lane wait is outside it)
 };
+
+/** The staging UI regression against its step's budget: { minutes, budget, near } (near: past 70% of it, the point to
+ *  split the specs across runners with Playwright's --shard before a release's regression times out). Pure. */
+export function uiBudget(tests, m = MEASURED) {
+  const minutes = round((tests * m.testSeconds) / 60);
+  return { minutes, budget: m.uiStepMinutes, near: minutes > 0.7 * m.uiStepMinutes };
+}
 
 /**
  * The plan for a team. devhub { activeMax, dailyMax, activeUsed (held outside the pipeline) }, team { devs,
@@ -48,7 +56,8 @@ export function plan({ devhub = {}, team = {}, ui = {}, uatSandbox = false, uiPo
   if (inFlight > inFlightMax) advice.push(`The Dev Hub allows ${orgs.activeMax} active scratch orgs: with staging${devhub.activeUsed ? ` and ${devhub.activeUsed} held outside the pipeline` : ""} that is ${plural(inFlightMax, "story", "stories")} in flight, not ${inFlight}. Move the Dev Hub to an Enterprise or Unlimited org (far higher allowances), use a sandbox for UAT (SF_UAT_USERNAME), or keep fewer stories in flight; the rest wait in line (waiting:org).`);
   if (orgs.dailyMax !== null && dailyNeeded > orgs.dailyMax) advice.push(`About ${dailyNeeded} scratch orgs a day are needed and the Dev Hub allows ${orgs.dailyMax}.`);
   if (every && stories > 1) advice.push(`UI_REGRESSION=every runs the UI regression on each of the ${stories} story merges a sprint; the default (once per release) saves about ${Math.round((stories - 1) * uiOut.minutes)} min a sprint.`);
-  if (uiOut.minutes > m.uiWarnMinutes) advice.push(`The staging UI regression takes about ${uiOut.minutes} min and grows about ${uiOut.perStoryMinutes} min with every story. Retire specs whose stories are covered elsewhere, and keep each story's spec to its acceptance criteria.`);
+  if (uiBudget(tests, { ...m, testSeconds: sec }).near) advice.push(`The staging UI regression (about ${uiOut.minutes} min) is near its ${m.uiStepMinutes}-minute step budget: split the specs across runners (Playwright --shard, a matrix in staging-deploy.yml) before it times out.`);
+  else if (uiOut.minutes > m.uiWarnMinutes) advice.push(`The staging UI regression takes about ${uiOut.minutes} min and grows about ${uiOut.perStoryMinutes} min with every story. Retire specs whose stories are covered elsewhere, and keep each story's spec to its acceptance criteria.`);
   if (!advice.length) advice.push("The defaults carry this load.");
   return { orgs, ui: uiOut, cost, advice };
 }
@@ -62,6 +71,13 @@ export function countSpecs(dir = "e2e", read = (f) => readFileSync(f, "utf8")) {
   let tests = 0;
   for (const f of readdirSync(dir).filter((x) => x.endsWith(".spec.ts"))) tests += (read(`${dir}/${f}`).match(/\btest\(\s*["'`]/g) || []).length;
   return { tests };
+}
+
+/** uiBudget for the specs in `dir` (null without any), with the line a person reads. */
+export function uiBudgetOf(dir = "e2e") {
+  if (!existsSync(dir)) return null;
+  const b = uiBudget(countSpecs(dir));
+  return { ...b, note: b.near ? `the UI regression takes about ${b.minutes} min of its ${b.budget}-minute budget: split the specs across runners (Playwright --shard) before it times out` : `UI regression: about ${b.minutes} of ${b.budget} min` };
 }
 
 /** Live inputs: the Dev Hub's allowances (orgs.limits()) and the specs; the team's shape from flags. */

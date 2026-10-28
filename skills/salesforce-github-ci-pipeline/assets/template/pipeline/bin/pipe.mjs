@@ -8,8 +8,7 @@
 //   next      --after review|ci|staging|release-pr|org-freed|any [--pr N]   what the journey owes next, started (journey.mjs)
 //   finish    review|ui-test|ci|staging|uat --pr N|--branch B --sha S --outcome O [--detail D]   end a stage (finish.mjs)
 //   reconcile [--pr N]                                    re-run runs GitHub never started; start what is owed on every idle open PR
-//   lane      acquire|release <org target> [--minutes M] [--no-card] [--park KIND] [--optional] · wake [--wait M] · due
-//                                                         one job at a time per org; parked jobs re-run while still owed
+//   lane      acquire|release <org target> [--minutes M] [--no-card] [--park KIND] [--optional] · wake [--wait M] · due   one job per org; parked jobs re-run while owed
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
 //   status    set <context> <state> <sha> <description> [--pr N]
@@ -54,6 +53,7 @@ import { typesafeJev, triageUiFailure, triageReview, storyReadiness, isDeclarati
 import * as plans from "../src/plan.mjs";
 import { storyCards } from "../src/card.mjs";
 import * as tests from "../src/tests.mjs";
+import * as capacity from "../src/capacity.mjs";
 import * as production from "../src/production.mjs";
 import { orgRegistry, personaOf as orgPersona, packageList, sameSourceVia } from "../src/org.mjs";
 import { orgCommands } from "./commands/org.mjs";
@@ -225,7 +225,7 @@ const commands = {
     return say(`follow-ups: ${steps.join(" ") || "none"}`);
   },
   "start closed": () => { const p = start.closedPlan({ head: flag("head"), openPrs: (io.gh(["pr", "list", "--head", flag("head"), "--state", "open", "--json", "number"]) || []).length }); output({ story: p.story || "" }); return say(p.story ? `story ${p.story}: its org goes back` : `nothing to give back: ${p.why}`); },   // merged.yml closed
-  "ci staging-plan": () => { const p = start.stagingPlanFor({ git: io.git, host, branch: flag("branch"), policy: names.setting("UI_REGRESSION") || "release" }); output(p); return say(p.why); },   // what this staging run does (#273)
+  "ci staging-plan": () => { const p = start.stagingPlanFor({ git: io.git, host, branch: flag("branch"), policy: names.setting("UI_REGRESSION") || "release" }), b = p.ui === "run" ? capacity.uiBudgetOf("e2e") : null; if (b?.near) log(`::warning::${b.note}`); output(p); return say(p.why + (b ? ` (${b.note})` : "")); },   // what this staging run does (#273); near its UI budget, it says so
   "ci plan": () => {   // which CI jobs need a runner, from what changed (a failed diff assumes everything)
     const base = flag("base", "main");
     const out = io.git(["diff", "--name-only", `origin/${base}...HEAD`], { allowFail: true });
