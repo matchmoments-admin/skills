@@ -367,6 +367,10 @@ test("the staging plan reads the gate's own Standing for the UI regression, so p
   assert.equal(plan(facts([ui("failure")])).ui, "run", "failed: runs again on this run");
   assert.equal(plan(facts([])).ui, "run");
   assert.deepEqual([plan(facts([]), "older").done, plan(facts([]), "older").why], [true, "superseded: the release PR's head moved on; its own run tests it"]);
+  // the carry walk and the last-tested walk share one read per commit
+  const seen = [];
+  start.stagingPlanFor({ git: (a) => (a[0] === "rev-parse" ? "h" : a[0] === "rev-list" ? "a\nb\nc" : ""), host: { repo: "o/r", releasePrOf: () => null, api: () => ({}), checkRuns: (sha, n) => (seen.push(`${sha}|${n}`), []) }, branch: "release/2026-w1", policy: "release" });
+  assert.equal(seen.length, new Set(seen).size, "no commit's check runs read twice");
   const noPr = start.stagingPlanFor({ git: () => "", host: { repo: "o/r", releasePrOf: () => null, api: () => ({}), checkRuns: () => [] }, branch: "release/2026-w1", policy: "release" });
   assert.equal(noPr.ui, "skip", "no release PR yet: not due");
   // the workflow: issues read for the PR's facts; the lane stays held after the UI run; a planned run that never ran fails

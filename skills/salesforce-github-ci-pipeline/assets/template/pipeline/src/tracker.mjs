@@ -6,9 +6,14 @@
 import { setting } from "./settings.mjs";
 import { milestoneTitle } from "./conventions.mjs";
 
-export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY }) {
+export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || process.env.GITHUB_REPOSITORY, now = () => Date.now(), ttlMs = 20e3 }) {
   const list = (path) => (ghPages ? ghPages(path) : gh(["api", path]) || []);
   const cards = new Map();
+  // An issue's comments, read once per ttlMs: one card refresh used to list them three times (the plan, the card
+  // before, the card's own comment), on the story and on the PR. A write by this tracker drops them.
+  const read = new Map();
+  const raw = (key) => { const r = read.get(String(key)); if (r && now() - r.at < ttlMs) return r.list; const l = list(`repos/${repo}/issues/${key}/comments?per_page=100`); read.set(String(key), { at: now(), list: l }); return l; };
+  const wrote = (key) => read.delete(String(key));
   const milestone = (sprint, state = "all") => list(`repos/${repo}/milestones?state=${state}&per_page=100`).find((m) => m.title === milestoneTitle(sprint));
   return {
     name: "github",
@@ -16,31 +21,34 @@ export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || proce
       const i = gh(["issue", "view", String(key), "--json", "number,title,body,state,labels,url,milestone"]);
       return { key: String(i.number), title: i.title, body: i.body, state: i.state, labels: i.labels.map((l) => l.name), url: i.url, sprint: i.milestone?.title || null };
     },
-    async comment(key, text) { gh(["issue", "comment", String(key), "--body", text]); },
+    async comment(key, text) { wrote(key); gh(["issue", "comment", String(key), "--body", text]); },
     /** Comments oldest first: { author, body, created }. */
     async comments(key) {
-      return list(`repos/${repo}/issues/${key}/comments?per_page=100`).map((c) => ({ author: c.user?.login || "", body: c.body || "", created: c.created_at }));
+      return raw(key).map((c) => ({ author: c.user?.login || "", body: c.body || "", created: c.created_at }));
     },
     /** The body of the comment with this marker now, or "" (the card before an update: who it asked for). */
     async prior(key, mark) {
-      return list(`repos/${repo}/issues/${key}/comments?per_page=100`).find((c) => String(c.body || "").includes(mark))?.body || "";
+      return raw(key).find((c) => String(c.body || "").includes(mark))?.body || "";
     },
     /** Create or update the one comment with this marker (the story card, the build plan); returns its URL. The
      *  comment found is remembered, so refreshing it again in the same process costs one call. */
     async card(key, body, mark) {
       const k = `${key}|${mark}`;
-      if (!cards.has(k)) cards.set(k, list(`repos/${repo}/issues/${key}/comments?per_page=100`).find((c) => String(c.body || "").includes(mark))?.id || null);
+      if (!cards.has(k)) cards.set(k, raw(key).find((c) => String(c.body || "").includes(mark))?.id || null);
+      wrote(key);
       if (cards.get(k)) return gh(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${cards.get(k)}`, "-f", `body=${body}`])?.html_url || null;
       const url = gh(["issue", "comment", String(key), "--body", body]);
       cards.delete(k);
       return typeof url === "string" ? url : null;
     },
     async done(key, text) {
+      wrote(key);
       if (text) gh(["issue", "comment", String(key), "--body", text]);
       gh(["issue", "edit", String(key), "--remove-label", "in-sprint"], { allowFail: true });
       gh(["issue", "close", String(key), "--reason", "completed"], { allowFail: true });
     },
     async carry(key, sprint, text) {
+      wrote(key);
       gh(["issue", "comment", String(key), "--body", text]);
       gh(["issue", "edit", String(key), "--remove-milestone", "--remove-label", "in-sprint"], { allowFail: true });
     },

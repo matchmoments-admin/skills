@@ -321,7 +321,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
     const openRel = host.openRelease();
     const f = pr ? host.prFacts(pr.number) : null;
     const planned = Boolean(planContext(await tracker.comments(key).catch(() => [])).plan);
-    const releasePr = pr?.state === "MERGED" && openRel ? (host.api("GET", `repos/${host.repo}/pulls?state=open&base=main&head=${host.repo.split("/")[0]}:${openRel}`) || [])[0]?.number || null : null;
+    const releasePr = pr?.state === "MERGED" && openRel ? host.releasePrOf(openRel) : null;   // memoized per process
     return { branch, pr, ai, facts: f, planned, releasePr, sprintOpen: Boolean(openRel), base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
   }
   return {
