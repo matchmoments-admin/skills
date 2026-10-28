@@ -76,7 +76,7 @@ import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "floor", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind", "changed", "provider", "arm", "cases", "wait"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind", "changed", "provider", "arm", "cases", "wait", "prune"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -473,7 +473,7 @@ const commands = {
   },
   "event rollback": () => { record("rollback", { tag: flag("tag"), sha: flag("sha") }); return say(`recorded rollback to ${flag("tag")}`); },
   "improve ": () => say(improve.report(io, host, flag("run"))),
-  "metrics ": () => { const md = metrics.report(io, { days: Number(flag("days", "28")), events }); if (flag("out")) writeFileSync(flag("out"), md + "\n"); return say(md); },
+  "metrics ": () => { if (flag("prune")) return say(`removed ${events.pruneLog({ api: host.api, repo: host.repo, keepDays: Number(flag("prune")), log })} event file(s) older than ${flag("prune")} days from the ${events.BRANCH} tip`); const md = metrics.report(io, { days: Number(flag("days", "28")), events }); if (flag("out")) writeFileSync(flag("out"), md + "\n"); return say(md); },
 };
 
 async function startCmd(kind) {

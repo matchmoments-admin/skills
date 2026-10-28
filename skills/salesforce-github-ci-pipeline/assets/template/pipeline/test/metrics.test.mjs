@@ -273,3 +273,33 @@ test("every event a module records is a known kind, and no payload sets the enve
   }
   assert.throws(() => event("jev", { run: true }), /envelope's own field/);
 });
+
+test("the event log's tip keeps the readers' window: old days leave the tip in one fast-forward commit; a moved branch is retried", () => {
+  const T = { root: [{ path: "METRICS.md", type: "blob", sha: "mmd" }, { path: "events", type: "tree", sha: "ev" }],
+    ev: [{ path: "2026", type: "tree", sha: "y26" }], y26: [{ path: "03", type: "tree", sha: "m03" }, { path: "10", type: "tree", sha: "m10" }],
+    m03: [{ path: "01", type: "tree", sha: "d0301" }, { path: "31", type: "tree", sha: "d0331" }], m10: [{ path: "27", type: "tree", sha: "d1027" }],
+    d0301: [{ path: "a.json", type: "blob" }, { path: "b.json", type: "blob" }], d0331: [{ path: "c.json", type: "blob" }], d1027: [{ path: "d.json", type: "blob" }] };
+  const calls = [];
+  let tip = "t1", patches = 0;
+  const api = (m, path, body) => {
+    calls.push([m, path, body]);
+    if (m === "GET" && path.endsWith("/git/ref/heads/metrics")) return { object: { sha: tip } };
+    if (m === "GET" && /git\/commits\//.test(path)) return { tree: { sha: "root" } };
+    if (m === "GET" && /git\/trees\//.test(path)) return { tree: T[path.split("/").pop()] || [] };
+    if (m === "POST" && path.endsWith("/git/trees")) return { sha: "newtree" };
+    if (m === "POST" && path.endsWith("/git/commits")) return { sha: "c2" };
+    if (m === "PATCH") { if (patches++ === 0) { tip = "t2"; return { status: 422, message: "not a fast forward" }; } return {}; }
+    return {};
+  };
+  const n = events.pruneLog({ api, repo: "o/r", keepDays: 180, now: new Date("2026-10-28T00:00:00Z") });   // cutoff 2026-05-01
+  assert.equal(n, 3, "every file of March, none of October");
+  const tree = calls.filter(([m, p]) => m === "POST" && p.endsWith("/git/trees")).at(-1)[2];
+  assert.deepEqual(tree.tree.map((e) => [e.path, e.sha]), [["events/2026/03/01/a.json", null], ["events/2026/03/01/b.json", null], ["events/2026/03/31/c.json", null]]);
+  assert.equal(tree.base_tree, "root");
+  const patch = calls.filter(([m]) => m === "PATCH");
+  assert.equal(patch.length, 2, "the branch moved under it: read the new tip, try again");
+  assert.equal(patch.every(([, , b]) => b.force === false), true, "never forced: a concurrent event is never lost");
+  assert.deepEqual(calls.filter(([m, p]) => m === "POST" && p.endsWith("/git/commits")).map(([, , b]) => b.parents), [["t1"], ["t2"]]);
+  assert.equal(events.pruneLog({ api: (m, p) => (m === "GET" && /trees\//.test(p) ? { tree: (T[p.split("/").pop()] || []).filter((e) => e.path !== "03") } : api(m, p)), repo: "o/r", now: new Date("2026-10-28T00:00:00Z") }), 0, "nothing old: no commit");
+  assert.throws(() => events.pruneLog({ api, repo: "o/r", keepDays: 30 }), /shorter than the AI budget/);
+});
