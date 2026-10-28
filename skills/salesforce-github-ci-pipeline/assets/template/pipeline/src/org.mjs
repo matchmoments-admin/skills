@@ -106,15 +106,25 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
   const baseline = () => (baselineMode !== "off" && existsSync(baselineDir) ? idOf(baselineDir) : null);
   // test data (data/seed: synthetic, for people and UI tests; Apex tests never see it), from main's trusted checkout
   const seedId = () => (String(env.SEED || "on").toLowerCase() !== "off" && existsSync(join(seedDir, "plan.json")) ? idOf(seedDir) : null);
-  const active = () =>
-    (sf(["data", "query", "-o", DEVHUB, "-q", "SELECT SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate FROM ScratchOrgInfo WHERE Status = 'Active' ORDER BY CreatedDate DESC"]).records || []);
+  // The Dev Hub's active orgs, read once until this registry changes them (a create, a delete, a pool claim) or a minute
+  // passes: ready() on a live org read them twice, a pool claim twice a try, each a few seconds of `sf` (28 Oct review)
+  let snap = null, clientId = null;
+  const changed = () => { snap = null; };
+  const active = () => {
+    if (snap && Date.now() - snap.at < 60e3) return snap.records;
+    const records = sf(["data", "query", "-o", DEVHUB, "-q", "SELECT SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate FROM ScratchOrgInfo WHERE Status = 'Active' ORDER BY CreatedDate DESC"]).records || [];
+    snap = { at: Date.now(), records };
+    return records;
+  };
   /** Delete through the Dev Hub's ActiveScratchOrg record: no login to the org itself, so it works on any org. */
-  const deleteRecord = (username) => Boolean(sf(["data", "delete", "record", "-o", DEVHUB, "-s", "ActiveScratchOrg", "-w", `SignupUsername='${username}'`], { allowFail: true }));
+  const deleteRecord = (username) => { try { return Boolean(sf(["data", "delete", "record", "-o", DEVHUB, "-s", "ActiveScratchOrg", "-w", `SignupUsername='${username}'`], { allowFail: true })); } finally { changed(); } };
 
   // the methods of each concern (pipeline/src/org/), then the provisioning core below, which composes them
-  const ctx = { sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord };
+  const ctx = { sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord, changed };
   const self = {
     ...fleetMethods(ctx), ...dataMethods(ctx), ...usersMethods(ctx), ...snapshotMethods(ctx), ...setupChangesMethods(ctx),
+    /** The Dev Hub's active orgs (ScratchOrgInfo: SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate). */
+    live: () => active(),
     /** The live org for a target, or null. Description is long text, which SOQL cannot filter, so match here. */
     find(target, opts) {
       const org = resolve(target, opts);
@@ -126,7 +136,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     attach(target, opts) {
       const org = self.find(target, opts);
       if (!org) throw new Error(`No live scratch org for ${typeof target === "string" ? target : target.description}: it was never started, or it expired (story orgs live 7 days). Comment /start on the story to rebuild it.`);
-      const clientId = sf(["org", "display", "-o", DEVHUB]).clientId;
+      clientId ||= sf(["org", "display", "-o", DEVHUB]).clientId;   // the Dev Hub's connected app: the same for every org
       for (let i = 1; i <= 3; i++) {
         const ok = sf(["org", "login", "jwt", "--client-id", clientId, "--jwt-key-file", keyFile, "--username", org.username, "--instance-url", org.loginUrl, "--alias", org.alias], { allowFail: true });
         if (ok) { log(`attached ${org.alias} (${org.username})`); return org; }
@@ -211,6 +221,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     create(org) {
       const base = ["org", "create", "scratch", "--alias", org.alias, "--description", org.description, "--duration-days", String(org.days), "--target-dev-hub", DEVHUB,
         ...(org.kind === "temp" ? ["--no-track-source"] : [])];
+      const make = (args) => { try { return sf(args); } finally { changed(); } };   // a new org (or a half-made one) changes the Dev Hub's list
       const snapshot = org.kind === "snapshot" ? null : self.currentSnapshot();
       if (snapshot) {
         const def = join(tmpdir(), `snapshot-${process.pid}.json`);
@@ -220,7 +231,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         // a login or network hiccup is not the snapshot's fault: once more from it, and never refused for it (sprint
         // 2027-w01's staging got a JWT error page, refused a good snapshot, and story #293 fell back to an old one)
         for (let attempt = 1; attempt <= 2; attempt++) {
-          try { sf([...base, "--definition-file", def, "--wait", "45"]); return { fromSnapshot: true, snapshot, baseline: self.snapshotBaseline(snapshot) }; } catch (e) { why = String(e.message).split("\n").slice(-2).join(" ").slice(0, 300); kind = e.kind || sfFailure(e.message); }
+          try { make([...base, "--definition-file", def, "--wait", "45"]); return { fromSnapshot: true, snapshot, baseline: self.snapshotBaseline(snapshot) }; } catch (e) { why = String(e.message).split("\n").slice(-2).join(" ").slice(0, 300); kind = e.kind || sfFailure(e.message); }
           self.removeTagged(org.description);   // a half-made attempt must not hold a slot
           if (kind !== "transient") break;
           if (attempt === 1) { log(`::warning::snapshot ${snapshot}: ${why.slice(0, 120)}... (a login or network error): trying once more`); sleep(30_000); }
@@ -231,13 +242,13 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
         if (!transient) refuseSnapshot(snapshot, why);   // the next org goes straight to shape until a new snapshot is built
       }
       log(`creating ${org.alias} (${org.description}) from ${org.definition}, ${org.days} days`);
-      try { sf([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]); } catch (e) {
+      try { make([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]); } catch (e) {
         if ((e.kind || sfFailure(e.message)) !== "shape") throw e;
         log(`::warning::production's org shape is outdated: refreshing it, then creating ${org.alias} once more`);
         record("shape", { action: "refresh", org: org.description });
         self.removeTagged(org.description);   // a half-made attempt must not hold a slot
         self.refreshShape();
-        sf([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]);
+        make([...base, "--definition-file", definitionPath(org.definition), "--wait", "25"]);
       }
       return { fromSnapshot: false };
     },

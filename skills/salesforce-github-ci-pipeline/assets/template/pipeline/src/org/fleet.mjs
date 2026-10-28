@@ -103,7 +103,7 @@ export async function doneStoryOrgs(records, { tracker, gh, log = () => {} }) {
 }
 
 /** The registry's fleet methods. ctx: orgRegistry's shared context (sf, log, env, ...). */
-export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord }) {
+export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord, changed = () => {} }) {
   return {
     /** Delete every live org with this description (works when the alias was never set: a half-made CI org). */
     removeTagged(description) {
@@ -139,6 +139,7 @@ export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineD
         if (!r) return null;
         tried.add(r.SignupUsername);
         const ok = sf(["data", "update", "record", "-o", DEVHUB, "-s", "ScratchOrgInfo", "-w", `SignupUsername='${r.SignupUsername}'`, "-v", `Description='${org.description}'`], { allowFail: true });
+        changed();   // read the Dev Hub again: only the claim whose Description stuck is ours
         const mine = ok && active().some((x) => x.SignupUsername === r.SignupUsername && x.Description === org.description);
         if (!mine) { log(`::warning::could not claim ${r.Description}: trying the next pool org`); continue; }
         record("org", { action: "claimed", org: org.description, from: r.Description });
