@@ -409,3 +409,12 @@ test("every workflow and composite action is valid YAML (claude-agent's Bedrock 
   assert.ok(files.some((f) => f.includes("claude-agent")), "the actions are checked too");
   for (const f of files) assert.doesNotThrow(() => yaml.load(readFileSync(new URL(f, gh), "utf8")), `${f} does not parse`);
 });
+
+test("no workflow swallows a lane failure: a busy lane or an API error fails the step, never deploys into a held org (B1, 28 Oct)", () => {
+  for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml"))) {
+    const src = readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8");
+    assert.ok(!/(if|\|\||&&)\s+node [^\n]*lane acquire/.test(src) && !/lane acquire[^\n]*\|\|/.test(src), `${f}: lane acquire inside an if or ||`);
+  }
+  const reconcile = readFileSync(new URL("../../.github/workflows/reconcile.yml", import.meta.url), "utf8");
+  assert.match(reconcile, /pipe\.mjs lane due/, "reconcile wakes parked jobs whose lane is free");
+});

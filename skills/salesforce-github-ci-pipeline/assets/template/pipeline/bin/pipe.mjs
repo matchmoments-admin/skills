@@ -8,7 +8,8 @@
 //   next      --after review|ci|staging|release-pr|org-freed|any [--pr N]   what the journey owes next, started (journey.mjs)
 //   finish    review|ui-test|ci|staging|uat --pr N|--branch B --sha S --outcome O [--detail D]   end a stage (finish.mjs)
 //   reconcile [--pr N]                                    re-run runs GitHub never started; start what is owed on every idle open PR
-//   lane      acquire|release <org target> [--minutes M] [--no-card] [--park KIND] · wake   one job at a time per org; parked jobs re-run
+//   lane      acquire|release <org target> [--minutes M] [--no-card] [--park KIND] [--optional] · wake [--wait M] · due
+//                                                         one job at a time per org; parked jobs re-run while still owed
 //   gate      evaluate <pr> · nudge <pr> · checks [ref] · guard --base B --branch b · ui-needed --base B · followups <pr>
 //             route-check --branch b --base B [--release R]   may this story branch still be built towards its base
 //   status    set <context> <state> <sha> <description> [--pr N]
@@ -75,7 +76,7 @@ import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
 const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "floor", "level",
-  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind", "changed", "provider", "arm", "cases"]);
+  "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind", "changed", "provider", "arm", "cases", "wait"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -386,8 +387,7 @@ const commands = {
   "tests run": async () => {
     const alias = arg(0);
     const story = names.storyOf(process.env.REF || process.env.GITHUB_HEAD_REF || "");
-    // the card says it once, when testing starts; progress lives on the live check run (cards change on start and end only)
-    if (story) await cards.refresh(story, { activity: { state: "running", what: "CI is testing the change in its scratch org (progress: the Salesforce tests check)", url: host.runUrl } }).catch(() => {});
+    // the card already says CI is deploying and testing (ci.yml, before the org step): progress lives on the live check run
     const r = orgs().asProductionUser(alias, () => tests.runForCheckout(io, {
       host, alias, base: flag("base", "origin/main"), sha: flag("sha"), all: has("all"), level: names.setting("CI_TEST_LEVEL") || "RunRelevantTests", min: Number(flag("min", names.setting("COVERAGE_MIN"))), floor: Number(flag("floor", String(names.COVERAGE_MIN))), outDir: flag("out", "test-results"), sleep, log,
     }));

@@ -7,6 +7,7 @@ name: reconcile
 # - The release watchdog: Salesforce changes on main that never shipped (a lost or failed release dispatch) start a
 #   release, unless production was rolled back.
 # - The UI evidence branch, squashed to open stories.
+# - Parked jobs waiting for a free lane (its holder's runner died before letting go) get a wake (lane-wake.yml).
 # Split from scratch-janitor (which keeps the Dev Hub key for the org sweep) so one failing part cannot hide the others.
 on:
   schedule:
@@ -38,6 +39,9 @@ jobs:
       - name: Reconcile (re-run what never started; start what is owed on every idle open PR)
         continue-on-error: true
         run: node pipeline/bin/pipe.mjs reconcile
+      - name: Parked jobs waiting for a free lane (a wake no lane-freed event will start)
+        continue-on-error: true
+        run: node pipeline/bin/pipe.mjs lane due
       - name: Release watchdog (main's Salesforce changes that never shipped)
         continue-on-error: true
         run: node pipeline/bin/pipe.mjs ship watchdog

@@ -113,13 +113,16 @@ export async function reconcile({ host, gh, cards, next, record = () => {}, log 
 /**
  * Runs GitHub never started (every job failed with no steps: a failed payment, the spending limit, a runner outage)
  * in the last three days, re-run once each (first attempts only), so a billing stop does not leave CI red on every open PR
- * (22-24 Oct). Scheduled runs are left to their next tick. Returns the runs it re-ran.
+ * (22-24 Oct). Scheduled runs are left to their next tick. Only runs that ended within two minutes of starting have
+ * their jobs read (a run that never started ends at once; one that really ran takes longer), so the hourly sweep reads
+ * a few runs, not every failure of the last three days. Returns the runs it re-ran.
  */
 export function rerunNotStarted({ host, record = () => {}, log = () => {}, now = Date.now(), max = 10 }) {
   const since = new Date(now - 72 * 3600e3).toISOString().slice(0, 19);   // a stop can last days (22-24 Oct)
   const runs = host.api("GET", `repos/${host.repo}/actions/runs?status=failure&created=>=${since}&per_page=100`)?.workflow_runs || [];
   const out = [];
-  for (const r of runs.filter((x) => x.run_attempt === 1 && x.event !== "schedule")) {
+  const quick = (x) => { const a = Date.parse(x.run_started_at || x.created_at), b = Date.parse(x.updated_at); return !(b - a > 120e3); };   // unknown times: read it
+  for (const r of runs.filter((x) => x.run_attempt === 1 && x.event !== "schedule" && quick(x))) {
     if (out.length >= max) break;
     const jobs = host.api("GET", `repos/${host.repo}/actions/runs/${r.id}/jobs?per_page=100`)?.jobs || [];
     if (!notStarted(jobs)) continue;
