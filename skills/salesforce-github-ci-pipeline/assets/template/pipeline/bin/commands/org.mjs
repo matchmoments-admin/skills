@@ -29,6 +29,13 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
     output({ alias: o.alias, created: o.created }); return say(o.alias);
   },
   "org advance": () => say(orgs().advance(arg(0), flag("sha"), (held) => advanceCovered(io.git, { held, head: flag("sha"), base: flag("base") })) ? `${arg(0)} holds ${flag("sha").slice(0, 7)}` : `${arg(0)} left as it was`),   // CI tested this commit
+  "org ci": () => {   // CI's org for <target> (org.mjs ci): attached, completed, rebuilt once, or a temporary one (--alias) only when it must be
+    const name = flag("alias");
+    const o = orgs().ci(arg(0), { name, commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), refusal: storyRefusal(io.gh, flag("pr")), onTemp: () => output({ alias: name, temp: true }) });
+    if (o.temp) record("org", { action: "created", org: o.description });
+    else if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
+    output({ alias: o.alias, temp: o.temp, full: o.full }); return say(o.alias);
+  },
   "org attach": () => { const o = orgs().attach(arg(0)); output({ alias: o.alias }); return say(o.alias); },
   "org remove": () => { const o = names.orgFor(arg(0)); if (orgs().remove(arg(0))) record("org", { action: "deleted", org: o?.description, story: o?.key }); },
   "org remove-tagged": () => { if (orgs().removeTagged(arg(0))) record("org", { action: "deleted", org: arg(0) }); },

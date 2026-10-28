@@ -813,3 +813,43 @@ test("the warm pool (ORG_POOL): a story claims a pool org instead of creating on
   assert.match(start.closedPlan({ head: "fix-ci" }).why, /not a story's own branch/);
   assert.match(start.closedPlan({ head: "issue-9", openPrs: 1 }).why, /still open: the org stays/);
 });
+
+test("CI's org (org.ci, B2): attached when live; completed when half-made; a gone story org rebuilt once; a temporary org only when it must be", () => {
+  const env = { BASELINE: "off", SEED: "off" };
+  const live = [{ Description: "issue-12", SignupUsername: "u@x", LoginUrl: "https://s" }];
+  const mk = (sf) => orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], env });
+  // live and ready: logged in, nothing deployed by the org step (CI deploys the delta)
+  let f = fakeSf(live);
+  let o = mk(f.sf).ci("issue-12", { name: "ci-1" });
+  assert.deepEqual([o.alias, o.temp, o.full], ["issue-12", false, false]);
+  assert.ok(!f.calls.includes("org create scratch") && !f.calls.includes("project deploy start"));
+  // live but never finished: completed by ready(), so CI does not delta-deploy onto a half-made org
+  f = fakeSf(live, { ready: false });
+  o = mk(f.sf).ci("issue-12", { name: "ci-1" });
+  assert.deepEqual([o.temp, o.full, o.completed], [false, true, true]);
+  assert.ok(!f.calls.includes("org create scratch") && f.calls.includes("project deploy start"));
+  // the story org is gone (expired): rebuilt as the story's org, once; the next push attaches to it
+  f = fakeSf([]);
+  let temps = 0;
+  o = mk(f.sf).ci("issue-12", { name: "ci-1", onTemp: () => temps++ });
+  assert.deepEqual([o.alias, o.temp, o.full, o.created, temps], ["issue-12", false, true, true, 0]);
+  assert.equal(f.calls.filter((c) => c === "org create scratch").length, 1);
+  // no slot past ORG_RESERVE: a temporary org for this run (onTemp first, so CI deletes it whatever happens)
+  const full = (args, opts) => (args[0] === "limits" ? [{ name: "ActiveScratchOrgs", remaining: 1, max: 3 }, { name: "DailyScratchOrgs", remaining: 5, max: 6 }] : f.sf(args, opts));
+  f = fakeSf([]);
+  o = orgRegistry({ sf: full, log: () => {}, sleep: () => {}, packages: [], env: { ...env, ORG_RESERVE: "1" } }).ci("issue-12", { name: "ci-2", onTemp: () => temps++ });
+  assert.deepEqual([o.alias, o.temp, temps], ["ci-2", true, 1]);
+  assert.ok(f.calls.includes("project deploy start"), "the temporary org gets the whole source");
+  // the PR is not open: the story org is not rebuilt, a temporary org runs the check
+  f = fakeSf([]);
+  o = mk(f.sf).ci("issue-12", { name: "ci-3", refusal: () => "story 12's PR is closed" });
+  assert.equal(o.temp, true);
+  // a branch with no org of its own (maintenance): a temporary org, as before
+  f = fakeSf([]);
+  assert.equal(mk(f.sf).ci("docs-tidy", { name: "ci-4" }).temp, true);
+  // the org is there but login fails: the step fails, no daily org spent on it
+  f = fakeSf(live);
+  const noLogin = (args, opts) => (args[0] === "org" && args[1] === "login" ? null : f.sf(args, opts));
+  assert.throws(() => mk(noLogin).ci("issue-12", { name: "ci-5" }), /Could not log in/);
+  assert.ok(!f.calls.includes("org create scratch"));
+});

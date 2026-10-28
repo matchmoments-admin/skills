@@ -318,6 +318,42 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     },
 
     /**
+     * CI's org (Org provisioning for one CI run): what CI deploys its delta into and tests in. One decision, so a push
+     * never spends a daily scratch org it does not need (B2, 28 Oct: an expired story org cost one temporary org per push):
+     * - a live org for the target, logged in (a login that fails three times throws: no temporary org for a login error);
+     *   one that never finished (no ready marker: a run that died) is completed by ready() first;
+     * - no live org for a story (it expired, or was never started): ready() rebuilds it once, so the next push attaches;
+     * - a temporary org (`temp`, deleted by CI) only for a branch with no org of its own (maintenance), or when the story
+     *   org cannot be made now (no slot past ORG_RESERVE, its PR not open).
+     * Returns { alias, temp, full, created } (full: ready() just deployed the checkout, so CI's delta deploy is not
+     * needed; a temporary org gets the whole source here, then the delta as before). onTemp(): told before a temporary org is made.
+     */
+    ci(target, { name, commit = null, refusal = () => null, onTemp = () => {} } = {}) {
+      const temp = () => { onTemp(); const o = self.temporary(name); self.deploy(o.alias); return { ...o, temp: true, full: false }; };   // onTemp first: CI deletes it even if making it half-fails
+      if (!orgFor(target)) { log(`${target} has no org of its own: a temporary org`); return temp(); }
+      const existing = self.find(target);
+      if (existing) {
+        const org = self.attach(existing);
+        if (self.marked(org.alias)) return { ...org, temp: false, full: false };
+        log(`${org.alias} never finished (no ready marker): completing it`);
+        return { ...self.ready(existing, { commit }), temp: false, full: true };
+      }
+      try { return { ...self.ready(target, { commit, refusal }), temp: false, full: true }; }
+      catch (e) {
+        const kind = e.kind || sfFailure(e.message), refused = refusal(resolve(target));
+        if (kind !== "slots" && !refused) throw e;
+        log(`::warning::the story org cannot be made now (${String(e.message).split("\n")[0].slice(0, 160)}): a temporary org for this run`);
+        return temp();
+      }
+    },
+    /** Does the org carry a ready marker for any commit (ready() finished on it once)? */
+    marked(alias) {
+      const username = sf(["org", "display", "-o", alias], { allowFail: true })?.username;
+      const title = username && sf(["data", "query", "-o", alias, "-q", `SELECT Title FROM User WHERE Username = '${username}'`], { allowFail: true })?.records?.[0]?.Title;
+      return String(title || "").startsWith(READY);
+    },
+
+    /**
      * Deploy the source. With a production baseline (and no manifest), the baseline and force-app go in ONE deploy
      * (they reference each other both ways). In soft mode a failed combined deploy warns, records why, and deploys
      * force-app alone, so a story is never blocked by production's own metadata; strict fails.
