@@ -58,6 +58,38 @@ export function readLog(io, { days = 28, now = new Date(), onFail = () => {} } =
   return parseBatch(out).flatMap((text) => { try { return [JSON.parse(text)]; } catch { return []; } });
 }
 
+/**
+ * Keep the branch tip to the readers' window: readers fetch only the tip (readLog: --depth=1), so what grows is the
+ * tip's tree, every event ever written. Removes the files of days older than keepDays from the tip in one commit
+ * (history keeps them), through the Git Data API: one tree with the deletions, a commit on the tip, and a
+ * fast-forward-only ref update, so a writer that lands meanwhile is never lost (the update fails and it tries again).
+ * keepDays stays above the longest reader (the budget's 120 days). api: the gh seam. Returns the files removed.
+ */
+export function pruneLog({ api, repo, keepDays = 180, now = new Date(), log = () => {} }) {
+  if (!(keepDays >= 120)) throw new Error(`prune: keepDays ${keepDays} is shorter than the AI budget's 120-day window`);
+  const cutoff = new Date(now - keepDays * 24 * 3600e3).toISOString().slice(0, 10);
+  const kids = (sha) => api("GET", `repos/${repo}/git/trees/${sha}`)?.tree || [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const tip = api("GET", `repos/${repo}/git/ref/heads/${BRANCH}`)?.object?.sha;
+    const root = tip && api("GET", `repos/${repo}/git/commits/${tip}`)?.tree?.sha;
+    if (!root) { log(`::warning::prune: the ${BRANCH} branch could not be read`); return 0; }
+    const gone = [];
+    const ev = kids(root).find((e) => e.path === "events" && e.type === "tree");
+    for (const y of ev ? kids(ev.sha).filter((e) => e.type === "tree") : [])
+      for (const m of kids(y.sha).filter((e) => e.type === "tree" && `${y.path}-${e.path}` < cutoff.slice(0, 7) + "~"))
+        for (const d of kids(m.sha).filter((e) => e.type === "tree" && `${y.path}-${m.path}-${e.path}` < cutoff))
+          for (const f of kids(d.sha).filter((e) => e.type === "blob")) gone.push(`events/${y.path}/${m.path}/${d.path}/${f.path}`);
+    if (!gone.length) return 0;
+    const tree = api("POST", `repos/${repo}/git/trees`, { base_tree: root, tree: gone.map((path) => ({ path, mode: "100644", type: "blob", sha: null })) });
+    const commit = tree?.sha && api("POST", `repos/${repo}/git/commits`, { message: `events: drop ${gone.length} older than ${cutoff} from the tip (history keeps them)`, tree: tree.sha, parents: [tip] });
+    if (!commit?.sha) { log(`::warning::prune: could not write the commit (${tree?.status || commit?.status || "?"})`); return 0; }
+    const moved = api("PATCH", `repos/${repo}/git/refs/heads/${BRANCH}`, { sha: commit.sha, force: false });
+    if (!moved?.status) return gone.length;
+    log(`prune: the ${BRANCH} branch moved (${moved.status}): trying again`);
+  }
+  return 0;
+}
+
 /** The contents of `git cat-file --batch` output ("<sha> blob <bytes>\n<content>\n" per object). */
 export function parseBatch(buf) {
   const b = Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf || ""));
