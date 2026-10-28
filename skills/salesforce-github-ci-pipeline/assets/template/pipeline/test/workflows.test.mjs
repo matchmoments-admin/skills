@@ -371,9 +371,9 @@ test("Standing is the only reader of results: no other module or workflow reads 
   // nudge each read pipeline/* statuses their own way; the 15 Oct review). Writers (host.status, `pipe status set`) stay.
   const dir = new URL("../src/", import.meta.url);
   const srcs = [...readdirSync(dir).filter((f) => f.endsWith(".mjs")).map((f) => `src/${f}`), ...readdirSync(new URL("org/", dir)).map((f) => `src/org/${f}`), "bin/pipe.mjs", ...readdirSync(new URL("../bin/commands/", import.meta.url)).map((f) => `bin/commands/${f}`)];
-  for (const f of srcs.filter((x) => x !== "src/gate.mjs" && x !== "src/github.mjs")) {
+  for (const f of srcs.filter((x) => x !== "src/facts.mjs" && x !== "src/github.mjs")) {
     const s = readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
-    assert.doesNotMatch(s, /\/statuses(\?|`)/, `${f} reads commit statuses: ask gate.standing (or gate.statusOn for one exact commit)`);
+    assert.doesNotMatch(s, /\/statuses(\?|`)/, `${f} reads commit statuses: ask gate.standing (or facts.statusOn for one exact commit)`);
     // check runs too, through the code host (host.checkRuns, github.checkRunsOn): the 27 Oct review found five readers
     assert.doesNotMatch(s, /\/check-runs\?/, `${f} reads check runs itself: use host.checkRuns`);
   }
@@ -428,4 +428,9 @@ test("the staging UI regression has its own step budget (the lane wait is outsid
   assert.equal(capacity.uiBudget(20).near, false, "today's 20 specs");
   assert.equal(capacity.uiBudget(60).near, true, "60 specs: about 35 min of 45, time to shard");
   assert.match(capacity.plan({ ui: { tests: 60 } }).advice.join(" "), /--shard/);
+});
+
+test("the gate does no IO: Standing and the gate decide on facts that facts.mjs reads (28 Oct review)", () => {
+  const src = readFileSync(new URL("../src/gate.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /\b(gh|ghPages|api)\(\[|\bghPages\(|readFileSync|execFileSync/, "gate.mjs calls no gh, API or file seam");
 });

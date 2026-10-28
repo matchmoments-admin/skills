@@ -1,7 +1,8 @@
 // Close-out after a production release (see GLOSSARY.md). plan() is pure; gather() reads GitHub and git;
 // apply() acts through the tracker and the org registry.
 import { storyOf, sprintOf, releaseBranch, setting } from "./conventions.mjs";
-import { approverOf, gather as gateGather, standing, readApprovalRecord, statusOn, STATUS } from "./gate.mjs";
+import { approverOf, standing, readApprovalRecord, STATUS } from "./gate.mjs";
+import { gather as gateGather, statusOn } from "./facts.mjs";
 import { checkRunsOn } from "./github.mjs";
 
 /**
@@ -118,7 +119,7 @@ const hoursBetween = (a, b) => (a && b ? Math.round(((new Date(b) - new Date(a))
  * What a shipped story's trail says, from GitHub (io: the gh and ghPages seams): who approved and when, the AI review or
  * the person who overruled it (the full reason, from their PR comment), the UI test and its evidence, the UAT sign-off,
  * the production validation, and the timeline. The approval is the one the gate recorded when it merged; verdicts come from the gate's own Standing (gate.standing on
- * gate.gather of the merged PR), so the record says exactly what the gate accepted: trusted statuses only, an earlier
+ * facts.gather of the merged PR), so the record says exactly what the gate accepted: trusted statuses only, an earlier
  * review only if nothing but specs changed since, never a refused approver. sprint: null for a hotfix. Fields it
  * cannot find stay null.
  */

@@ -7,7 +7,8 @@
 // re-runs, retries and a newer release replacing a queued older one are all safe. Close-out works from the SHA and the
 // release before it, never from wherever main has moved to since.
 
-import { GATE_STATUS, statusOn } from "./gate.mjs";
+import { GATE_STATUS } from "./gate.mjs";
+import { statusOn } from "./facts.mjs";
 
 export const TAG_GLOB = "v*";
 

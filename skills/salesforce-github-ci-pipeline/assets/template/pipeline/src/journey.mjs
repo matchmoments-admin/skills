@@ -93,22 +93,30 @@ async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, jev = nul
   return { steps, said: steps.length ? `started: ${steps.map((x) => `${x.start || x.dispatch} (${x.why})`).join("; ")}` : `nothing owed after ${after} on PR #${pr}` };
 }
 
-/** The story that has waited longest for a scratch-org slot (label waiting:org), started again; null if none waits. */
-function startWaiting({ host, gh, log = () => {} }) {
-  const w = (gh(["issue", "list", "--state", "open", "--label", "waiting:org", "--json", "number,labels,createdAt", "--limit", "50"], { allowFail: true }) || [])
-    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))[0];
-  if (!w) return null;
-  gh(["issue", "edit", String(w.number), "--remove-label", "waiting:org"], { allowFail: true });
-  host.repoDispatch("jira-start", { key: String(w.number), labels: (w.labels || []).map((l) => l.name).filter((l) => l !== "waiting:org").join(",") });
-  log(`next after org-freed: started story #${w.number} (it was waiting for a scratch-org slot)`);
-  return { steps: [{ dispatch: "issue-start", why: `story #${w.number} waited for a slot` }], said: `started story #${w.number}, which was waiting for a scratch-org slot` };
+/** The stories that have waited longest for a scratch-org slot (label waiting:org), started again, as many as the Dev
+ *  Hub has slots free past ORG_RESERVE (freeSlots(); unknown or unreadable: one), so a sweep that frees several slots
+ *  on a bigger Dev Hub starts several, not one per janitor tick. Each start checks its own slot again (issue-start), so
+ *  a miscount only puts a story back in line. null if none waits. */
+function startWaiting({ host, gh, freeSlots = () => 1, log = () => {} }) {
+  let n = 1;
+  try { n = Math.max(1, Math.min(10, Number(freeSlots()) || 1)); } catch { n = 1; }
+  const ws = (gh(["issue", "list", "--state", "open", "--label", "waiting:org", "--json", "number,labels,createdAt", "--limit", "50"], { allowFail: true }) || [])
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(0, n);
+  if (!ws.length) return null;
+  for (const w of ws) {
+    gh(["issue", "edit", String(w.number), "--remove-label", "waiting:org"], { allowFail: true });
+    host.repoDispatch("jira-start", { key: String(w.number), labels: (w.labels || []).map((l) => l.name).filter((l) => l !== "waiting:org").join(",") });
+    log(`next after org-freed: started story #${w.number} (it was waiting for a scratch-org slot)`);
+  }
+  const which = `${ws.length === 1 ? "story" : "stories"} ${ws.map((w) => `#${w.number}`).join(", ")}`;
+  return { steps: ws.map((w) => ({ dispatch: "issue-start", why: `story #${w.number} waited for a slot` })), said: `started ${which}, which ${ws.length === 1 ? "was" : "were"} waiting for a scratch-org slot` };
 }
 
 /**
  * Who the change needs now, from Standing (never from how a card lays out its rows: the release mentioned its approvers
  * as its PR opened, half an hour before staging and UAT). A release in UAT: its testers. Then, once every result before
  * approval passed and nothing failed: the story's approver (or APPROVERS), or a release's approvers. null: nobody.
- * facts: gate.gather(); decision: gate.evaluate(); testers: UAT_TESTERS logins. Returns { who, what } | null. Pure.
+ * facts: facts.gather(); decision: gate.evaluate(); testers: UAT_TESTERS logins. Returns { who, what } | null. Pure.
  */
 export function needs(st, facts, { decision = null, testers = [], prUrl = "", key = null } = {}) {
   const pr = facts.pr;

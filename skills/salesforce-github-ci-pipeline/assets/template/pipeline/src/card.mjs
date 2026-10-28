@@ -1,6 +1,6 @@
 // The story card: one comment on the story (GitHub issue or Jira ticket), edited in place at every stage, that tells
 // a non-technical person where the story is, what is next, and links straight to it. storyCard() is pure: built from the
-// same facts and decision the gate uses (gate.gather / gate.evaluate), so the card and the gate cannot disagree.
+// same facts and decision the gate uses (facts.gather / gate.evaluate), so the card and the gate cannot disagree.
 // storyCards() puts it on the story and its PR (and moves the board), through the code host and the tracker.
 import { CHECKS, storyBranch, aiFeatures, context, setting, sprintOf, storyOf } from "./conventions.mjs";
 import { latestCheck, approval, requiredVerdicts, evaluate, route, standing, checkState, STATUS } from "./gate.mjs";
@@ -19,7 +19,7 @@ const stateOf = (c) => ({ passed: "done", failed: "failed", missing: "waiting", 
 
 /**
  * input: { key, repoUrl, branch, base, ai, pr?, facts?, decision? }
- *   pr/facts/decision are absent before the PR exists. facts = gate.gather(), decision = gate.evaluate(facts).
+ *   pr/facts/decision are absent before the PR exists. facts = facts.gather(), decision = gate.evaluate(facts).
  * returns markdown.
  */
 export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null, planned = false, releasePr = null }) {
