@@ -418,3 +418,14 @@ test("no workflow swallows a lane failure: a busy lane or an API error fails the
   const reconcile = readFileSync(new URL("../../.github/workflows/reconcile.yml", import.meta.url), "utf8");
   assert.match(reconcile, /pipe\.mjs lane due/, "reconcile wakes parked jobs whose lane is free");
 });
+
+test("the staging UI regression has its own step budget (the lane wait is outside it), and the plan warns at 70% of it", () => {
+  const src = readFileSync(new URL("../../.github/workflows/staging-deploy.yml", import.meta.url), "utf8");
+  const step = /name: UI regression \(every spec in e2e\/\)[\s\S]*?timeout-minutes: (\d+)/.exec(src);
+  assert.equal(Number(step?.[1]), capacity.MEASURED.uiStepMinutes, "the UI step's timeout is capacity's budget");
+  const job = Number(/staging:[\s\S]*?timeout-minutes: (\d+)/.exec(src)[1]);
+  assert.ok(job >= 45 + capacity.MEASURED.uiStepMinutes + 30, `the job (${job} min) holds the lane wait, the deploy and Apex besides the UI step`);
+  assert.equal(capacity.uiBudget(20).near, false, "today's 20 specs");
+  assert.equal(capacity.uiBudget(60).near, true, "60 specs: about 35 min of 45, time to shard");
+  assert.match(capacity.plan({ ui: { tests: 60 } }).advice.join(" "), /--shard/);
+});
