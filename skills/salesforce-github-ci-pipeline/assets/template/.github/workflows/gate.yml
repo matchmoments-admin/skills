@@ -30,7 +30,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' || github.event.label.name == 'ready' || github.event.review.state == 'approved' ||
       github.event.action == 'ready_for_review' || github.event.action == 'converted_to_draft'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     concurrency:
       group: gate-${{ github.event.pull_request.number || inputs.pr }}   # one decision per PR at a time
       cancel-in-progress: false

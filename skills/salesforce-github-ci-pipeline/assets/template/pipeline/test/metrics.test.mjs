@@ -259,6 +259,44 @@ test("delivery record (enterprise D): the shipped story's trail, read from GitHu
   assert.equal(cards[0][1], DELIVERY_MARK);
 });
 
+test("GitHub API use (#422, review of #434): calls per workflow run and by workflow, per token; the busiest window per token by its share of its own limit, from its real start", () => {
+  const api = (at, run, workflow, rest, graphql, win = {}, app = {}) => ({ at, kind: "api", run, workflow, command: "x", rest, graphql, ...win, ...app });
+  const w = (coreUsed, coreReset, coreLimit = 1000) => ({ coreUsed, coreLimit, coreReset, graphqlUsed: 0, graphqlLimit: 1000 });
+  const log = [
+    // ci run 1: three pipe processes, counted exactly = 30 REST, 4 GraphQL; ci run 2: 50 REST
+    api("2026-10-30T10:05:00Z", "1", "ci", 10, 2, w(300, "2026-10-30T10:37:00Z")),
+    api("2026-10-30T10:06:00Z", "1", "ci", 5, 0, w(305, "2026-10-30T10:37:00Z")),
+    api("2026-10-30T10:20:00Z", "1", "ci", 15, 2, w(420, "2026-10-30T10:37:00Z")),
+    api("2026-10-30T12:10:00Z", "2", "ci", 50, 0, w(610, "2026-10-30T12:37:00Z")),
+    // an ai-review run: 22 REST, 6 GraphQL, and 3 GraphQL on the App's token (the board)
+    api("2026-10-30T12:30:00Z", "3", "ai-review", 22, 6, w(640, "2026-10-30T12:37:00Z"), { appRest: 0, appGraphql: 3 }),
+    // a run whose rate_limit read failed: counted, no window
+    api("2026-10-30T13:00:00Z", "4", "gate", 8, 1),
+    { at: "2026-10-30T12:31:00Z", kind: "gate", pr: 9, mergeable: true, reasons: [] },
+  ];
+  const s = events.summarize(log, { days: 7 }).api;
+  assert.equal(s.runs, 4);
+  assert.deepEqual(s.perRun, { medianRest: 26, maxRest: 50, medianGraphql: 2.5, medianAppRest: 0, medianAppGraphql: 3 });
+  assert.deepEqual(s.byWorkflow.map((x) => [x.workflow, x.runs, x.medianRest, x.maxRest, x.medianGraphql]), [["ci", 2, 40, 50, 2], ["ai-review", 1, 22, 22, 6], ["gate", 1, 8, 8, 1]]);
+  // the window that reset at 12:37 started at 11:37 (not "11:00"); 640 of 1,000
+  assert.deepEqual(s.busiest, { actions: { start: "2026-10-30T11:37Z", used: 640, limit: 1000, percent: 64 }, app: null });
+  const md = events.toMarkdown(events.summarize(log, { days: 7 }));
+  for (const want of ["| ci | 2 | 40 | 50 | 2 |", "| ai-review | 1 | 22 | 22 | 6 |", "median 26 REST requests and 2.5 GraphQL points per run (most 50)",
+    "Busiest hour on the Actions token: from 2026-10-30T11:37Z, 640 of 1000 REST requests (64%)", "On the pipeline App's token: median 0 REST and 3 GraphQL per run"])
+    assert.ok(md.includes(want), want);
+  assert.doesNotMatch(md, /null|NaN|undefined/);
+
+  // per token, by share of its own limit: the App's 2,600 of 5,000 (52%) is busier than 400 of 1,000? no: 40% < 52%
+  const both = [api("2026-10-30T10:05:00Z", "1", "ci", 1, 0, w(400, "2026-10-30T10:37:00Z"), { appRest: 9, appGraphql: 0, appCoreUsed: 2600, appCoreLimit: 5000, appCoreReset: "2026-10-30T10:50:00Z" })];
+  const b = events.summarize(both, { days: 7 }).api.busiest;
+  assert.deepEqual(b, { actions: { start: "2026-10-30T09:37Z", used: 400, limit: 1000, percent: 40 }, app: { start: "2026-10-30T09:50Z", used: 2600, limit: 5000, percent: 52 } });
+  // a window with no limit recorded: its count, never "null%"
+  const nolimit = events.toMarkdown(events.summarize([api("2026-10-30T10:05:00Z", "1", "ci", 3, 0, { coreUsed: 77, coreReset: "2026-10-30T10:37:00Z" })], { days: 7 }));
+  assert.match(nolimit, /from 2026-10-30T09:37Z, 77 REST requests\./);
+  assert.doesNotMatch(nolimit, /null|NaN/);
+  assert.match(events.toMarkdown(events.summarize([], { days: 7 })), /GitHub API: nothing measured yet/);
+});
+
 test("every event a module records is a known kind, and no payload sets the envelope's own fields (shape was never logged; Jev's run was overwritten)", async () => {
   const { isKind, RESERVED, event } = await import("../src/events.mjs");
   const { readdirSync } = await import("node:fs");

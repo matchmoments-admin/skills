@@ -12,13 +12,14 @@ Its constants are measured on a real run (`MEASURED` in `pipeline/src/capacity.m
 org after the tracer story.
 
 Flags: `--devs`, `--stories` (per sprint), `--sprint-days`, `--in-flight`, `--test-seconds`, `--in-use` (active scratch
-orgs held by other projects), `--uat-sandbox`.
+orgs held by other projects; never this pipeline's own staging, UAT or story orgs, which it counts itself),
+`--uat-sandbox`.
 
 ## What limits this pipeline, in order
 
 | Limit | Where it bites | Developer Edition Dev Hub (a lab) | Enterprise company |
 |---|---|---|---|
-| **Active scratch orgs** | stories in flight: one org each, plus staging (and UAT's stand-in at release) | 3: one story at a time beside staging | Enterprise 40, Unlimited and Performance 100 (more can be bought) |
+| **Active scratch orgs** | stories in flight: one org each, plus staging, plus UAT's scratch stand-in while a release is in UAT (the next stories overlap it) | 3: two stories beside staging between releases, one while a release is in UAT | Enterprise 40, Unlimited and Performance 100 (more can be bought) |
 | **Daily scratch orgs** | new stories and rebuilds a day | 6 | 80 / 200 |
 | **The staging regression** | every Apex and Flow test after each merge (about 6 min); the UI regression, one browser, once per release (`UI_REGRESSION`) | the UI part about 22 min with 38 tests | grows about 1.5 min with every story's spec |
 | **Runner minutes** | everything | a small budget with a hard stop | billed on the company's plan |
@@ -30,8 +31,9 @@ orgs held by other projects), `--uat-sandbox`.
 - **Move the Dev Hub to an Enterprise or Unlimited org** before adding people. On a Developer Edition Dev Hub, the second
   story waits for a slot (`waiting:org`). Decide early, because the Dev Hub holds the connected app, the shape and the
   snapshots.
-- **UAT on a sandbox:** `SF_UAT_USERNAME` (and `SF_UAT_LOGIN_URL`). This frees a scratch org at every release, and
-  testers keep their sandbox logins.
+- **UAT on a sandbox:** `SF_UAT_USERNAME` (and `SF_UAT_LOGIN_URL`). This frees the slot UAT's scratch stand-in holds
+  while a release is in UAT, when the next sprint's stories are already in flight, and testers keep their sandbox
+  logins. `pipe org capacity` says how many stories wait for that slot.
 - **Keep the UI suite lean.** The UI regression runs every spec once per release, one browser at a time (each story's
   own spec already ran in its org before it merged): a Lightning page is CPU-heavy, and more
   browsers on one runner time out (#268). Keep each story's spec to its acceptance criteria, and retire specs whose

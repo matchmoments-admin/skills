@@ -108,6 +108,86 @@ test("a light card refresh (the Now line while tests run) reuses the facts: two 
   assert.deepEqual(edits, ["issue:84", "pr:90", "issue:84", "pr:90", "issue:84", "pr:90"]);
 });
 
+test("a Now update in a new process edits the Now line of the card already there: no facts read, the same card a full refresh writes (#427)", async () => {
+  const { world } = await import("./sim.mjs");
+  const w = world();
+  w.story("84");
+  w.push("issue-84", ["force-app/main/default/classes/A.cls"]);
+  w.pr(90, { head: "issue-84", base: "main" });
+  const bodies = { issue: {}, pr: {} };
+  const t = (who) => ({ comments: async () => [], prior: async (k) => bodies[who][k] || "", card: async (k, body) => { bodies[who][k] = body; } });
+  const cards = () => storyCards({ host: w.host(), tracker: t("issue"), prTracker: t("pr"), slack: null });
+  const factsRead = (from) => w.state.calls.slice(from).filter((c) => /pr view|statuses|check-runs|compare|reviews/.test(c));
+  const ci = { state: "running", what: "CI is testing", url: "https://github.com/o/r/actions/runs/1" };
+
+  // what a full refresh with this activity writes
+  await cards().refresh("84", { activity: ci });
+  const want = bodies.issue["84"];
+  await cards().refresh("84");   // the card as the last full refresh left it (no Now line)
+  assert.doesNotMatch(bodies.issue["84"], /Now:/);
+
+  const from = w.state.calls.length;
+  await cards().refresh("84", { light: true, activity: ci });
+  assert.deepEqual(factsRead(from), [], "no facts read: only the story's PR is looked up");
+  assert.equal(bodies.issue["84"], want, "the story card equals the full refresh's");
+  assert.equal(bodies.pr[90], want, "and the same card on the PR");
+
+  // a Now line replaces the one there (never two)
+  await cards().refresh("84", { light: true, activity: { ...ci, what: "Claude is reviewing" } });
+  assert.equal((bodies.issue["84"].match(/\*\*(Now|Failed):\*\*/g) || []).length, 1);
+  assert.match(bodies.issue["84"], /Now:\*\* Claude is reviewing/);
+
+  // a failure is always the full card (its rows, Next and retry boxes), even when asked for light (review of #438)
+  const failed = { state: "failed", what: "CI (deploy or tests)", url: "u2", retry: "fix and push" };
+  let at = w.state.calls.length;
+  await cards().refresh("84", { light: true, activity: failed });
+  assert.ok(factsRead(at).length > 0, "--failed reads the facts");
+  const fullFailed = bodies.issue["84"];
+  await cards().refresh("84", { activity: failed });
+  assert.equal(fullFailed, bodies.issue["84"]);
+
+  // a new push: the card describes the previous head, so it is the full card for the new one (its rows are not the
+  // old commit's ✅ and "Approve here")
+  w.push("issue-84", ["force-app/main/default/classes/B.cls"]);
+  at = w.state.calls.length;
+  await cards().refresh("84", { light: true, activity: ci });
+  assert.ok(factsRead(at).length > 0, "the new head's facts are read");
+  assert.match(bodies.issue["84"], new RegExp(`pipeline:head ${w.tip("issue-84")} OPEN`), "the card records the head it describes");
+  at = w.state.calls.length;
+  await cards().refresh("84", { light: true, activity: ci });
+  assert.deepEqual(factsRead(at), [], "then light again on the same head");
+
+  // the PR changed state since the card (merged, closed): the full card, which also moves the board
+  w.merge(90);
+  at = w.state.calls.length;
+  await cards().refresh("84", { light: true, activity: ci });
+  assert.ok(factsRead(at).length > 0, "a merged PR gets the full card");
+
+  // no card yet (or one without a Next line, a Jira tracker without prior): the full refresh, as before
+  delete bodies.issue["84"];
+  const again = w.state.calls.length;
+  await cards().refresh("84", { light: true, activity: ci });
+  assert.ok(factsRead(again).length > 0, "a story with no card gets the full one");
+});
+
+test("a light Now update with Slack set reads the card once: the card before is passed to the notice (review of #438)", async () => {
+  const { world } = await import("./sim.mjs");
+  const w = world();
+  w.story("84");
+  w.push("issue-84", ["force-app/main/default/classes/A.cls"]);
+  w.pr(90, { head: "issue-84", base: "main" });
+  const bodies = {};
+  let priors = 0;
+  const tracker = { comments: async () => [], story: async () => ({ title: "Story 84" }), prior: async (k) => { priors++; return bodies[k] || ""; }, card: async (k, body) => { bodies[k] = body; } };
+  const sent = [];
+  const cards = () => storyCards({ host: w.host(), tracker, prTracker: { ...tracker, card: async () => {} }, slack: async (m) => sent.push(m) });
+  await cards().refresh("84");
+  priors = 0;
+  await cards().refresh("84", { light: true, activity: { state: "running", what: "CI is testing", url: "u" } });
+  assert.equal(priors, 1, "the prior card is read once");
+  assert.match(bodies["84"], /Now:\*\* CI is testing/);
+});
+
 test("release card: what ships, each stage, what to do next, and only the boxes that make sense", () => {
   const pr = { number: 110, state: "OPEN", headRefName: "release/2026-w45", baseRefName: "main", headRefOid: "h" };
   const run = (name, conclusion) => ({ name, conclusion, status: "completed", started_at: "2026-10-05T10:00:00Z" });

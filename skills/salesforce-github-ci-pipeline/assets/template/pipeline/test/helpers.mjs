@@ -178,3 +178,17 @@ export const wfSteps = async (file, job) => {
 export const pipeSources = () => [new URL("../bin/pipe.mjs", import.meta.url), ...readdirSync(new URL("../bin/commands/", import.meta.url)).map((f) => new URL(`../bin/commands/${f}`, import.meta.url))].map((u) => readFileSync(u, "utf8")).join("\n");
 
 export const st_ = (over = {}) => ({ route: "feature", review: { state: "missing" }, ui: { state: "missing" }, uat: { state: "missing" }, checks: { [names.CHECKS.apex]: { state: "passed" } }, ...over });
+
+/**
+ * Run a Playwright check suite (pipeline/test/<name>/playwright.config.ts: local pages, no org) in a real browser, or
+ * skip the node test when no Playwright Chromium is installed (CI installs it in static checks when a helper changed).
+ * The exit code decides; on a failure Playwright's own output is in the assertion. Returns its output, or null if skipped.
+ */
+export async function playwrightCheck(t, config, { env = {}, timeout = 180_000 } = {}) {
+  const { chromium } = await import("@playwright/test");
+  if (!existsSync(chromium.executablePath())) { t.skip("no Playwright Chromium here (CI installs it in static checks)"); return null; }
+  const { spawnSync } = await import("node:child_process");
+  const r = spawnSync("npx", ["playwright", "test", "-c", config], { encoding: "utf8", timeout, env: { ...process.env, ...env }, cwd: new URL("../../", import.meta.url).pathname });
+  if (r.status !== 0) assert.fail(`playwright -c ${config} ${r.error ? `did not finish (${r.error.message})` : `exited ${r.status}`}:\n${r.stdout}\n${r.stderr}`);
+  return r.stdout;
+}

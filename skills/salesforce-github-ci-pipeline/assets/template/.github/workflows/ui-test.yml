@@ -36,7 +36,7 @@ env:
 jobs:
   route:
     if: github.event_name == 'pull_request_target' && (github.event.label.name == 'ai:test' || github.event.label.name == 'test')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 2
     env:
       GH_TOKEN: ${{ github.token }}
@@ -296,7 +296,7 @@ jobs:
     # Fresh runner, main's code only: triage (optional), commit status, labels, CI and gate follow-ups.
     needs: [write, run]
     if: always() && needs.run.result != 'skipped' && needs.run.outputs.head != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}

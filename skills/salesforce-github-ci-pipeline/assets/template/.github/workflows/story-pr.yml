@@ -24,7 +24,7 @@ jobs:
     # A push by the pipeline's own App (Claude's build or fix) to a branch that already exists has its PR already:
     # no runner for it. A new branch, a person's push or a dispatch always runs.
     if: github.event_name == 'workflow_dispatch' || github.event.created || github.event.sender.type != 'Bot'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 5
     concurrency:
       group: story-pr-${{ inputs.branch || github.ref_name }}

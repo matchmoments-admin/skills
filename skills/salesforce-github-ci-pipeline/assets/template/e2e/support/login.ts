@@ -42,11 +42,14 @@ export async function login(page: Page): Promise<void> {
   // A front-door login occasionally lands on Salesforce's login page ("logged out due to
   // inactivity") in production-shaped orgs; one retry with a fresh URL clears it.
   for (let attempt = 1; ; attempt++) {
-    await page.goto(frontDoorUrl());
+    const url = frontDoorUrl();
+    startSession(page, url);
+    await page.goto(url);
     try {
       await expect(page.getByRole("navigation").first()).toBeVisible({
         timeout: attempt === 1 ? 30_000 : 60_000
       });
+      await settleSetupProbe(page);
       return;
     } catch (e) {
       if (attempt >= 2 || !process.env.SCRATCH_ALIAS) throw e;
@@ -55,19 +58,100 @@ export async function login(page: Page): Promise<void> {
 }
 
 /**
+ * Salesforce's Setup domain (<my domain>.my.salesforce-setup.com). The front door lands on Setup Home, and a probe then
+ * moves the page there (?SetupDomainProbePassed=true&SetupDomainReload=1). That host serves only Setup: a Lightning path
+ * asked of it ends on Setup Home (release 2027-w03, run 41001925070: issue-1 and story-143, which built the URL from
+ * page.url() once the probe had moved the page). So openPath resolves every path against the org's front-door host
+ * (where the session cookie is; it sends Lightning paths on to Lightning itself), saved at login.
+ */
+const origins = new WeakMap<Page, string>();
+/** Pages past the probe (it passed, or a navigation stayed off Setup): openPath needs no late watch for them. */
+const settled = new WeakSet<Page>();
+const PROBE_PARAMS = ["SetupDomainProbePassed", "SetupDomainReload"];
+/** Upper bound on waiting out the probe; a URL unchanged for STABLE_MS (PRE_PROBE_MS before the probe was seen) is settled. */
+const PROBE_MS = 10_000;
+const STABLE_MS = 500;
+const PRE_PROBE_MS = 3_000;
+/** How long openPath watches a loaded page for a late move to Setup, once per session until one stays. */
+const LATE_MS = 3_000;
+
+const isSetupPath = (pathname: string) => pathname.startsWith("/lightning/setup/");
+const probeQuery = (u: URL) => PROBE_PARAMS.some((p) => u.searchParams.has(p));
+
+/** A new session on this page (login, "Log in as"): its origin, and nothing known yet about the probe. */
+function startSession(page: Page, url: string): void {
+  origins.set(page, new URL(url).origin);
+  settled.delete(page);
+}
+
+/**
+ * True when `path` (not a Setup page) was asked for and the page is where the probe sends it: Setup Home, or a URL with
+ * the probe's query. A page Salesforce shows in Setup (a permission set record, Flow Builder) is not a bounce.
+ */
+export function bouncedToSetup(current: string, path: string): boolean {
+  if (isSetupPath(new URL(path, current).pathname)) return false;
+  const at = new URL(current);
+  return at.pathname === "/lightning/setup/SetupOneHome/home" || probeQuery(at);
+}
+
+/**
+ * Wait out the Setup-domain probe, so it cannot move the page under the spec's next step: on a Setup page, until the
+ * URL stays the same for STABLE_MS (PRE_PROBE_MS while the probe may still come), at most PROBE_MS.
+ */
+async function settleSetupProbe(page: Page): Promise<void> {
+  const end = Date.now() + PROBE_MS;
+  for (;;) {
+    const at = page.url();
+    if (probeQuery(new URL(at))) settled.add(page); // the probe has run
+    if (!isSetupPath(new URL(at).pathname)) return;
+    const left = end - Date.now();
+    if (left <= 0) return;
+    const window = settled.has(page) ? STABLE_MS : PRE_PROBE_MS;
+    const moved = await page
+      .waitForURL((u) => u.toString() !== at, { timeout: Math.min(window, left) })
+      .then(
+        () => true,
+        () => false
+      );
+    if (!moved) {
+      await page.waitForLoadState("load").catch(() => {});
+      return;
+    }
+  }
+}
+
+/**
  * Opens a Salesforce path such as "/lightning/o/Account/new" in the org you logged in to.
  * There is no Playwright baseURL (the org's domain is only known after login), so a relative
  * page.goto() fails with "Cannot navigate to invalid URL". Call login(page) first.
+ * It checks where the page landed: sent to Setup Home instead (the Setup-domain probe), it asks once more, then fails.
  */
 export async function openPath(page: Page, path: string): Promise<void> {
-  const url = new URL(path, page.url()).toString();
-  try {
-    await page.goto(url);
-  } catch (e) {
-    // Lightning can still be redirecting after login, which aborts the first navigation.
-    if (!String(e).includes("ERR_ABORTED")) throw e;
-    await page.waitForLoadState("load");
-    await page.goto(url);
+  const url = new URL(path, origins.get(page) ?? page.url()).toString();
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await page.goto(url);
+    } catch (e) {
+      // Lightning can still be redirecting after login, which aborts the first navigation.
+      if (!String(e).includes("ERR_ABORTED")) throw e;
+      await page.waitForLoadState("load");
+      await page.goto(url);
+    }
+    if (!settled.has(page)) {
+      // the probe was not seen to pass: it may still move this page once it has loaded
+      await page
+        .waitForURL((u) => bouncedToSetup(u.toString(), path), {
+          timeout: LATE_MS
+        })
+        .catch(() => {});
+      if (!bouncedToSetup(page.url(), path)) settled.add(page); // it stayed: no watch again this session
+    }
+    if (!bouncedToSetup(page.url(), path)) return;
+    if (attempt >= 2)
+      throw new Error(
+        `openPath: Salesforce sent the page to Setup (${new URL(page.url()).pathname}) instead of ${path}, twice`
+      );
+    await settleSetupProbe(page);
   }
 }
 
@@ -305,7 +389,10 @@ export async function loginAs(
         () => true,
         () => false
       );
-    if (isPersona) break;
+    if (isPersona) {
+      startSession(page, su); // the persona's session, on the classic host "Log in as" used
+      break;
+    }
     if (attempt === 2)
       throw new Error(
         `loginAs: still the admin after "Log in as" ${username} (no "Logged in as" banner)`

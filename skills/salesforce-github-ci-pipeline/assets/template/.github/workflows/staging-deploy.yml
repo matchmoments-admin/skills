@@ -128,7 +128,7 @@ jobs:
     # too, so the release card says it failed and offers a fix.
     needs: staging
     if: always() && needs.staging.result != 'skipped' && needs.staging.result != 'cancelled'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 5
     permissions:
       actions: write        # re-runs the gate if the release PR is already approved

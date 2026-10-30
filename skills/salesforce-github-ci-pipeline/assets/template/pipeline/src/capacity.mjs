@@ -14,7 +14,7 @@ export const MEASURED = {
   fixedMonthlyMinutes: 250, // janitor, snapshot refresh, baseline, metrics, CI on main
   usdPerMinute: 0.006,      // a standard 2-core Linux runner
   aiUsdPerStory: 2.5,       // Claude build, review, fix and UI test, all switches on
-  reservedOrgs: 1,          // staging holds an active scratch org all sprint; UAT's comes at release, after story orgs end
+  reservedOrgs: 1,          // staging holds an active scratch org all sprint (UAT's stand-in is counted apart: plan())
   uiWarnMinutes: 20,        // a staging UI regression longer than this is worth a look (it grows with every story)
   uiStepMinutes: 45,        // the UI regression step's own timeout in staging-deploy.yml (the lane wait is outside it)
 };
@@ -27,7 +27,8 @@ export function uiBudget(tests, m = MEASURED) {
 }
 
 /**
- * The plan for a team. devhub { activeMax, dailyMax, activeUsed (held outside the pipeline) }, team { devs,
+ * The plan for a team. devhub { activeMax, dailyMax, activeUsed (active orgs other projects hold: never this pipeline's
+ * staging, UAT or story orgs, which the plan counts itself) }, team { devs,
  * storiesPerSprint, sprintDays, inFlight }, ui { tests, testSeconds }, uatSandbox (UAT needs no scratch org), uiPolicy
  * (UI_REGRESSION: "release", the UI regression once per release; "every", on every staging run).
  * Returns { orgs, ui, cost, advice[] }. Pure.
@@ -36,10 +37,14 @@ export function plan({ devhub = {}, team = {}, ui = {}, uatSandbox = false, uiPo
   const devs = team.devs || 2, sprintDays = team.sprintDays || 10, stories = team.storiesPerSprint || devs * 3;
   const inFlight = team.inFlight || devs;
   const reserved = m.reservedOrgs + (devhub.activeUsed || 0);
-  const inFlightMax = Math.max(0, (devhub.activeMax ?? 3) - reserved);
-  const dailyNeeded = Math.ceil(inFlight / 2 + (reserved + 1) / sprintDays);   // a story org lives ~2 days; staging, UAT, snapshot per sprint
-  // at release, UAT's scratch stand-in needs a slot too (none with a UAT sandbox): story orgs are gone by then
-  const orgs = { activeMax: devhub.activeMax ?? null, dailyMax: devhub.dailyMax ?? null, inFlight, inFlightMax, activeNeeded: reserved + inFlight, atRelease: reserved + (uatSandbox ? 0 : 1), dailyNeeded };
+  // UAT's scratch stand-in holds a slot while a release is in UAT (none with a UAT sandbox), and the next sprint's stories
+  // are in flight then: they overlap (30 Oct: staging and UAT both live left one story slot of three, #418). So the
+  // stories that always fit count it; between releases one more does.
+  const uat = uatSandbox ? 0 : 1;
+  const inFlightMaxBetween = Math.max(0, (devhub.activeMax ?? 3) - reserved);
+  const inFlightMax = Math.max(0, inFlightMaxBetween - uat);
+  const dailyNeeded = Math.ceil(inFlight / 2 + (reserved + uat) / sprintDays);   // a story org lives ~2 days; staging and UAT's stand-in per sprint
+  const orgs = { activeMax: devhub.activeMax ?? null, dailyMax: devhub.dailyMax ?? null, inFlight, inFlightMax, inFlightMaxBetween, uatStandIn: uat, activeNeeded: reserved + uat + inFlight, atRelease: reserved + uat, dailyNeeded };
 
   const sec = ui.testSeconds || m.testSeconds, tests = ui.tests || 0;
   const uiOut = { tests, minutes: round((tests * sec) / 60), perStoryMinutes: round((2.5 * sec) / 60) };
@@ -53,7 +58,9 @@ export function plan({ devhub = {}, team = {}, ui = {}, uatSandbox = false, uiPo
     monthlyActionsUsd: round(monthlyMinutes * m.usdPerMinute), monthlyAiUsd: round(storiesPerMonth * m.aiUsdPerStory) };
 
   const advice = [];
-  if (inFlight > inFlightMax) advice.push(`The Dev Hub allows ${orgs.activeMax} active scratch orgs: with staging${devhub.activeUsed ? ` and ${devhub.activeUsed} held outside the pipeline` : ""} that is ${plural(inFlightMax, "story", "stories")} in flight, not ${inFlight}. Move the Dev Hub to an Enterprise or Unlimited org (far higher allowances), use a sandbox for UAT (SF_UAT_USERNAME), or keep fewer stories in flight; the rest wait in line (waiting:org).`);
+  // a bigger Dev Hub only when the team does not fit even between releases; UAT's stand-in alone is a sandbox's job
+  if (inFlight > inFlightMaxBetween) advice.push(`The Dev Hub allows ${orgs.activeMax} active scratch orgs: with staging${devhub.activeUsed ? ` and ${devhub.activeUsed} held outside the pipeline` : ""} that is ${plural(inFlightMaxBetween, "story", "stories")} in flight${uat ? ` between releases, ${inFlightMax} while a release is in UAT (its scratch stand-in takes a slot)` : ""}, not ${inFlight}. Move the Dev Hub to an Enterprise or Unlimited org (far higher allowances)${uat ? ", use a sandbox for UAT (SF_UAT_USERNAME)" : ""}, or keep fewer stories in flight; the rest wait in line (waiting:org).`);
+  else if (inFlight > inFlightMax) { const wait = inFlight - inFlightMax; advice.push(`While a release is in UAT its scratch stand-in takes a slot: ${wait} of the ${inFlight} stories ${wait === 1 ? "waits" : "wait"} (waiting:org). UAT on a sandbox (SF_UAT_USERNAME) frees it.`); }
   if (orgs.dailyMax !== null && dailyNeeded > orgs.dailyMax) advice.push(`About ${dailyNeeded} scratch orgs a day are needed and the Dev Hub allows ${orgs.dailyMax}.`);
   if (every && stories > 1) advice.push(`UI_REGRESSION=every runs the UI regression on each of the ${stories} story merges a sprint; the default (once per release) saves about ${Math.round((stories - 1) * uiOut.minutes)} min a sprint.`);
   if (uiBudget(tests, { ...m, testSeconds: sec }).near) advice.push(`The staging UI regression (about ${uiOut.minutes} min) is near its ${m.uiStepMinutes}-minute step budget: split the specs across runners (Playwright --shard, a matrix in staging-deploy.yml) before it times out.`);
@@ -97,7 +104,7 @@ export function report(p) {
   return [
     "## Pipeline capacity",
     "",
-    `- **Stories in flight:** ${p.orgs.inFlight} wanted, ${p.orgs.inFlightMax} possible (${p.orgs.activeMax ?? "?"} active scratch orgs; ${p.orgs.activeNeeded} needed with staging, ${p.orgs.atRelease} at release with UAT). About ${p.orgs.dailyNeeded} new orgs a day (allowance ${p.orgs.dailyMax ?? "?"}).`,
+    `- **Stories in flight:** ${p.orgs.inFlight} wanted, ${p.orgs.inFlightMax} possible${p.orgs.uatStandIn ? ` while a release is in UAT (${p.orgs.inFlightMaxBetween} between releases)` : ""} (${p.orgs.activeMax ?? "?"} active scratch orgs; ${p.orgs.activeNeeded} needed with staging${p.orgs.uatStandIn ? " and UAT's stand-in" : ""}, ${p.orgs.atRelease} for the release alone). About ${p.orgs.dailyNeeded} new orgs a day (allowance ${p.orgs.dailyMax ?? "?"}).`,
     `- **Staging:** about ${p.cost.mergeMinutes} min per story merge; the UI regression (${p.ui.tests} tests, about ${p.ui.minutes} min, one browser) ${p.cost.uiPolicy === "every" ? "on every merge (UI_REGRESSION=every)" : "once per release"}.`,
     `- **Cost a month:** about ${p.cost.monthlyMinutes} Actions minutes ($${p.cost.monthlyActionsUsd}) for ${p.cost.storiesPerMonth} stories when nothing fails, plus about $${p.cost.monthlyAiUsd} of Claude with every AI switch on. Failures and re-runs add to it: keep a margin.`,
     "",

@@ -22,7 +22,7 @@ jobs:
     # A story "Blocked by #N" starts only once #N has merged: otherwise nothing is created (no branch, no scratch org,
     # none of the Dev Hub's daily org allowance), the story says why, and its card offers Start again.
     if: github.event_name == 'repository_dispatch' || github.event.label.name == 'start'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 3
     env:
       GH_TOKEN: ${{ github.token }}

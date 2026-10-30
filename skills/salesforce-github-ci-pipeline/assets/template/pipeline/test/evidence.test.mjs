@@ -35,7 +35,7 @@ import * as baselineMod from "../src/baseline.mjs";
 import * as orgMod from "../src/org.mjs";
 import * as start from "../src/start.mjs";
 import * as harness from "../src/harness.mjs";
-import { fixture, open, ok, FULL_AI, withVerdicts, uiPassed, fakeSf, fakeJev, src, files, pick, repo, O, SHA, fakeRefs, fakeGitHub, scratchSkill, webp, meta, provisionSf, deliveryIo, BOT, wfSteps, pipeSources, st_, read, TREE } from "./helpers.mjs";
+import { fixture, open, ok, FULL_AI, withVerdicts, uiPassed, fakeSf, fakeJev, src, files, pick, repo, O, SHA, fakeRefs, fakeGitHub, scratchSkill, webp, meta, provisionSf, deliveryIo, BOT, wfSteps, pipeSources, st_, read, TREE, playwrightCheck } from "./helpers.mjs";
 
 test("UI evidence is behind UI_EVIDENCE: off unless exactly true, and the workflows obey it", () => {
   assert.equal(evidence.evidenceOn({}), false);
@@ -129,15 +129,12 @@ test("UI evidence storage: one commit replaces the story's folder (retrying a mo
 });
 
 test("evidence() in a real browser: boxed small WebP the trusted check accepts; no-match skips fast; retries and shared captions", async (t) => {
-  const { chromium } = await import("@playwright/test");
-  if (!existsSync(chromium.executablePath())) return t.skip("no Playwright Chromium here (CI installs it in static checks)");
-  const { execFileSync } = await import("node:child_process");
   const { mkdtempSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const dir = mkdtempSync(join(tmpdir(), "evidence-"));
   try {
-    execFileSync("npx", ["playwright", "test", "-c", "pipeline/test/evidence/playwright.config.ts"], { env: { ...process.env, EVIDENCE_DIR: dir }, stdio: "pipe", cwd: new URL("../../", import.meta.url).pathname });
+    if ((await playwrightCheck(t, "pipeline/test/evidence/playwright.config.ts", { env: { EVIDENCE_DIR: dir } })) === null) return;
     const files = readdirSync(dir).map((name) => ({ name, data: readFileSync(join(dir, name)) }));
     const { shots, rejected } = evidence.check(files);
     assert.deepEqual(rejected, [], "everything the helper writes passes the trusted check");

@@ -38,6 +38,8 @@ export const SETTINGS = [
   ["BOARD_PROJECT", "", "a GitHub Project number for the delivery board"],
   ["TRACKER", "github", "github or jira"],
   ["JIRA_BASE_URL", "", "TRACKER=jira: the Jira site (https://<site>.atlassian.net); its login is secrets JIRA_EMAIL and JIRA_API_TOKEN"],
+  ["APP_TOKEN_READS", "false", "the pipeline's GitHub reads use the pipeline App's installation token (it needs read on actions, checks, contents, issues, metadata, pull requests and statuses); writes stay on the Actions token"],
+  ["API_METER", "on", "each pipe process counts the GitHub calls it makes, per token and budget, and records them at exit (an api event; the weekly metrics); off: none"],
   ["SLACK_ACTIONS", "false", "Slack notices carry action buttons (the Slack actions Worker is set up)"],
   // UAT
   ["UAT_ENABLED", "false", "releases go to UAT and need /uat-pass"],
@@ -54,6 +56,8 @@ export const SETTINGS = [
   ["VOLUME_RECORDS", "5000", "volume records in the staging org"],
   ["ORG_RESERVE", "0", "scratch-org slots a new story org leaves free"],
   ["ORG_POOL", "0", "warm scratch orgs kept ready from the snapshot for the next stories (each holds a slot)"],
+  // runners
+  ["RUNNER_SMALL", "ubuntu-slim", "the runner of short jobs with no Salesforce CLI, agent or browser (ubuntu-latest to undo #430)"],
   // tests
   ["UI_REGRESSION", "release", "the staging UI regression: once per release, or every merge"],
   ["CI_TEST_LEVEL", "RunRelevantTests", "a story's Apex tests: RunRelevantTests or selector"],
