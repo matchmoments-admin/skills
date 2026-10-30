@@ -24,6 +24,12 @@ if [ -d "$SRC/data/seed" ]; then
     node -e 'const fs=require("fs"),f=process.argv[1],j=JSON.parse(fs.readFileSync(f,"utf8"));if(j.records){for(const r of j.records)for(const k of Object.keys(r))if(/__c$/.test(k))delete r[k];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")}' "$f"
   done
 fi
+# the baseline excludes the CI permission set make-ci-cert.sh creates (Pipeline_CI); the reference repo's own older
+# name (Lifecycle_CI) is not a new repo's
+if [ -f "$T/config/baseline.json" ]; then
+  sed -i.bak -e 's#"PermissionSet:Lifecycle_CI", ##' -e 's#; Lifecycle_CI is the same for the repo the template came from##' "$T/config/baseline.json" && rm -f "$T/config/baseline.json.bak"
+  grep -q '"PermissionSet:Pipeline_CI"' "$T/config/baseline.json" || { echo "!! config/baseline.json must exclude PermissionSet:Pipeline_CI (make-ci-cert.sh's)" >&2; exit 1; }
+fi
 # the org's business glossary is the project's own: the template starts it empty
 mkdir -p "$T/docs/org" && printf '# The Salesforce org: domain glossary\n\nThe business words specs and stories use, and what each one is in the org.\n\n| Term | Meaning | In the org |\n| --- | --- | --- |\n' > "$T/docs/org/GLOSSARY.md"
 rm -rf "$T/pipeline/test/fixtures/"*.json.tmp "$T/node_modules"

@@ -110,3 +110,45 @@ test("every gate.X, facts.X and journey.X the commands call exists (a moved land
     }
   }
 });
+
+const pipelineSkill = new URL("../../.claude/skills/salesforce-github-ci-pipeline/", import.meta.url);
+test("the skill's bootstrap makes a git repo and vendors FFLib at the commits this repo pins (docs/vendor.md), unless --no-fflib", { skip: !existsSync(new URL("assets/template/pipeline", pipelineSkill)) && "the pipeline skill is not vendored here" }, async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, chmodSync, mkdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const pins = Object.fromEntries([...readFileSync(new URL("../../docs/vendor.md", import.meta.url), "utf8").matchAll(/^\| `(fflib-apex-[a-z]+)` \| (\S+) \| `([0-9a-f]{40})` \| (.+?) \|/gm)].map((m) => [m[1], { url: m[2], sha: m[3], dirs: m[4].replace(/`/g, "").split(" ") }]));
+  assert.deepEqual(Object.keys(pins).sort(), ["fflib-apex-common", "fflib-apex-mocks"]);
+  // a fake git: clone makes the upstream folders, checkout and rev-parse answer as git would; every call is logged
+  const bin = mkdtempSync(`${tmpdir()}/boot-bin-`);
+  writeFileSync(`${bin}/git`, `#!/usr/bin/env node
+const a = process.argv.slice(2), fs = require("fs"), path = require("path");
+fs.appendFileSync(process.env.FAKE_GIT_LOG, a.join(" ") + "\\n");
+const C = a[0] === "-C" ? a[1] : process.cwd(), rest = a[0] === "-C" ? a.slice(2) : a;
+if (rest[0] === "init") { fs.mkdirSync(path.join(C, ".git"), { recursive: true }); process.exit(0); }
+if (rest[0] === "rev-parse" && rest[1] === "--show-toplevel") { let d = C; while (!fs.existsSync(path.join(d, ".git"))) { if (d === "/") process.exit(128); d = path.dirname(d); } console.log(d); process.exit(0); }
+if (rest[0] === "rev-parse" && rest[1] === "--is-inside-work-tree") { let d = C; while (!fs.existsSync(path.join(d, ".git"))) { if (d === "/") process.exit(128); d = path.dirname(d); } console.log("true"); process.exit(0); }
+if (rest[0] === "clone") { const dest = rest.at(-1); for (const d of JSON.parse(process.env.FAKE_DIRS)) { fs.mkdirSync(path.join(dest, d), { recursive: true }); fs.writeFileSync(path.join(dest, d, "x.cls"), "x"); } fs.writeFileSync(path.join(dest, ".url"), rest.at(-2)); process.exit(0); }
+if (rest[0] === "checkout") { fs.writeFileSync(path.join(C, ".sha"), rest.at(-1)); process.exit(0); }
+if (rest[0] === "rev-parse" && rest[1] === "HEAD") { console.log(fs.readFileSync(path.join(C, ".sha"), "utf8")); process.exit(0); }
+process.exit(0);
+`);
+  chmodSync(`${bin}/git`, 0o755);
+  const run = (target, ...flags) => spawnSync("bash", [new URL("scripts/bootstrap.sh", pipelineSkill).pathname, target, "--owner", "Acme-Co", "--project", "acme-sf", "--no-test", ...flags], { encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_GIT_LOG: `${bin}/log`, FAKE_DIRS: JSON.stringify(Object.values(pins).flatMap((p) => p.dirs)) } });
+  const t = mkdtempSync(`${tmpdir()}/boot-`);
+  const r = run(`${t}/acme-sf`);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const log = readFileSync(`${bin}/log`, "utf8");
+  assert.match(log, /\binit -q -b main\b/,"a new directory becomes a git repository (vendor.sh and the first push need one)");
+  const vendor = readFileSync(`${t}/acme-sf/docs/vendor.md`, "utf8");
+  for (const [name, p] of Object.entries(pins)) {
+    assert.match(log, new RegExp(`checkout -q ${p.sha}`), `${name} at this repo's commit`);
+    assert.ok(vendor.includes(`| \`${name}\` | ${p.url} | \`${p.sha}\` |`), `${name}'s row in the new repo's docs/vendor.md`);
+    for (const d of p.dirs) assert.ok(existsSync(`${t}/acme-sf/force-app/vendor/${name}/${d.split("/").pop()}/x.cls`), `${name}/${d}`);
+  }
+  assert.match(r.stdout, /PROD_TEST_LEVEL=RunLocalTests/, "says why production validation needs RunLocalTests with FFLib vendored");
+  mkdirSync(`${t}/bare`);
+  const skip = run(`${t}/bare`, "--no-fflib");
+  assert.equal(skip.status, 0, skip.stdout + skip.stderr);
+  assert.ok(!existsSync(`${t}/bare/force-app/vendor`), "--no-fflib vendors nothing");
+});

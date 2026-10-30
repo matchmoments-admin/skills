@@ -24,9 +24,9 @@
   "folders": { "Report": "ReportFolder", "Dashboard": "DashboardFolder", "EmailTemplate": "EmailFolder" },
   "exclude": [
     "ConnectedApp", "ExternalClientApplication", "Certificate", "AuthProvider", "Profile",
-    "PermissionSet:Lifecycle_CI", "PermissionSet:sfdcInternalInt__*", "PermissionSet:X00e*",
+    "PermissionSet:Pipeline_CI", "PermissionSet:sfdcInternalInt__*", "PermissionSet:X00e*",
     "Flow:sfdc_default_*",
     "Group:AllInternalUsers", "Group:AllPartnerUsers", "Group:AllCustomerPortal*"
   ],
-  "_exclude_note": "Type, or Type:Name with * wildcards. Lifecycle_CI is the pipeline's own CI permission set (devhub-setup); add your org's own exclusions here."
+  "_exclude_note": "Type, or Type:Name with * wildcards. Pipeline_CI is the pipeline's own CI permission set (devhub-setup, written by the skill's make-ci-cert.sh). Add your org's own exclusions here."
 }

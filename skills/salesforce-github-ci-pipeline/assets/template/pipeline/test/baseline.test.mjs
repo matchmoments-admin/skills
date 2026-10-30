@@ -45,7 +45,7 @@ test("baseline: all of production, minus the managed, the platform's own and exc
     CustomField: [m("Account.SLA__c"), m("Incident.Old__c", { lastModifiedDate: "2026-09-20T00:30:00Z" }), m("Timesheet__c.Hours__c", { lastModifiedDate: "2026-09-20T00:30:00Z" })],
     Layout: [m("Account-Account Layout"), m("Case-Case Layout", { lastModifiedByName: "Salesforce, Inc." })],
     ReportType: [m("Program_sfdcSESv60", { lastModifiedByName: "Salesforce, Inc." }), m("Opps_with_Accounts")],
-    PermissionSet: [m("Lifecycle_CI"), m("Timesheet_User")],
+    PermissionSet: [m("Pipeline_CI"), m("Timesheet_User")],   // Pipeline_CI: the CI permission set the skill's make-ci-cert.sh creates
     Flow: [m("sfdc_default_ReportExport_Protection_Flow"), m("Weather_Check")],
   }, { config, orgCreated: "2026-09-20T00:00:00Z" });
   assert.deepEqual(manifest, {
@@ -55,6 +55,8 @@ test("baseline: all of production, minus the managed, the platform's own and exc
     ReportType: ["Opps_with_Accounts"], PermissionSet: ["Timesheet_User"], Flow: ["Weather_Check"],
   }, "standard objects come only through their children; standard-object children only when a person made them after the org's setup");
   assert.match(baselineMod.packageXml({ Flow: ["Weather_Check"] }), /<members>Weather_Check<\/members>\n    <name>Flow<\/name>/);
+  const cert = new URL("../../.claude/skills/salesforce-github-ci-pipeline/scripts/make-ci-cert.sh", import.meta.url);
+  if (readdirSync(new URL("../../.claude/skills/", import.meta.url)).includes("salesforce-github-ci-pipeline")) assert.match(readFileSync(cert, "utf8"), /permissionsets\/Pipeline_CI\.permissionset-meta\.xml/, "the CI permission set the baseline excludes is the one make-ci-cert.sh writes");
 
   const dash = baselineMod.sanitize("x.dashboard-meta.xml", "<Dashboard><dashboardType>SpecifiedUser</dashboardType>\n<runningUser>admin@prod.com</runningUser></Dashboard>");
   assert.doesNotMatch(dash, /admin@prod/); assert.match(dash, /<dashboardType>LoggedInUser<\/dashboardType>/);
