@@ -506,6 +506,26 @@ test("claude-agent hands claude-code-action its prompt and token (#436's merge c
   for (const [k, v] of Object.entries(step.env)) assert.ok(!/\bwith:\s*$/.test(String(v)), `env ${k} swallowed a with: key`);
 });
 
+test("the agent guard fails a run that never started: claude-code-action skipping reports success with no result (stories #444, #445 on 30 Oct)", async () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const { execFileSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const action = yaml.load(readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8"));
+  const script = action.runs.steps.find((s) => /^Did the agent finish/.test(s.name || "")).run.replace(/\$\{\{\s*steps\.rules\.outputs\.(\w+)\s*\}\}/g, (_, k) => ({ turns: "60", turnLimitOk: "true" })[k] ?? "");
+  const dir = mkdtempSync(`${tmpdir()}/guard-`);
+  const run = (OUTCOME, transcript) => {
+    const OUT = `${dir}/out-${Math.random()}.json`;
+    if (transcript !== undefined) writeFileSync(OUT, JSON.stringify(transcript));
+    try { execFileSync("bash", ["-c", script], { env: { ...process.env, OUTCOME, OUT }, stdio: "pipe" }); return 0; } catch (e) { return e.status; }
+  };
+  assert.equal(run("success", [{ type: "result", subtype: "success", is_error: false }]), 0, "a finished run passes");
+  assert.equal(run("success", undefined), 1, "success with no transcript (the action skipped) fails");
+  assert.equal(run("success", [{ type: "system" }]), 1, "success with no result fails");
+  assert.equal(run("failure", [{ type: "result", subtype: "error_max_turns", is_error: true }]), 0, "the turn cap with turnLimitOk still passes");
+  assert.equal(run("failure", [{ type: "result", subtype: "error_during_execution", is_error: true }]), 1, "an error result fails");
+});
+
 test("no workflow swallows a lane failure: a busy lane or an API error fails the step, never deploys into a held org (B1, 28 Oct)", () => {
   for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml"))) {
     const src = readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8");

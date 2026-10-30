@@ -94,7 +94,10 @@ runs:
         OUTCOME: ${{ steps.claude.outcome }}
         OUT: ${{ runner.temp }}/claude-execution-output.json
       run: |
-        [ "$OUTCOME" = success ] && exit 0
+        # a skipped action (bad inputs: "No trigger found") also reports success, with no result: that is not a finished run
+        HAS=$( [ -s "$OUT" ] && jq -r '[.[] | select(.type == "result")] | length' "$OUT" 2>/dev/null || echo 0)
+        if [ "$OUTCOME" = success ] && [ "${HAS:-0}" -gt 0 ]; then exit 0; fi
+        if [ "$OUTCOME" = success ]; then echo "::error::The agent step reported success but never ran (no result in its transcript): check claude-code-action's inputs"; exit 1; fi
         # the action fails a run that ended with a success result after more turns than --max-turns (story #143 took
         # 69 of 60 and opened its PR); that is a finished run. Anything else (an error result, no result) still fails.
         R=$( [ -s "$OUT" ] && jq -r '[.[] | select(.type == "result")] | last | "\(.subtype // "") \(.is_error | tostring)"' "$OUT" 2>/dev/null || echo "")
