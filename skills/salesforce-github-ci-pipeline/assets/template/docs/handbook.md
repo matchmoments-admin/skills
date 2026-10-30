@@ -178,7 +178,7 @@ who does each step for any combination.
 | `VOLUME_RECORDS` | volume records (accounts and opportunities) loaded into the staging org | 5000 |
 | `SF_UAT_LOGIN_URL` | the UAT sandbox's login URL, with the secret `SF_UAT_USERNAME` (UAT on a sandbox, not a scratch org) | `https://test.salesforce.com` |
 | `TRACKER` | `jira`: stories come from Jira (the skill's `references/jira.md`) | `github`: GitHub Issues |
-| `JIRA_BASE_URL` | with `TRACKER=jira`, the Jira site (`https://<site>.atlassian.net`); its login is the secrets `JIRA_EMAIL` and `JIRA_API_TOKEN`, which every workflow that runs `pipe` passes (never to an agent's step) | empty: no Jira |
+| `JIRA_BASE_URL` | with `TRACKER=jira`, the Jira site (`https://<site>.atlassian.net`); its login is the secrets `JIRA_EMAIL` and `JIRA_API_TOKEN`, passed only to the steps that run main's `pipe` commands using the tracker (never a job, an agent or the checkout's code; a test checks) | empty: no Jira |
 | `COVERAGE_MIN` (not AI) | the coverage (percent) each Apex class or trigger a change touches must reach in CI; vendored classes are exempt, and the repo's code as a whole keeps a 75% floor ([`docs/agents/apex-testing.md`](agents/apex-testing.md)) | 85 |
 | `FLOW_COVERAGE_MIN` (not AI) | a minimum Flow coverage (percent) a story's Apex tests must reach | 0: reported, not enforced |
 | `UI_REGRESSION` | `every`: the staging UI regression runs after every merge into the sprint (the way it was before #273) | `release`: once per release, when the release PR opens |

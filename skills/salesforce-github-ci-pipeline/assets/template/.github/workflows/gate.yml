@@ -25,8 +25,6 @@ permissions:
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
-  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}           # TRACKER=jira: the tracker's login (empty when unset); JIRA_BASE_URL is a setting
-  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
 jobs:
   decide:
     if: >-
@@ -57,6 +55,8 @@ jobs:
       - name: Decide (and the card)
         id: gate
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}   # the board, when BOARD_PROJECT is set
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: |
@@ -121,6 +121,8 @@ jobs:
       - name: The card says what the gate is doing now
         if: needs.decide.outputs.story != '' || needs.decide.outputs.route == 'release'
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node pipeline/bin/pipe.mjs pr card "$PR" --now "the gate is ${{ needs.decide.outputs.validate == 'true' && 'validating against production (check-only, the relevant tests), then merging' || 'merging' }}"
       - name: Validate against production (check-only, all tests)
@@ -128,6 +130,8 @@ jobs:
         if: needs.decide.outputs.validate == 'true'
         working-directory: candidate
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           VALIDATE_SHA: ${{ needs.decide.outputs.head }}   # the live "Production validation" check lands on the PR
           DELETIONS_FROM: ${{ steps.cand.outputs.since }}  # components removed since the previous release
@@ -164,6 +168,8 @@ jobs:
         run: node pipeline/bin/pipe.mjs status set pipeline/approval success "$HEAD_SHA" "$APPROVAL" --pr "$PR"
       - name: Follow-ups (start the next workflows first; org cleanup cannot fail the merge)
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           GH_TOKEN: ${{ github.token }}

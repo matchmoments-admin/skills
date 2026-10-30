@@ -144,27 +144,91 @@ test("every workflow passes every repository variable in one line, and lists no 
   }
 });
 
-test("TRACKER=jira needs no workflow edits: every workflow that runs pipe passes the Jira login, no agent sees it, release-cut has its Jira trigger", () => {
+/** The pipe commands that reach the tracker: their body names the tracker or the cards, or a helper that does (any
+ * depth, followed to a fixpoint). Read from the source, so a new command that refreshes a card is found by itself. */
+function trackerCommands() {
+  const files = ["../bin/pipe.mjs", "../bin/commands/org.mjs", "../bin/commands/eval.mjs"].map((f) => readFileSync(new URL(f, import.meta.url), "utf8"));
+  const blocks = (text, re) => {   // a declaration and the lines under it, until one indented no deeper
+    const lines = text.split("\n"), out = [];
+    lines.forEach((l, i) => {
+      const m = l.match(re); if (!m) return;
+      const ind = l.match(/^ */)[0].length; let j = i + 1;
+      while (j < lines.length && (lines[j].trim() === "" || lines[j].match(/^ */)[0].length > ind || /^\s*[}\])]/.test(lines[j]))) j++;
+      out.push([m[1], lines.slice(i, j).join("\n")]);
+    });
+    return out;
+  };
+  const helpers = files.flatMap((t) => [...blocks(t, /^(?:export )?(?:const|let|async function|function) ([A-Za-z_$][\w$]*)\b/), ...blocks(t, /^\s+(?:async )?function ([A-Za-z_$][\w$]*)\b/)])
+    .filter(([n]) => !["commands", "run"].includes(n) && !/Commands$/.test(n));
+  const tainted = new Set(["tracker", "cards"]), hit = (b) => [...tainted].some((t) => new RegExp(`\\b${t}\\b`).test(b));
+  for (let more = true; more; ) { more = false; for (const [n, b] of helpers) if (!tainted.has(n) && hit(b)) { tainted.add(n); more = true; } }
+  return new Set(files.flatMap((t) => blocks(t, /^  "([a-z-]+ [a-z-]*)": /)).filter(([, b]) => hit(b)).map(([k]) => k.trim()));
+}
+const NO_SUB = ["context", "settings", "metrics", "act", "improve", "reconcile", "next"];   // pipe.mjs: one-word commands
+const pipeCalls = (run) => [...String(run || "").matchAll(/(\S*)pipeline\/bin\/pipe\.mjs ([a-z-]+)(?: ([a-z-]+))?/g)].map((m) => ({ path: m[1], cmd: NO_SUB.includes(m[2]) ? m[2] : `${m[2]} ${m[3] || ""}`.trim() }));
+// code the checkout controls: the repo's npm scripts and packages, its Playwright specs, an AI agent
+const RUNS_CHECKOUT_CODE = /\bnpm (ci|run|test|exec)\b|\bnpx\b|playwright test|\bsfdx-lwc-jest\b/;
+const JIRA = { JIRA_EMAIL: "${{ secrets.JIRA_EMAIL }}", JIRA_API_TOKEN: "${{ secrets.JIRA_API_TOKEN }}" };
+
+test("the Jira login reaches only steps that run main's pipe commands that use the tracker: never a job or workflow, never checkout-controlled code or an agent", () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const uses = trackerCommands();
+  for (const c of ["story card", "pr card", "tracker story", "closeout run", "lane acquire", "act", "next"]) assert.ok(uses.has(c), `${c} uses the tracker`);
+  for (const c of ["access check", "ci plan", "tests run", "settings", "org ready"]) assert.ok(!uses.has(c), `${c} never builds the tracker (pipe.mjs: built on first use)`);
+  const dir = new URL("../../.github/workflows/", import.meta.url);
+  let needing = 0;
+  for (const f of readdirSync(dir).filter((x) => x.endsWith(".yml"))) {
+    const text = readFileSync(new URL(f, dir), "utf8"), doc = yaml.load(text);
+    assert.doesNotMatch(text, /vars\.JIRA_BASE_URL/, `${f}: JIRA_BASE_URL is a setting and arrives with PIPELINE_VARS`);
+    for (const n of Object.keys(JIRA)) assert.equal((doc.env || {})[n], undefined, `${f}: ${n} never in the workflow env`);
+    for (const [jn, j] of Object.entries(doc.jobs || {})) {
+      for (const n of Object.keys(JIRA)) assert.equal((j.env || {})[n], undefined, `${f}/${jn}: ${n} never in a job env`);
+      // pipe code is main's when it runs from .pipeline/ (main's sparse checkout) or the job checked out main itself; the
+      // release deploy checks out the merge commit on main the gate validated
+      const ref = (j.steps || []).find((s) => /actions\/checkout/.test(s.uses || "") && !s.with?.path)?.with?.ref;
+      const mainCheckout = ref === "main" || (f === "release.yml" && ref === "${{ needs.plan.outputs.sha }}");
+      for (const s of j.steps || []) {
+        const where = `${f}/${jn}/${s.name || s.id || String(s.run || s.uses).split("\n")[0].slice(0, 40)}`;
+        const has = Object.keys(JIRA).filter((n) => (s.env || {})[n] !== undefined);
+        const calls = pipeCalls(s.run);
+        const trusted = calls.length > 0 && calls.every((c) => /\.pipeline\/$/.test(c.path) || s["working-directory"] === ".pipeline" || mainCheckout);
+        const needs = calls.some((c) => uses.has(c.cmd));
+        if (needs) { needing++; assert.deepEqual(Object.fromEntries(has.map((n) => [n, s.env[n]])), JIRA, `${where}: runs a tracker command, so it has the Jira login`); }
+        if (has.length) {
+          assert.ok(needs, `${where}: has the Jira login but runs no tracker command`);
+          assert.ok(trusted, `${where}: has the Jira login but runs pipe from the checkout (PR or agent code)`);
+          assert.doesNotMatch(String(s.run), RUNS_CHECKOUT_CODE, `${where}: has the Jira login and runs checkout-controlled code`);
+        }
+        if (/claude-agent/.test(s.uses || "")) assert.deepEqual([s.with["jira-email"], s.with["jira-api-token"]], [JIRA.JIRA_EMAIL, JIRA.JIRA_API_TOKEN], `${where}: the action gets the login as inputs, for its budget stop only`);
+        if (!s.run && !/claude-agent/.test(s.uses || "")) assert.doesNotMatch(JSON.stringify(s), /JIRA_/, `${where}: the Jira login goes to no other action`);
+      }
+    }
+  }
+  assert.ok(needing >= 60, `found ${needing} steps that use the tracker`);
+  // the agent action: the login only on the steps that run a tracker command; never the agent's own step
+  const a = yaml.load(readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8"));
+  assert.deepEqual(Object.keys(a.inputs).filter((k) => k.startsWith("jira-")), ["jira-email", "jira-api-token"]);
+  for (const s of a.runs.steps) {
+    const needs = pipeCalls(s.run).some((c) => uses.has(c.cmd));
+    assert.equal(/inputs\.jira-/.test(JSON.stringify(s)), needs, `claude-agent/${s.name || s.id}: the login ${needs ? "is needed" : "is not passed"}`);
+  }
+  assert.doesNotMatch(JSON.stringify(a.runs.steps.find((s) => s.id === "claude")), /JIRA|jira-/, "the agent never sees the Jira login");
+});
+
+test("Jira Automation starts each button by repository_dispatch; release-cut cuts only for the open sprint's version, one at a time", () => {
   const yaml = createRequire(import.meta.url)("js-yaml");
   const dir = new URL("../../.github/workflows/", import.meta.url);
-  const callers = readdirSync(dir).filter((f) => f.endsWith(".yml") && readFileSync(new URL(f, dir), "utf8").includes("pipe.mjs"));
-  assert.ok(callers.length >= 30, `found ${callers.length}`);
-  for (const f of callers) {
-    const y = readFileSync(new URL(f, dir), "utf8"), env = yaml.load(y).env || {};
-    // pipe builds the tracker on every command (pipe.mjs), so a workflow without the login fails under TRACKER=jira
-    assert.equal(env.JIRA_EMAIL, "${{ secrets.JIRA_EMAIL }}", `${f}: JIRA_EMAIL in the workflow env`);
-    assert.equal(env.JIRA_API_TOKEN, "${{ secrets.JIRA_API_TOKEN }}", `${f}: JIRA_API_TOKEN in the workflow env`);
-    assert.doesNotMatch(y, /vars\.JIRA_BASE_URL/, `${f}: JIRA_BASE_URL is a setting and arrives with PIPELINE_VARS`);
-  }
-  // the agent reads untrusted story text: its step gets the Jira login blanked (the pipe steps around it keep it)
-  const a = yaml.load(readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8"));
-  const claude = a.runs.steps.find((s) => s.id === "claude");
-  assert.equal(claude.env.JIRA_EMAIL, "", "the agent never sees JIRA_EMAIL");
-  assert.equal(claude.env.JIRA_API_TOKEN, "", "the agent never sees JIRA_API_TOKEN");
-  // Jira Automation starts each button by repository_dispatch, like the GitHub label or button does
-  const on = (n) => yaml.load(readFileSync(new URL(`${n}.yml`, dir), "utf8")).on;
+  const wf = (n) => yaml.load(readFileSync(new URL(`${n}.yml`, dir), "utf8"));
   for (const [n, type] of [["issue-start", "jira-start"], ["ai-implement", "jira-implement"], ["sprint-start", "jira-sprint-start"], ["release-cut", "jira-release-cut"]])
-    assert.deepEqual(on(n).repository_dispatch, { types: [type] }, `${n} starts on ${type}`);
+    assert.deepEqual(wf(n).on.repository_dispatch, { types: [type] }, `${n} starts on ${type}`);
+  const rc = wf("release-cut");
+  assert.deepEqual(rc.concurrency, { group: "release-cut", "cancel-in-progress": false }, "a duplicate fire waits, then finds the PR open");
+  const steps = rc.jobs.cut.steps, gate = steps.findIndex((s) => /jira-release-cut/.test(s.if || "")), open = steps.findIndex((s) => s.name === "Open the release pull request");
+  assert.ok(gate > 0 && gate < open, "the version check runs before the release PR opens");
+  assert.equal(steps[gate].env.VERSION, "${{ github.event.client_payload.version }}");
+  assert.match(steps[gate].run, /"\$VERSION" = "\$SPRINT"/, "a released version that is not the open sprint (a hotfix's) cuts nothing");
+  assert.match(steps[gate].run, /::notice::/);
+  assert.match(steps[open].if, /steps\.version\.outputs\.ok != 'false'/);
 });
 
 test("fix rounds are this PR's earlier completed ai-fix runs, whatever the commits were called", () => {

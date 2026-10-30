@@ -15,8 +15,6 @@ permissions:
   contents: read
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
-  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}           # TRACKER=jira: the tracker's login (empty when unset); JIRA_BASE_URL is a setting
-  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
 jobs:
   cases:
     runs-on: ubuntu-latest
@@ -61,6 +59,8 @@ jobs:
           label: eval-${{ matrix.case }}
           model: ${{ inputs.model }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          jira-email: ${{ secrets.JIRA_EMAIL }}   # only the budget stop's pipe step gets it (claude-agent)
+          jira-api-token: ${{ secrets.JIRA_API_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           changed-files: ${{ runner.temp }}/changed.txt
           github-token: ${{ github.token }}

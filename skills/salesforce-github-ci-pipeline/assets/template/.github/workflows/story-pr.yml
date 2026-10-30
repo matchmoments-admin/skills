@@ -19,8 +19,6 @@ permissions:
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
-  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}           # TRACKER=jira: the tracker's login (empty when unset); JIRA_BASE_URL is a setting
-  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
 jobs:
   open:
     # A push by the pipeline's own App (Claude's build or fix) to a branch that already exists has its PR already:
@@ -40,6 +38,9 @@ jobs:
         with: { ref: main, fetch-depth: 0 }
       - name: Which story, which base, is a PR already open?
         id: s
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           [[ "$BRANCH" =~ ^(issue-[0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story branch: $BRANCH"; exit 1; }
           KEY=$(node pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
@@ -74,6 +75,8 @@ jobs:
       - name: Story card
         if: steps.s.outputs.key != ''
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
         run: node pipeline/bin/pipe.mjs story card "${{ steps.s.outputs.key }}"

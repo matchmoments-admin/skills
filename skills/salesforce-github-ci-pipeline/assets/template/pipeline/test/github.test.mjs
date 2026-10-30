@@ -81,14 +81,18 @@ test("the skill's jira-setup.sh checks the login, the project and its statuses, 
   const { tmpdir } = await import("node:os");
   const script = jiraSetup;
   const bin = mkdtempSync(`${tmpdir()}/jira-setup-`);
-  // the fake curl answers from FAKE_JIRA ({path: [code, body]}), writes -o's file, prints -w's code, logs each call
+  // the fake curl answers from FAKE_JIRA ({path: [code, body]}; code 0: the network failed, as curl prints 000 and
+  // exits 7), writes -o's file, prints -w's code, and logs each call's argv and whether --netrc-file holds the login
   writeFileSync(`${bin}/curl`, `#!/usr/bin/env node
 const a = process.argv.slice(2), fs = require("fs"), r = JSON.parse(process.env.FAKE_JIRA);
 const url = a.find((x) => /^https?:/.test(x)), path = url.replace(/^https?:\\/\\/[^/]+/, "");
-fs.appendFileSync(process.env.FAKE_LOG, (a.includes("-u") ? "auth " : "") + path + "\\n");
+const nf = a.includes("--netrc-file") ? a[a.indexOf("--netrc-file") + 1] : null;
+const login = nf && (fs.statSync(nf).mode & 0o777) === 0o600 && /machine acme\\.atlassian\\.net login ci@acme\\.test password s3cret-token/.test(fs.readFileSync(nf, "utf8"));
+fs.appendFileSync(process.env.FAKE_LOG, (login ? "auth " : "") + path + " argv:" + a.join(" ") + "\\n");
 const [code, body] = r[path] || [404, {}];
 if (a.includes("-o")) fs.writeFileSync(a[a.indexOf("-o") + 1], JSON.stringify(body));
-if (a.includes("-w")) process.stdout.write(String(code));
+if (a.includes("-w")) process.stdout.write(code === 0 ? "000" : String(code));
+process.exit(code === 0 ? 7 : 0);
 `);
   chmodSync(`${bin}/curl`, 0o755);
   const statuses = (names) => [{ name: "Story", statuses: names.map((n) => ({ name: n, statusCategory: { key: n === "Done" ? "done" : "indeterminate" } })) }];
@@ -104,8 +108,22 @@ if (a.includes("-w")) process.stdout.write(String(code));
   assert.match(good.stdout, /gh secret set JIRA_API_TOKEN -R acme\/app/);
   assert.match(good.stdout, /POST https:\/\/api\.github\.com\/repos\/acme\/app\/dispatches/);
   for (const t of ["jira-start", "jira-implement", "jira-sprint-start", "jira-release-cut"]) assert.match(good.stdout, new RegExp(`"event_type":"${t}"`), t);
+  assert.match(good.stdout, /"jira-release-cut","client_payload":\{"version":"\{\{version\.name\}\}"\}/, "release-cut checks the version is the open sprint's");
   assert.doesNotMatch(good.stdout + good.stderr, /s3cret-token/, "the token is never printed");
-  assert.ok(read(`${bin}/log`, "utf8").split("\n").filter(Boolean).every((l) => l.startsWith("auth ")), "every call logs in");
+  const calls = read(`${bin}/log`, "utf8").split("\n").filter(Boolean);
+  assert.ok(calls.every((l) => l.startsWith("auth ")), "every call logs in, from a netrc file only its owner can read");
+  assert.ok(calls.every((l) => !l.includes("s3cret-token")), "the token is never on curl's command line (ps shows it)");
+  const offline = run({ ...ok, "/rest/api/3/myself": [0, {}] });
+  assert.notEqual(offline.status, 0);
+  assert.match(offline.stdout, /HTTP 000\)/, "a network failure reads HTTP 000, once");
+  // without jq the checks cannot read Jira's answers: it says so before calling Jira
+  const { symlinkSync } = await import("node:fs");
+  const bare = mkdtempSync(`${tmpdir()}/jira-bare-`);
+  for (const t of ["node", "bash", "mktemp", "rm", "cat", "chmod", "grep", "dirname"]) { const w = spawnSync("which", [t], { encoding: "utf8" }).stdout.trim(); if (w) symlinkSync(w, `${bare}/${t}`); }
+  symlinkSync(`${bin}/curl`, `${bare}/curl`);
+  const noJq = run(ok, { PATH: bare });
+  assert.notEqual(noJq.status, 0);
+  assert.match(noJq.stdout + noJq.stderr, /needs jq/);
   // a refused login, a missing project, a workflow without "In Progress": each fails and says what to fix
   const bad = run({ ...ok, "/rest/api/3/myself": [401, {}] });
   assert.notEqual(bad.status, 0);

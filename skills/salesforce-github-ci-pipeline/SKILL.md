@@ -95,8 +95,9 @@ bypassed and still starts the follow-ups (a release validates against production
 `JIRA_API_TOKEN`), run [`scripts/jira-setup.sh`](scripts/jira-setup.sh) `<owner/repo> <https://site.atlassian.net>
 <PROJECT>`. It checks the login, the project and the statuses the pipeline needs, sets nothing, and prints the `gh`
 commands for `TRACKER=jira`, `JIRA_BASE_URL` and the two secrets (run them; `gh` asks for each secret) and the four
-Jira Automation rules with this repo filled in. No workflow needs editing: every workflow already passes the Jira login
-to its `pipe` steps (never to an agent's), and `JIRA_BASE_URL` arrives with `PIPELINE_VARS`. Then follow
+Jira Automation rules with this repo filled in. No workflow needs editing: the Jira login already goes to the steps
+that run main's tracker commands, and only those (never a job, an agent or the checkout's code), and `JIRA_BASE_URL`
+arrives with `PIPELINE_VARS`. Then follow
 [`references/jira.md`](references/jira.md) steps 1, 3 and 5 (GitHub for Jira, the token Jira calls GitHub with, the rules).
 
 **Slack** (only if chosen in Phase 0): [`scripts/slack-setup.sh`](scripts/slack-setup.sh) `<owner/repo> <repo-dir>`

@@ -17,8 +17,6 @@ permissions:
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
-  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}           # TRACKER=jira: the tracker's login (empty when unset); JIRA_BASE_URL is a setting
-  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
 jobs:
   blockers:
     # A story "Blocked by #N" starts only once #N has merged: otherwise nothing is created (no branch, no scratch org,
@@ -36,6 +34,9 @@ jobs:
       - uses: actions/checkout@v4
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       - id: b
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
           node pipeline/bin/pipe.mjs story blockers "$KEY"
@@ -62,11 +63,16 @@ jobs:
           [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
           node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
       - name: The story card says what is happening (seconds after /start)
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "creating the branch and a production-shaped scratch org (3 to 5 minutes)"
       - name: Readiness check (Jev, AI_TRIAGE) - are the criteria testable, is the story large (skipped when planned)
         if: vars.AI_TRIAGE == 'true'
         continue-on-error: true
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story.md" > /dev/null
@@ -81,6 +87,9 @@ jobs:
           else git checkout -q "origin/$BASE" && git push origin "HEAD:refs/heads/$BRANCH"; fi
       - name: Put the story in the sprint
         if: steps.ctx.outputs.HOTFIX != 'true'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs tracker assign "$KEY" --sprint "${{ steps.ctx.outputs.SPRINT }}"
       - uses: ./.pipeline/.github/actions/sf-auth
         with:
@@ -89,6 +98,8 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "story:$KEY"
       - name: The story's scratch org (production's shape + the branch's code; a half-made one is finished)
@@ -97,6 +108,8 @@ jobs:
       - name: No free slot? Wait in line (no runner waits; the next org deleted starts this story, journey.mjs)
         if: failure() && steps.org.outputs.waiting == 'true'
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
           gh issue edit "$KEY" --add-label waiting:org
@@ -104,16 +117,23 @@ jobs:
       - name: Let the next job into the org's lane
         if: always()
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "story:$KEY" || true
       - name: The story card (one comment, kept up to date at every stage)
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --base "$BASE"
       - name: The story card says it failed, and where to look
         if: failure() && steps.ctx.outcome == 'success' && steps.org.outputs.waiting != 'true'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "starting the story" --failed --retry "no sprint open? tick Start the next sprint on the last release card (or comment /sprint-start); otherwise see the run, then tick Start again"
       - name: Remove the button label (the card shows what happened)
         if: always()

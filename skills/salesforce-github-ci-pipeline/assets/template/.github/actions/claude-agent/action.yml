@@ -16,6 +16,8 @@ inputs:
   github-token: { required: true, description: "Token Claude acts with on GitHub" }
   allowed-bots: { required: false, default: "", description: "Bot actors allowed to trigger this run (vars.PIPELINE_BOTS)" }
   label: { required: false, default: "", description: "Added to the transcript's artifact name, so several runs in one workflow (a matrix) keep theirs apart" }
+  jira-email: { required: false, default: "", description: "secrets.JIRA_EMAIL (TRACKER=jira): only the budget stop's pipe step gets it, never the agent" }
+  jira-api-token: { required: false, default: "", description: "secrets.JIRA_API_TOKEN (TRACKER=jira): as jira-email" }
   model: { required: false, default: "", description: "Model override for this run ('model', 'alias' or 'provider:model'); empty = config/ai-models.json, AI_MODEL_<ROLE> and AI_MODEL" }
 runs:
   using: composite
@@ -49,6 +51,8 @@ runs:
         PR: ${{ inputs.pr }}
         SPENT: ${{ steps.rules.outputs.spent }}
         CAP: ${{ steps.rules.outputs.cap }}
+        JIRA_EMAIL: ${{ inputs.jira-email }}   # TRACKER=jira: pipe agent stop comments on the story
+        JIRA_API_TOKEN: ${{ inputs.jira-api-token }}
       run: |
         node .pipeline/pipeline/bin/pipe.mjs agent stop --key "$KEY" ${PR:+--pr "$PR"} || true   # comment, blocked, card (start.stopForBudget)
         echo "AI_BUDGET_STOPPED=true" >> "$GITHUB_ENV"   # the caller's later steps say so instead of "the build failed"
@@ -69,10 +73,7 @@ runs:
       uses: anthropics/claude-code-action@v1
       continue-on-error: true   # judged below from the transcript: a finished run that went past the turn cap is a success
       env:
-        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"   # agents ran tests in the background and ended before committing (F22, story #54)
-        JIRA_EMAIL: ""       # the workflow's Jira login is for pipe's steps; the agent reads untrusted story text
-        JIRA_API_TOKEN: ""
-      with:
+        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"   # agents ran tests in the background and ended before committing (F22, story #54)      with:
         claude_code_oauth_token: ${{ steps.rules.outputs.auth == 'oauth' && inputs.oauth-token || '' }}
         anthropic_api_key: ${{ contains(fromJSON('["api-key","gateway"]'), steps.rules.outputs.auth) && inputs.api-key || '' }}
         use_bedrock: ${{ steps.rules.outputs.auth == 'aws-oidc' }}

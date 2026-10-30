@@ -24,8 +24,6 @@ concurrency:
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
-  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}           # TRACKER=jira: the tracker's login (empty when unset); JIRA_BASE_URL is a setting
-  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
 jobs:
   static:
     name: static checks (no org)
@@ -160,10 +158,16 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: The story card says CI is running
         if: steps.delta.outputs.none != 'true'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "$REF" --now "CI is deploying the change to its scratch org and testing it (progress on the Salesforce tests check)"
       - name: The branch's org (a temporary one, with the full source, if it has none)
         if: steps.delta.outputs.none != 'true'
         id: org
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           TARGET="${{ needs.static.outputs.target }}"   # a story: its own org; a release PR or back-merge: the sprint's staging org
           # not an org target (a maintenance branch): no lane, a temporary org. A lane that stays busy (45 minutes) or an
@@ -207,9 +211,15 @@ jobs:
         with: { name: apex-results, path: test-results, retention-days: 14 }
       - name: The story card says CI failed, and where to look
         if: failure()
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "$REF" --now "CI (deploy or tests)" --failed --retry "fix and push; with AI on, a failing deploy or test starts the fixer by itself"
       - name: Let the next job into the org's lane
         if: always() && steps.org.outputs.lane != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "${{ steps.org.outputs.lane }}" || true
       - name: Delete the temporary org
         if: always() && steps.org.outputs.temp == 'true'
