@@ -298,6 +298,47 @@ function render(key, next, rows, now = null, actions = [], { release = false, ne
 }
 
 /**
+ * The maintenance card: one comment on a pipeline maintenance PR (no story, into main) that says what it still needs
+ * to merge, since no story card speaks for it. Pure: built from the gate's facts and decision.
+ * input: { repoUrl, pr, facts, decision }
+ */
+export function maintenanceCard({ repoUrl, pr, facts = {}, decision = null }) {
+  const prUrl = `${repoUrl}/pull/${pr.number}`;
+  const st = standing({ ...facts, pr });
+  const merged = pr.state === "MERGED";
+  const rows = [];
+  const ci = [CHECKS.static, CHECKS.apex].map((n) => stateOf(st.checks[n]?.conclusion || "missing"));
+  const ciState = merged ? "done" : ci.includes("failed") ? "failed" : ci.every((s) => s === "done") ? "done" : "running";
+  rows.push([ciState, "CI", ciState === "failed" ? `[see what failed](${prUrl}/checks)` : ciState === "done" ? "passed" : `[running](${prUrl}/checks)`]);
+  const a = st.approval;
+  // GitHub never lets the author approve their own PR: alone, the merge is an admin's bypass of the branch rules
+  const alone = `someone other than @${pr.author?.login || "the author"}. Working alone? An admin can merge it with **Merge without waiting for requirements** once CI is green`;
+  rows.push([merged || a.ok ? "done" : "waiting", "Approval", merged || a.ok ? approvalText(a, { merged, prUrl }) : `${approvalText(a, { merged, prUrl, how: "(Review changes > Approve)" })}: ${alone}`]);
+  if (decision?.validate) {
+    const v = latestCheck(facts.checkRuns || [], "Production validation");
+    const validation = merged ? "done" : v === "missing" ? "waiting" : stateOf(v);
+    rows.push([validation, "Production validation", validation === "failed" ? `production rejected it: [see why](${prUrl}/checks)` : validation === "done" ? "passed" : "it changes force-app, so it validates against production before merging"]);
+  }
+  rows.push([merged ? "done" : "waiting", "Merged into main", merged ? "merged" : "the gate merges it when everything above is green"]);
+  const next = merged ? "Nothing to do: it is merged."
+    : pr.state === "CLOSED" ? "The pull request was closed without merging."
+    : decision?.mergeable ? "Nothing to do: the gate merges it."
+    : `Waiting: ${(decision?.reasons || ["the checks above"])[0]}.`;
+  return [
+    CARD_MARK,
+    "### Pipeline status (kept up to date by the pipeline)",
+    "",
+    "Pipeline maintenance: no story, so it is reviewed against `REVIEW.md` and merges with CI and one approval.",
+    "",
+    `**Next:** ${next}`,
+    "",
+    "| | Stage | Details |",
+    "|---|---|---|",
+    ...rows.map(([s, stage, d]) => `| ${ICON[s]} | ${stage} | ${d} |`),
+  ].join("\n");
+}
+
+/**
  * Refresh story cards. host: the code host (github.mjs); tracker: where the story lives; prTracker: comments on PRs.
  * refresh(key, { light }) with light=true reuses this process's facts and leaves the board alone: two edits, for the
  * Now line while tests run. Never throws: a card is information, not a gate.
@@ -376,6 +417,10 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
         }
         const key = storyOf(pr.headRefName);
         if (key) { await this.refresh(key, { activity, tag }); return "story"; }
+        if (route(pr) === "maintenance") {
+          await write(prTracker, pr.number, maintenanceCard({ repoUrl: host.repoUrl, pr, facts, decision: evaluate(facts) }), { name: pr.title || `PR #${pr.number}` });
+          return "maintenance";
+        }
         return null;
       } catch (e) { log(`::warning::card for PR #${number} not updated: ${e.message}`); return null; }
     },
