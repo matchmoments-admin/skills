@@ -497,6 +497,15 @@ test("every workflow and composite action is valid YAML (claude-agent's Bedrock 
   for (const f of files) assert.doesNotThrow(() => yaml.load(readFileSync(new URL(f, gh), "utf8")), `${f} does not parse`);
 });
 
+test("claude-agent hands claude-code-action its prompt and token (#436's merge commented out `with:` on 30 Oct)", () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const action = yaml.load(readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8"));
+  const step = action.runs.steps.find((s) => String(s.uses || "").startsWith("anthropics/claude-code-action"));
+  assert.ok(step, "the action runs claude-code-action");
+  for (const k of ["prompt", "github_token", "claude_args", "allowed_bots"]) assert.ok(step.with && k in step.with, `claude-code-action gets with.${k}`);
+  for (const [k, v] of Object.entries(step.env)) assert.ok(!/\bwith:\s*$/.test(String(v)), `env ${k} swallowed a with: key`);
+});
+
 test("no workflow swallows a lane failure: a busy lane or an API error fails the step, never deploys into a held org (B1, 28 Oct)", () => {
   for (const f of readdirSync(new URL("../../.github/workflows/", import.meta.url)).filter((n) => n.endsWith(".yml"))) {
     const src = readFileSync(new URL(`../../.github/workflows/${f}`, import.meta.url), "utf8");
