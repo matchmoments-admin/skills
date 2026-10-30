@@ -38,6 +38,18 @@ import * as harness from "../src/harness.mjs";
 import { fixture, open, ok, FULL_AI, withVerdicts, uiPassed, fakeSf, fakeJev, src, files, pick, repo, O, SHA, fakeRefs, fakeGitHub, scratchSkill, webp, meta, provisionSf, deliveryIo, BOT, wfSteps, pipeSources, st_, read, TREE } from "./helpers.mjs";
 
 
+test("TRACKER=jira: pipe builds the tracker on first use, so a command that never reads it needs no Jira login", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const pipe = (...args) => spawnSync(process.execPath, [new URL("../bin/pipe.mjs", import.meta.url).pathname, ...args], { encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, GH_REPO: "o/r", PIPELINE_EVENTS: "off", PIPELINE_VARS: JSON.stringify({ TRACKER: "jira", JIRA_BASE_URL: "https://acme.atlassian.net" }) } });
+  const s = pipe("settings");
+  assert.equal(s.status, 0, s.stdout + s.stderr);
+  assert.match(s.stdout, /TRACKER\s+jira/);
+  const t = pipe("tracker", "story", "LIFE-1");
+  assert.notEqual(t.status, 0, "a tracker command without the login fails");
+  assert.match(t.stdout + t.stderr, /JIRA_EMAIL and JIRA_API_TOKEN/);
+});
+
 test("pipe.mjs is a thin command table: no GitHub, git or Salesforce logic of its own", async () => {
   const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
   const { execFileSync } = await import("node:child_process");

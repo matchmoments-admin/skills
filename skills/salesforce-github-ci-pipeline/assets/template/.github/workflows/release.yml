@@ -50,6 +50,8 @@ jobs:
       - name: The commit, whether it already shipped, and whether the gate's validation covers it
         id: p
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           SHA_IN: ${{ inputs.sha }}
           JOB_IN: ${{ inputs.validated_job }}
@@ -93,6 +95,8 @@ jobs:
       - name: The card says the deploy failed, and where to look
         if: failure()
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.plan.outputs.sha }}
         run: node pipeline/bin/pipe.mjs pr card --sha "$SHA" --now "the production deploy" --failed --retry "see the run; re-run the release (it is safe to repeat)" || true
@@ -167,6 +171,8 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Close out (stories, sprint, orgs, release branch)
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           PIPELINE_APP_ID: ${{ secrets.PIPELINE_APP_ID }}
           PIPELINE_APP_PRIVATE_KEY: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           TAG: ${{ needs.tag.outputs.tag || needs.plan.outputs.tag }}

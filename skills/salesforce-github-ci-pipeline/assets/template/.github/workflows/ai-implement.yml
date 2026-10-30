@@ -67,10 +67,14 @@ jobs:
           node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
       - name: Stop before the org's lane and the org when the story's AI budget is spent (start.stopForBudget)
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs agent stop --key "$KEY"
       - name: The story card says Claude is building it
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is building the story in its scratch org (5 to 15 minutes)"
       - name: The story branch exists (start ran) and matches its route
@@ -108,10 +112,14 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "story:$KEY"
       - name: Attach the story's org; the story with its context pack (what exists, production's sharing model)
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
         run: |
           node .pipeline/pipeline/bin/pipe.mjs org ready "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}   # attaches, or rebuilds an expired org
@@ -124,6 +132,8 @@ jobs:
           role: implement
           key: ${{ env.KEY }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          jira-email: ${{ secrets.JIRA_EMAIL }}   # only the budget stop's pipe step gets it (claude-agent)
+          jira-api-token: ${{ secrets.JIRA_API_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           github-token: ${{ steps.id.outputs.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # /build and Jira dispatches arrive as the pipeline App; empty = none
@@ -139,6 +149,8 @@ jobs:
       - name: Let the next job into the org's lane
         if: always()
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "story:$KEY" || true
       - name: Remove the button label (the card shows what happened)
@@ -147,6 +159,8 @@ jobs:
       - name: Make sure the work is pushed and a PR exists
         if: always() && steps.ctx.outcome == 'success' && env.AI_BUDGET_STOPPED != 'true'   # plumbing holds even when the agent step reports an error
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
           MILESTONE: ${{ steps.ctx.outputs.HOTFIX == 'true' && '' || steps.ctx.outputs.MILESTONE }}
@@ -161,6 +175,8 @@ jobs:
       - name: The story card says the build failed, and where to look
         if: failure() && steps.ctx.outcome == 'success' && env.AI_BUDGET_STOPPED != 'true'
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude's build" --failed --retry "comment /build to retry, or build it on the branch yourself"
   follow-up:
@@ -183,6 +199,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
-      - run: |
+      - env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
           gh workflow run ci.yml --ref "$BRANCH" -f ref="$BRANCH"
           node pipeline/bin/pipe.mjs start review --pr "$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"   # the review's start decision

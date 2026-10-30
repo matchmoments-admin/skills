@@ -34,7 +34,10 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
-      - run: |
+      - env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
           node pipeline/bin/pipe.mjs org sweep
           node pipeline/bin/pipe.mjs org pool    # ORG_POOL warm orgs (0: none), only while a slot stays free
           node pipeline/bin/pipe.mjs org limits

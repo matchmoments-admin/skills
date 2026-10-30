@@ -53,6 +53,15 @@ test("settings are declared once: every name the code and the workflows read is 
   assert.match(pipeSources(), /\.\.\.orgSettings\(\)/, "orgRegistry's env carries them");
 });
 
+test("tests never use CI's Jira login or the repository's tracker settings (npm run test:pipeline scrubs them)", () => {
+  assert.equal(process.env.JIRA_EMAIL, undefined);
+  assert.equal(process.env.JIRA_API_TOKEN, undefined);
+  const vars = JSON.parse(process.env.PIPELINE_VARS || "{}");
+  assert.equal(vars.TRACKER, undefined, "the repository's TRACKER never reaches a test (TRACKER=jira in the env is a deliberate run)");
+  assert.equal(vars.JIRA_BASE_URL, undefined);
+  assert.match(JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).scripts["test:pipeline"], /--import \.\/pipeline\/test\/env\.mjs/);
+});
+
 test("capacity: stories in flight from the Dev Hub's allowance, the staging regression's time, and a month's cost", () => {
   const dev = capacity.plan({ devhub: { activeMax: 3, dailyMax: 6, activeUsed: 1 }, team: { devs: 2 }, ui: { tests: 38 } });
   assert.equal(dev.orgs.inFlightMax, 1, "3 active orgs: staging, one held elsewhere, one story");

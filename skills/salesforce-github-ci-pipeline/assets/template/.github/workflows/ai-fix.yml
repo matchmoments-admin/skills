@@ -40,7 +40,10 @@ jobs:
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       # flag off, not a story, the blocked label, the round limit (it then blocks the PR and says what a person can
       # do, once): decided here in main's code (pipeline/src/start.mjs), so the fix job never starts only to stop
-      - run: node pipeline/bin/pipe.mjs start fix --pr "$PR"
+      - env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: node pipeline/bin/pipe.mjs start fix --pr "$PR"
   fix:
     if: github.event_name == 'workflow_dispatch' && vars.AI_FIX == 'true'
     runs-on: ubuntu-latest
@@ -88,6 +91,8 @@ jobs:
           ref: ${{ steps.pr.outputs.branch }}
       - name: The story card says Claude is fixing it
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
@@ -104,12 +109,16 @@ jobs:
       - name: The org's lane (one job at a time in an org; busy, this job parks and is re-run when it frees)
         id: lane
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --park fix   # a second fix while one waits is dropped
       - name: Attach the story's org and collect the feedback (review comments and failed CI)
         if: steps.lane.outputs.parked != 'true'
         id: org
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           READ_TOKEN: ${{ github.token }}   # reading run logs needs actions: read, which the Actions token has
         run: |
           node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH" --pr "$PR"   # attaches or rebuilds (never for a merged PR); deploys this head unless the org holds it
@@ -148,6 +157,8 @@ jobs:
           key: ${{ env.STORY_KEY || 'N' }}   # its experiment arm and AI budget are the story's
           pr: ${{ env.PR }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          jira-email: ${{ secrets.JIRA_EMAIL }}   # only the budget stop's pipe step gets it (claude-agent)
+          jira-api-token: ${{ secrets.JIRA_API_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           github-token: ${{ steps.id.outputs.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots; empty = none
@@ -161,6 +172,8 @@ jobs:
       - name: Let the next job into the org's lane
         if: always()
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
       - name: Did the story's AI budget stop the agent? (the follow-up says so instead of "changed nothing")
@@ -173,6 +186,8 @@ jobs:
       - name: The story card says the fix failed, and where to look
         if: failure() && env.STORY_KEY != '' && env.AI_BUDGET_STOPPED != 'true'
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$STORY_KEY" --now "Claude's fix" --failed --retry "comment /fix to retry, or push a fix yourself"
   follow-up:
@@ -198,7 +213,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
-      - run: |
+      - env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
           NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
           # a fix that changes nothing judged the review already met or wrong: say so, or the PR waits on a fix that never comes (#261)
           [ "$NOW" != "$BEFORE" ] || { echo "the fix pushed nothing: no new review"; gh pr comment "$PR" --body "Claude's fix changed nothing: it found the review's requests already met or not right for this story. If you agree, comment \`/review-ok <why>\`; otherwise push a fix yourself (the review runs again)."; exit 0; }

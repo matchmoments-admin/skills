@@ -101,7 +101,7 @@ const summary = (md) => { if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(pr
 
 // one of each per process: the code host remembers what it fetched, the trackers the comments they edit
 const host = codeHost({ io, sleep, log });
-const tracker = makeTracker(io);
+let made; const tracker = new Proxy({}, { get: (_, k) => (made ||= makeTracker(io))[k], has: (_, k) => k in (made ||= makeTracker(io)) });   // built on first use: only tracker commands need TRACKER=jira's login
 const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, ghPages: io.ghPages }), log });
 // a snapshot Salesforce refused is marked with a tag (snapshot-refused-<name>) so no later run spends a daily org on it
 const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;

@@ -51,6 +51,9 @@ jobs:
         run: node ../.pipeline/pipeline/bin/pipe.mjs ci staging-plan --branch "${{ steps.ctx.outputs.RELEASE_BRANCH }}"
       - name: Wait for the staging org's lane (nobody is dropped)
         if: steps.fresh.outputs.done != 'true'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "sprint:${{ steps.ctx.outputs.SPRINT }}"
       - uses: ./.pipeline/.github/actions/sf-auth
         if: steps.fresh.outputs.done != 'true'
@@ -104,6 +107,9 @@ jobs:
         # suite (code review, 14 Oct).
         if: always() && steps.fresh.outputs.ui != 'run'
         working-directory: .pipeline
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node pipeline/bin/pipe.mjs lane release "sprint:${{ steps.ctx.outputs.SPRINT }}" || true
       - uses: actions/upload-artifact@v4
         if: always() && steps.fresh.outputs.done != 'true'

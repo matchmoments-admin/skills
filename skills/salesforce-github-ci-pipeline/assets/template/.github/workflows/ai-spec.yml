@@ -60,14 +60,22 @@ jobs:
           REL=$(node .pipeline/pipeline/bin/pipe.mjs context | sed -n 's/^RELEASE_BRANCH=//p')
           if [ -n "$REL" ] && git fetch -q origin "$REL"; then git checkout -q "origin/$REL"; echo "reading $REL"; else echo "no open sprint: reading main"; fi
       - name: Show that Claude is on it, with a link
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs spec pending "$KEY" --now "Claude is writing the spec (3 to 6 minutes)"
       - name: The issue, the spec so far, the comments, and the context pack
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs spec context "$KEY" --out "$RUNNER_TEMP/spec-input.md"
       - uses: ./.pipeline/.github/actions/claude-agent
         with:
           role: spec
           key: ${{ env.KEY }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          jira-email: ${{ secrets.JIRA_EMAIL }}   # only the budget stop's pipe step gets it (claude-agent)
+          jira-api-token: ${{ secrets.JIRA_API_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           github-token: ${{ github.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}
@@ -76,11 +84,17 @@ jobs:
             Write the spec for issue #${{ env.KEY }}. Everything known so far is in ${{ runner.temp }}/spec-input.md (read it with the Read tool); it ends with "The codebase today" (what exists for the objects it names, and production's org-wide defaults). Look further in force-app/ with Glob, Grep and Read; follow CLAUDE.md and docs/agents/salesforce.md.
             Its "User stories" become the story's acceptance criteria word for word, so write each one testable on its own. Write the spec to ${{ runner.temp }}/spec.md with the Write tool. Do not write any other file.
       - name: Post it (agent-free)
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           [ -s "$RUNNER_TEMP/spec.md" ] || { echo "::error::no spec written"; exit 1; }
           node .pipeline/pipeline/bin/pipe.mjs spec post "$KEY" --file "$RUNNER_TEMP/spec.md"
       - name: A failed run says so (never left saying "writing")
         if: failure()
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs spec pending "$KEY" --failed --now "Claude could not write the spec; tick the box again or comment /spec"
       - name: Remove the button label
         if: always()

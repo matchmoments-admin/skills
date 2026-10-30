@@ -47,6 +47,9 @@ jobs:
       - uses: actions/checkout@v4
         with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
       - name: Start the review, or say why not
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           PUSH=""; [ "${{ github.event.action }}" = synchronize ] && PUSH="--before ${{ github.event.before }} --after ${{ github.event.after }}"
           # the ai:review label is a person asking (the card's "Run the AI review again"): it reviews even if a verdict stands
@@ -124,11 +127,16 @@ jobs:
       - name: The story card says Claude is reviewing (issue and PR)
         if: steps.id.outcome == 'success'
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "${{ steps.pr.outputs.branch }}" --now "Claude is reviewing the change (2 to 5 minutes)"
       - name: The story (with its context pack), the diff and the access findings, as files (fewer agent turns)
         id: story
         if: steps.id.outcome == 'success'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "${{ steps.pr.outputs.branch }}" | sed -n 's/^STORY=//p')
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
@@ -151,6 +159,8 @@ jobs:
           key: ${{ steps.story.outputs.key }}
           pr: ${{ env.PR }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          jira-email: ${{ secrets.JIRA_EMAIL }}   # only the budget stop's pipe step gets it (claude-agent)
+          jira-api-token: ${{ secrets.JIRA_API_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           changed-files: ${{ runner.temp }}/changed.txt
           github-token: ${{ steps.id.outputs.token }}

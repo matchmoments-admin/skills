@@ -57,6 +57,8 @@ jobs:
       - name: Retrieve what people changed in the story's org
         id: get
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
         run: |
           set -o pipefail   # a failed retrieve fails here, not as "nothing new" later
@@ -65,6 +67,8 @@ jobs:
           node .pipeline/pipeline/bin/pipe.mjs org changes "$ALIAS" | tee "$RUNNER_TEMP/changes.txt"
       - name: Commit and push them (the person is co-author), and open the PR if there is none
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
           MILESTONE: ${{ steps.ctx.outputs.HOTFIX == 'true' && '' || steps.ctx.outputs.MILESTONE }}
@@ -88,4 +92,7 @@ jobs:
           node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "$(cat "$RUNNER_TEMP/said.md")"
       - name: The card says it failed, and where to look
         if: failure()
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "bringing the Setup changes in" --failed --retry "tick Bring my Setup changes into the story again" || true

@@ -44,6 +44,8 @@ jobs:
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
       - name: Do it
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           APP_TOKEN: ${{ steps.app.outputs.token }}
           IS_PR: ${{ github.event.issue.pull_request != null }}
         run: node pipeline/bin/pipe.mjs act --number "$N" ${{ github.event.issue.pull_request != null && '--is-pr' || '' }} --by "$WHO" --by-type "$WHO_TYPE" --command "$BODY"

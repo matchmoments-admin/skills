@@ -60,6 +60,9 @@ jobs:
       - run: echo ".pipeline/" >> .git/info/exclude
       - name: The code the story will be built on, and the story (with any earlier plan, the answers and the context pack)
         id: ctx
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           [[ "$KEY" =~ ^[0-9]+$ ]] || { echo "::error::not a story"; exit 1; }
           node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS" > "$RUNNER_TEMP/ctx"
@@ -69,6 +72,9 @@ jobs:
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --out "$RUNNER_TEMP/story.md"
           if gh issue view "$KEY" --json labels --jq '[.labels[].name] | index("start")' | grep -q '[0-9]'; then echo "started=true" >> "$GITHUB_OUTPUT"; fi
       - name: Show that Claude is planning, with a link (the plan comment at once; the card too once started)
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY"
           [ "${{ steps.ctx.outputs.started }}" != "true" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is planning the build (2 to 5 minutes)"
@@ -77,6 +83,8 @@ jobs:
           role: plan
           key: ${{ env.KEY }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          jira-email: ${{ secrets.JIRA_EMAIL }}   # only the budget stop's pipe step gets it (claude-agent)
+          jira-api-token: ${{ secrets.JIRA_API_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           github-token: ${{ github.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # /plan arrives as the pipeline App; empty = none
@@ -88,15 +96,23 @@ jobs:
             Write the plan to ${{ runner.temp }}/plan.md with the Write tool. Do not write any other file.
       - name: Post the build plan on the story (agent-free)
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           TYPESAFE_API_KEY: ${{ vars.AI_TRIAGE == 'true' && secrets.TYPESAFE_API_KEY || '' }}
         run: |
           [ -s "$RUNNER_TEMP/plan.md" ] || { node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY" --failed; exit 1; }
           node .pipeline/pipeline/bin/pipe.mjs story plan-post "$KEY" --file "$RUNNER_TEMP/plan.md" ${{ steps.ctx.outputs.started == 'true' && '--started' || '' }}
       - name: A failed run says so on the plan comment (never left saying "planning")
         if: failure()
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY" --failed
       - name: The story card shows the plan (if the story has started)
         if: always() && steps.ctx.outputs.started == 'true'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY"
       - name: Remove the button label
         if: always()

@@ -80,8 +80,12 @@ export function adfToText(node) {
 }
 const adfDoc = (text) => ({ type: "doc", version: 1, content: text.split("\n\n").map((p) => ({ type: "paragraph", content: [{ type: "text", text: p }] })) });
 
-export function jiraTracker({ fetch = globalThis.fetch, base = process.env.JIRA_BASE_URL, email = process.env.JIRA_EMAIL, token = process.env.JIRA_API_TOKEN }) {
-  if (!base || !email || !token) throw new Error("TRACKER=jira needs JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN");
+// JIRA_BASE_URL is a setting (a repository variable, carried by PIPELINE_VARS); JIRA_EMAIL and JIRA_API_TOKEN are
+// secrets passed only to the workflow steps that run main's pipe commands using the tracker (a test checks), never to
+// a job, an agent or code the checkout controls. pipe builds the tracker on first use, so no other command needs them.
+export function jiraTracker({ fetch = globalThis.fetch, base = setting("JIRA_BASE_URL"), email = process.env.JIRA_EMAIL, token = process.env.JIRA_API_TOKEN }) {
+  if (!base) throw new Error("TRACKER=jira needs JIRA_BASE_URL: set the repository variable (https://<site>.atlassian.net)");
+  if (!email || !token) throw new Error("TRACKER=jira needs JIRA_EMAIL and JIRA_API_TOKEN: set them as repository secrets (the skill's scripts/jira-setup.sh checks them and prints the commands)");
   const auth = "Basic " + Buffer.from(`${email}:${token}`).toString("base64");
   const call = async (method, path, body) => {
     const res = await fetch(`${base.replace(/\/$/, "")}${path}`, {
@@ -133,5 +137,6 @@ export function jiraTracker({ fetch = globalThis.fetch, base = process.env.JIRA_
 }
 
 export function tracker(io, env = process.env) {
-  return setting("TRACKER", env) === "jira" ? jiraTracker({}) : githubTracker({ gh: io.gh, ghPages: io.ghPages });
+  if (setting("TRACKER", env) !== "jira") return githubTracker({ gh: io.gh, ghPages: io.ghPages });
+  return jiraTracker({ fetch: io.fetch || globalThis.fetch, base: setting("JIRA_BASE_URL", env), email: env.JIRA_EMAIL, token: env.JIRA_API_TOKEN });
 }

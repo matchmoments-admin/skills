@@ -7,7 +7,7 @@
     "lint": "eslint \"force-app/**/lwc/**/*.js\" --no-error-on-unmatched-pattern",
     "test:unit": "sfdx-lwc-jest -- --passWithNoTests",
     "e2e": "playwright test",
-    "test:pipeline": "node --test pipeline/test/*.test.mjs"
+    "test:pipeline": "node --import ./pipeline/test/env.mjs --test pipeline/test/*.test.mjs"
   },
   "devDependencies": {
     "@lwc/eslint-plugin-lwc": "^2.0.0",

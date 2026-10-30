@@ -49,7 +49,10 @@ jobs:
       # flag off, or nothing to run (no committed spec: that is the verdict, posted here): decided in main's code
       # (pipeline/src/start.mjs) before a test runner starts
       # a label is a person asking (auto-chain dispatches directly): Claude rewrites the spec even if one stands
-      - run: node pipeline/bin/pipe.mjs start ui-test --pr "$PR" --mode "$([ "$LABEL" = "ai:test" ] && echo ai || echo run)" --explicit
+      - env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: node pipeline/bin/pipe.mjs start ui-test --pr "$PR" --mode "$([ "$LABEL" = "ai:test" ] && echo ai || echo run)" --explicit
   write:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'ai' && vars.AI_UI_TEST == 'true'
     runs-on: ubuntu-latest
@@ -97,16 +100,23 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: The story card says Claude is writing the UI test
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card --branch "$BRANCH" --now "Claude is writing and running the UI test in the scratch org (5 to 15 minutes)"
       - name: The org's lane (one job at a time in an org; busy, this job parks and is re-run when it frees)
         id: lane
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --park write
       - name: Attach, deploy this head and prepare the story's org; fetch the story
         if: steps.lane.outputs.parked != 'true'
         id: org
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org ready "$BRANCH" --pr "$PR")   # this head, deployed and prepared (once); never rebuilt for a merged PR
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
@@ -133,6 +143,8 @@ jobs:
           key: ${{ steps.org.outputs.key }}
           pr: ${{ env.PR }}
           oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          jira-email: ${{ secrets.JIRA_EMAIL }}   # only the budget stop's pipe step gets it (claude-agent)
+          jira-api-token: ${{ secrets.JIRA_API_TOKEN }}
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # only the anthropic-api and gateway providers use it (config/ai-models.json)
           github-token: ${{ steps.id.outputs.token }}
           allowed-bots: ${{ vars.PIPELINE_BOTS }}   # only the pipeline's own bots (auto-chain labels as the App); empty = none
@@ -162,6 +174,8 @@ jobs:
       - name: Let the next job into the org's lane
         if: always()
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
       - name: Remove the button label
@@ -221,6 +235,8 @@ jobs:
         id: lane
         if: steps.spec.outputs.exists == 'true'
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --no-card --park run   # this job cannot write the card (read-only)
       - name: Deploy this exact head to the story's org and prepare it
@@ -259,6 +275,8 @@ jobs:
       - name: Let the next job into the org's lane
         if: always() && steps.spec.outputs.exists == 'true'
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
       - uses: actions/upload-artifact@v4
@@ -301,6 +319,9 @@ jobs:
         id: evidence
         if: env.OUTCOME == 'success' && vars.UI_EVIDENCE == 'true' && env.HAS_SPEC == 'true'
         continue-on-error: true   # no screenshots never fails the verdict
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           # the artifact's root is the uploaded folders' common parent: art/ui-out/evidence, or art/evidence when ui-out
           # was the only folder (a clean pass leaves no report or results). Look, don't assume.
@@ -310,6 +331,8 @@ jobs:
         id: triage
         if: env.OUTCOME == 'failure' && vars.AI_TRIAGE == 'true'
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           node pipeline/bin/pipe.mjs tracker story "$KEY" --out story.md || true
@@ -319,6 +342,9 @@ jobs:
       - name: Does the spec check a criterion? (a spec that only waits for things to be visible proves nothing)
         id: speccheck
         if: env.OUTCOME == 'success' && env.HAS_SPEC == 'true'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           gh api -H "Accept: application/vnd.github.raw" "repos/$GH_REPO/contents/e2e/story-$KEY.spec.ts?ref=$HEAD_SHA" > "$RUNNER_TEMP/spec.ts"
           node pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story-check.md" >/dev/null 2>&1 || true

@@ -40,6 +40,8 @@ jobs:
         run: node pipeline/bin/pipe.mjs context
       - name: Open the sprint (tracker and release branch)
         env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           OPEN: ${{ steps.ctx.outputs.RELEASE_BRANCH }}
         run: |
           if [ -n "$OPEN" ] && [ "$OPEN" != "release/$SPRINT" ]; then echo "::error::$OPEN is still open. Ship it first."; exit 1; fi
