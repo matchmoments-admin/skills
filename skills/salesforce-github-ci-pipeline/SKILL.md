@@ -13,7 +13,22 @@ Read [`references/architecture.md`](references/architecture.md) before changing 
 
 ## Phase 0 — Decisions
 
-Ask the user, then record the answers in the repo's `CLAUDE.md`:
+Ask only three questions before anything runs; everything else has a safe default.
+
+- **Ask now:** (1) the GitHub owner and the repo's name, (2) the production org (and whether it is also the Dev Hub),
+  (3) one person or a team (who approves stories).
+- **Say the defaults, and move on unless the user objects:** GitHub Issues as the tracker; every AI switch off; sprint
+  names `2026-w42`; a fresh org (no `enterprise.md`); GitHub Actions; GitHub secrets, with production credentials in the
+  `production` environment; nobody but CI holds production credentials; no Slack; FFLib vendored. Ask the rest when the
+  phase that needs it comes: Claude auth and Jev only when an AI switch goes on, and Load after Phase 2, once
+  `pipe org capacity` can answer it.
+- **One person** (the builder approves their own stories): leave `APPROVERS` unset for the first, AI-off tracer, since
+  anyone with write access approves then. Once `AI_REVIEW` is on, set `APPROVERS=<you>` and `APPROVAL_MODE=solo`: your own
+  push then counts once a real AI review passed on it. Under the default `team` mode nobody approves a change they
+  pushed, so a lone builder would be stuck at sign-off. **A team:** `APPROVERS=<lead>,...` and the default
+  `APPROVAL_MODE=team`.
+
+Record the answers and defaults in the repo's `CLAUDE.md`. The decisions in full, for when the user wants to change one:
 
 1. **GitHub owner.** Branch rules on a private repo need GitHub Pro (personal) or Team (organisation). Recommend an organisation on Team: it also enables the pipeline App identity and org-level Actions policy.
 2. **Production org and Dev Hub.** Often the same org. Note its edition: Developer Edition allows 3 active / 6 daily scratch orgs, which caps the team at about two stories in flight (see gotchas, *Scaling*).
@@ -47,6 +62,8 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
     changes secrets ([`references/enterprise.md`](references/enterprise.md), *Credentials*).
 13. **Approvers.** Who approves stories (`APPROVERS`, default first, e.g. the lead). With it set, nobody approves a
     change they pushed, and each story names its approver ([`references/enterprise.md`](references/enterprise.md), *People*).
+    One person: `APPROVAL_MODE=solo` with `AI_REVIEW` on, as above; with every AI switch off, solo mode cannot
+    approve, so leave `APPROVERS` unset instead.
 
 14. **Load.** How many people build stories, how many stories a sprint, how long a sprint, and the CI budget. Size it
     with [`references/capacity.md`](references/capacity.md). The Dev Hub's edition caps the stories in flight, and
@@ -58,22 +75,47 @@ Ask the user, then record the answers in the repo's `CLAUDE.md`:
     as the person; approvals stay in GitHub). See [`references/slack.md`](references/slack.md); it is set up after
     Phase 3 with [`scripts/slack-setup.sh`](scripts/slack-setup.sh).
 
-Done when: all fifteen answers are written down.
+Done when: the three answers and the defaults are written down.
 
 ## Phase 1 — Repo from the template
 
-Run [`scripts/bootstrap.sh`](scripts/bootstrap.sh) `<target-repo-dir> --owner <github-owner> [--project <repo-name>] [--org <prod-org-id>] [--alias <prod-alias>]`. It copies the template, keeps any existing `force-app/`, fills every placeholder (owner, the App's bot name `<owner>-pipeline`, project, production alias; the org ID can come after Phase 2 step 4), refuses to finish with one left, then runs `npm ci` and the pipeline's tests. The skills repo's CI does the same for a made-up owner on every push, so the template is known to stand up on its own. Then edit `CLAUDE.md` (project rules) and `REVIEW.md` (review rubric) for the project.
+1. **Create the repo**: `gh repo create <owner>/<repo> --private` (an organisation on Team, or Pro for a personal
+   account, so branch rules work on a private repo). An existing Salesforce DX repo: skip this, and run step 2 in its
+   checkout; it keeps `force-app/`.
+2. **Copy the template**: [`scripts/bootstrap.sh`](scripts/bootstrap.sh) `<repo-dir> --owner <github-owner>
+   [--project <repo-name>] [--org <prod-org-id>] [--alias <prod-alias>] [--no-fflib]`. It copies the template, keeps
+   any existing `force-app/`, fills every placeholder (owner, the App's bot name `<owner>-pipeline`, project,
+   production alias; the org ID can come after Phase 2 step 4) and refuses to finish with one left. A directory that
+   is not the top of its own repository (a new one, or one inside another repository) becomes a git repository on
+   `main`. It vendors FFLib (`fflib-apex-common` and `fflib-apex-mocks`, through `scripts/vendor.sh`, at the commits
+   the reference repo runs; `docs/vendor.md` records them). It skips that when `force-app` already holds FFLib's
+   classes (no duplicates) or `docs/vendor.md` already has those commits (a re-run clones nothing). The template's Apex
+   test standard (`CLAUDE.md`, `docs/agents/apex-testing.md`: fflib mocks, builders) is written for FFLib;
+   `--no-fflib` leaves it out, and the tests then use `Test.StubProvider`. Then it runs `npm ci` and the pipeline's
+   tests. The skills repo's CI does the same for a made-up owner on every push, so the template is known to stand up
+   on its own. `CLAUDE.md` and `REVIEW.md` work as they are; tune them for the project later, through a PR.
+3. **First push.** The bootstrap's *Next* prints the exact commands for the case it found.
+   - **A new repository:** this is the only direct push to `main`, before Phase 3's rulesets refuse it:
+     `git remote add origin https://github.com/<owner>/<repo>.git`, then
+     `git add -A && git commit -m "chore: pipeline from the template" && git push -u origin main`.
+   - **An existing repository:** never push to its default branch. Commit on a branch (`git switch -c pipeline-setup`),
+     push it, and open a PR into `main` (`gh pr create --base main`). The pipeline ships from `main`. If the default
+     branch is another (`master`), rename it first, as the bootstrap's *Next* says:
+     `gh api -X POST repos/<owner>/<repo>/branches/<old>/rename -f new_name=main`. An `origin` that already exists is
+     kept.
 
-Done when: `npm ci && npm run test:pipeline` passes in the target repo, and `actionlint .github/workflows/*.yml` is clean.
+Done when: `npm ci && npm run test:pipeline` passes in the repo, `actionlint .github/workflows/*.yml` is clean, and
+`gh repo view <owner>/<repo>` shows the commit on `main`.
 
 ## Phase 2 — Salesforce
 
 Order matters; each step depends on the one before.
 
-1. **Dev Hub**: Setup → Dev Hub → Enable (one-way). Also enable **Scratch Org Snapshots** there (one-way): new story, CI, staging and UAT orgs then start from a snapshot with production's baseline and the test data already in (`snapshot-refresh`). Then run `prod-baseline` once by hand and review its PR (all of production by default; tune `config/baseline.json`).
-2. **CI certificate and connected app**: [`scripts/make-ci-cert.sh`](scripts/make-ci-cert.sh) `<repo-dir> <contact-email>` generates `secrets/ci.key` + certificate and writes `devhub-setup/.../Pipeline_CI.connectedApp-meta.xml`. Deploy `devhub-setup/` to production, then **assign** the `Pipeline_CI` permission set to the CI user (`sf org assign permset`): the assignment is what pre-authorizes the app, and it is data, not metadata.
+1. **Dev Hub**: Setup → Dev Hub → Enable (one-way). Also enable **Scratch Org Snapshots** there (one-way): new story, CI, staging and UAT orgs then start from a snapshot with production's baseline and the test data already in (`snapshot-refresh`, Phase 3). If the Dev Hub's edition does not offer Snapshots, set `SCRATCH_SNAPSHOT=off` in Phase 3: every org is then built from the shape (slower, same result). The production baseline is captured in Phase 3, once the secrets it needs exist.
+2. **CI certificate and connected app**: choose the CI user first: a dedicated integration user where a licence allows ([`references/enterprise.md`](references/enterprise.md)), otherwise (a Developer Edition) the admin running the setup. [`scripts/make-ci-cert.sh`](scripts/make-ci-cert.sh) `<repo-dir> <contact-email>` generates `secrets/ci.key` + certificate and writes `devhub-setup/.../Pipeline_CI.connectedApp-meta.xml`. Deploy `devhub-setup/` to production, then **assign** the `Pipeline_CI` permission set to the CI user (`sf org assign permset`): the assignment is what pre-authorizes the app, and it is data, not metadata. `config/baseline.json` already excludes `PermissionSet:Pipeline_CI`, so it never reaches a scratch org.
 3. **Prove the JWT login** locally: `sf org login jwt --client-id <consumer key> --jwt-key-file secrets/ci.key --username <ci user> --instance-url https://login.salesforce.com`.
-4. **Org Shape**: deploy `devhub-setup/main/default/settings/DevHub.settings-meta.xml`, then the user adds production's **15-character** org ID under Setup → Scratch Orgs → "Allow a Dev Hub org to create scratch orgs using this org's shape" (no API for this), then `sf org create shape -o <prod>`. Put that 18-char ID in `config/scratch-{dev,qa,hotfix,training}.json` as `sourceOrg`.
+4. **Org Shape**: deploy `devhub-setup/main/default/settings/DevHub.settings-meta.xml`, then the user adds production's **15-character** org ID under Setup → Scratch Orgs → "Allow a Dev Hub org to create scratch orgs using this org's shape" (no API for this), then `sf org create shape -o <prod>`. Put that 18-char ID in `config/scratch-{dev,qa,hotfix,training}.json` as `sourceOrg`: `scripts/bootstrap.sh <repo-dir> --owner <owner> --org <id> --fill-only` fills only that placeholder, and copies nothing over the pushed repo.
+5. **Commit what Phase 2 wrote, through a PR**: `devhub-setup/` (the connected app and the `Pipeline_CI` permission set from `make-ci-cert.sh`; `secrets/` stays out, `.gitignore` keeps it out) and `config/scratch-*.json` with the org ID. Use `git switch -c phase-2-setup`, commit, push, then `gh pr create --base main`, and merge it. Phase 3's rulesets do not exist yet, so nothing blocks it. CI's jobs that need Salesforce fail until Phase 3 adds the secrets; that is expected here. It must be on `main` before the production baseline (Phase 3), because every scratch org reads `sourceOrg`.
 
 Done when: `sf org list shape` shows the production shape **Active**, and a test scratch org created from `config/scratch-dev.json` deploys `force-app` (delete it afterwards).
 
@@ -83,7 +125,9 @@ Run [`scripts/github-setup.sh`](scripts/github-setup.sh) `<owner/repo> <ci-usern
 
 Then the pipeline App, which only a person can confirm: [`scripts/create-app.sh`](scripts/create-app.sh) `<owner> <repo>` opens a pre-filled manifest page; the user clicks Create, pastes back the `code`, the script stores `PIPELINE_APP_ID` and `PIPELINE_APP_PRIVATE_KEY` without printing the key; the user installs the App on the repo.
 
-Then the variables: `APPROVERS` (Phase 0), `PIPELINE_BOTS=github-actions,<app-slug>` (the only bots allowed to start agents; bare logins, no `[bot]`; every agent step reads it, and a pipeline test checks each workflow does) and each switch the user chose in Phase 0 (`gh variable set AI_REVIEW --body true`). Leave the rest unset.
+Then the variables: `PIPELINE_BOTS=github-actions,<app-slug>` (the only bots allowed to start agents; bare logins, no `[bot]`; every agent step reads it, and a pipeline test checks each workflow does); `APPROVERS` for a team (Phase 0; one person leaves it unset until `AI_REVIEW` is on, then sets it and `APPROVAL_MODE=solo`); `PROD_TEST_LEVEL=RunLocalTests` when FFLib is vendored (some of FFLib's own classes stay below the 75% per class that the default `RunRelevantTests` needs in production; check with `sf apex run test -o <prod> --test-level RunLocalTests --code-coverage`); `SCRATCH_SNAPSHOT=off` without Snapshots; and each switch the user chose (`gh variable set AI_REVIEW --body true`). Leave the rest unset.
+
+Then the **production baseline**, which needs the Salesforce secrets and the App from above: Actions → `prod-baseline` → Run workflow. It opens a PR with production's copy of everything not in `force-app` (all of production by default; tune `config/baseline.json`). Review it and merge it: the rulesets now protect `main`, so it goes through the PR, and its merge commit is the first **CI on main** (Phase 4 step 1). With one person, GitHub does not let you approve a PR you opened, but the App opened this one, so you can; a repository admin can also merge it with `gh pr merge <n> --merge --admin`, which the `merged` workflow records. Then Actions → `snapshot-refresh` (skip it with `SCRATCH_SNAPSHOT=off`): the snapshot new orgs start from, 15 to 30 minutes.
 
 **Merge button and emergencies.** Both rulesets require `pipeline/gate` from the GitHub Actions app (integration
 15368): the gate posts it, so GitHub's merge button stays locked until every requirement is met. Emergency approval
@@ -104,13 +148,13 @@ arrives with `PIPELINE_VARS`. Then follow
 (`--notices-only` for level 1). It deploys the Slack actions Worker, opens Slack's create-from-manifest page (Socket
 Mode off, interactivity pointing at the Worker), stores the secrets without printing them and sends a test message.
 
-Done when: a direct `git push` to `main` is refused with GH013, a PR's merge button says "pipeline/gate expected", `gh api orgs/<org>/installations` lists the App, the repo's workflow permissions show `can_approve_pull_request_reviews: true`, and `gh variable list` shows exactly the chosen switches.
+Done when: a direct `git push` to `main` is refused with GH013, a PR's merge button says "pipeline/gate expected", the App is installed on the repo (`gh api orgs/<org>/installations` for an organisation; for a personal account, the account's Settings → Applications), the repo's workflow permissions show `can_approve_pull_request_reviews: true`, `gh variable list` shows exactly the chosen switches, the baseline PR is merged, and `snapshot-refresh` succeeded (or `SCRATCH_SNAPSHOT=off`). A personal account has no organisation Actions policy; `github-setup.sh` skips it, and that is fine.
 
 ## Phase 4 — Tracer story
 
 Prove the whole path with one small real story before anyone relies on it. Drive it exactly as a user would, and fix forward through the template (then `scripts/skills-sync.sh`) whenever a step fails.
 
-1. Push a commit to `main` and wait for **CI on main** to go green (release branches are cut only from commits with green required checks; do not merge to `main` while a sprint is starting).
+1. Wait for **CI on main** to go green on the baseline PR's merge commit (Phase 3). Never push to `main` directly: the rulesets refuse it (GH013); any later change to `main` goes through a PR. Release branches are cut only from commits with green required checks; do not merge to `main` while a sprint is starting.
 2. Actions → `sprint-start` with the sprint name.
 3. Create the story with the **New story** issue form (acceptance criteria say **what the user sees**). With `AI_PLAN` on, comment `/plan`: a **Build plan** comment appears (proposed build, tests, risks, size, numbered questions); answer in a comment, `/plan` again if it should change.
 4. Comment `/start`. Within seconds the **Pipeline status** card shows **⏳ Now:** with a *watch it live* link; when the branch and org exist, its **Next** line says what to do.
@@ -118,7 +162,7 @@ Prove the whole path with one small real story before anyone relies on it. Drive
 6. Sign off: **Approve here** on the card, or `/ship`. The gate posts `pipeline/gate` and merges; staging runs every test.
 7. Actions → `release-cut`; with UAT on, test in UAT and comment `/uat-pass`; approve the release PR. Watch **Production validation** on it, then the release graph (deploy → tag + org shape → close-out → back-merge).
 
-Run it with every AI switch off first (manual path), then with the chosen switches. Then a hotfix (**Urgent production fix** form; it starts on submit), built by hand.
+Run it with every AI switch off first (manual path), then with the chosen switches. Then a hotfix (**Urgent production fix** form; it starts on submit), built by hand. One person: the AI-off run needs `APPROVERS` unset (solo mode needs an AI review to pass, so it cannot approve with AI off); before the AI run, set `APPROVERS=<you>`, `APPROVAL_MODE=solo` and `AI_REVIEW=true`, and the sign-off records "(solo: the AI review passed)".
 
 Done when: a GitHub Release tag exists for both, the change is visible in production Setup, the story card ends "Done: live in production", the milestone is closed, and `scratch-janitor` (every 6 hours; or run it) leaves no orgs from that sprint: `sf data query -o <prod> -q "SELECT Description FROM ScratchOrgInfo WHERE Status='Active'"`.
 

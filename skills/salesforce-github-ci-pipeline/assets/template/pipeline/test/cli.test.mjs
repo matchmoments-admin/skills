@@ -110,3 +110,89 @@ test("every gate.X, facts.X and journey.X the commands call exists (a moved land
     }
   }
 });
+
+const pipelineSkill = new URL("../../.claude/skills/salesforce-github-ci-pipeline/", import.meta.url);
+test("the skill's bootstrap: its own git repo (even inside another), FFLib at this repo's pinned commits once, an existing repo kept and told to use a PR, --fill-only for the org ID", { skip: !existsSync(new URL("assets/template/pipeline", pipelineSkill)) && "the pipeline skill is not vendored here" }, async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, chmodSync, mkdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const pins = Object.fromEntries([...readFileSync(new URL("../../docs/vendor.md", import.meta.url), "utf8").matchAll(/^\| `(fflib-apex-[a-z]+)` \| (\S+) \| `([0-9a-f]{40})` \| (.+?) \|/gm)].map((m) => [m[1], { url: m[2], sha: m[3], dirs: m[4].replace(/`/g, "").split(" ") }]));
+  assert.deepEqual(Object.keys(pins).sort(), ["fflib-apex-common", "fflib-apex-mocks"]);
+  // a fake git: clone makes the upstream folders, checkout and rev-parse answer as git would; every call is logged
+  const bin = mkdtempSync(`${tmpdir()}/boot-bin-`);
+  writeFileSync(`${bin}/git`, `#!/usr/bin/env node
+const a = process.argv.slice(2), fs = require("fs"), path = require("path");
+fs.appendFileSync(process.env.FAKE_GIT_LOG, a.join(" ") + "\\n");
+const C = a[0] === "-C" ? a[1] : process.cwd(), rest = a[0] === "-C" ? a.slice(2) : a;
+if (rest[0] === "init") { fs.mkdirSync(path.join(C, ".git"), { recursive: true }); fs.writeFileSync(path.join(C, ".git/HEAD_NAME"), "main"); process.exit(0); }
+if (rest[0] === "rev-parse" && rest[1] === "--abbrev-ref") { const f = path.join(C, ".git/HEAD_NAME"); console.log(fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "main"); process.exit(0); }
+if (rest[0] === "remote" && rest[1] === "get-url") { const f = path.join(C, ".git/ORIGIN"); if (!fs.existsSync(f)) process.exit(2); console.log(fs.readFileSync(f, "utf8")); process.exit(0); }
+if (rest[0] === "rev-parse" && rest[1] === "--show-toplevel") { let d = C; while (!fs.existsSync(path.join(d, ".git"))) { if (d === "/") process.exit(128); d = path.dirname(d); } console.log(d); process.exit(0); }
+if (rest[0] === "rev-parse" && rest[1] === "--is-inside-work-tree") { let d = C; while (!fs.existsSync(path.join(d, ".git"))) { if (d === "/") process.exit(128); d = path.dirname(d); } console.log("true"); process.exit(0); }
+if (rest[0] === "clone") { const dest = rest.at(-1); for (const d of JSON.parse(process.env.FAKE_DIRS)) { fs.mkdirSync(path.join(dest, d), { recursive: true }); fs.writeFileSync(path.join(dest, d, "x.cls"), "x"); } fs.writeFileSync(path.join(dest, ".url"), rest.at(-2)); process.exit(0); }
+if (rest[0] === "checkout") { fs.writeFileSync(path.join(C, ".sha"), rest.at(-1)); process.exit(0); }
+if (rest[0] === "rev-parse" && rest[1] === "HEAD") { console.log(fs.readFileSync(path.join(C, ".sha"), "utf8")); process.exit(0); }
+process.exit(0);
+`);
+  chmodSync(`${bin}/git`, 0o755);
+  let n = 0;
+  const run = (target, ...flags) => {
+    const log = `${bin}/log-${++n}`;
+    writeFileSync(log, "");
+    const r = spawnSync("bash", [new URL("scripts/bootstrap.sh", pipelineSkill).pathname, target, "--owner", "Acme-Co", "--project", "acme-sf", "--no-test", ...flags], { encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_GIT_LOG: log, FAKE_DIRS: JSON.stringify(Object.values(pins).flatMap((p) => p.dirs)) } });
+    return { ...r, out: r.stdout + r.stderr, log: readFileSync(log, "utf8") };
+  };
+  const { realpathSync } = await import("node:fs");
+  const t = realpathSync(mkdtempSync(`${tmpdir()}/boot-`));   // bootstrap works on the real path (macOS: /var is /private/var)
+  // a new directory: a git repository on main, FFLib at this repo's commits, the first push to main
+  const r = run(`${t}/acme-sf`);
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.log, new RegExp(`-C ${t}/acme-sf init -q -b main`), "a new directory becomes a git repository (vendor.sh and the first push need one)");
+  const vendor = readFileSync(`${t}/acme-sf/docs/vendor.md`, "utf8");
+  for (const [name, p] of Object.entries(pins)) {
+    assert.match(r.log, new RegExp(`checkout -q ${p.sha}`), `${name} at this repo's commit`);
+    assert.ok(vendor.includes(`| \`${name}\` | ${p.url} | \`${p.sha}\` |`), `${name}'s row in the new repo's docs/vendor.md`);
+    for (const d of p.dirs) assert.ok(existsSync(`${t}/acme-sf/force-app/vendor/${name}/${d.split("/").pop()}/x.cls`), `${name}/${d}`);
+  }
+  assert.match(r.stdout, /PROD_TEST_LEVEL=RunLocalTests/, "says why production validation needs RunLocalTests with FFLib vendored");
+  assert.doesNotMatch(r.stdout, /\d\d\.\d\d%/, "no coverage figure that goes stale: it says how to check");
+  assert.match(r.stdout, /git push -u origin main/, "a new repository: the first push goes straight to main");
+  // run again: FFLib is already at the pinned commits, nothing is cloned
+  const again = run(`${t}/acme-sf`);
+  assert.equal(again.status, 0, again.out);
+  assert.doesNotMatch(again.log, /\bclone\b/, "a re-run does not clone FFLib again");
+  assert.match(again.out, /FFLib already vendored at the pinned commits/);
+  // a directory inside another repository: its own repository, and FFLib lands in it, never in the parent
+  mkdirSync(`${t}/parent/.git`, { recursive: true });
+  const nested = run(`${t}/parent/acme-sf`);
+  assert.equal(nested.status, 0, nested.out);
+  assert.match(nested.log, new RegExp(`-C ${t}/parent/acme-sf init -q -b main`), "inside a parent repository it still makes its own");
+  assert.ok(existsSync(`${t}/parent/acme-sf/force-app/vendor/fflib-apex-common`) && !existsSync(`${t}/parent/force-app`), "FFLib lands in the new repo, not the parent");
+  // an existing Salesforce DX repository on another branch, with FFLib of its own: kept, no duplicate classes
+  const ex = `${t}/existing`;
+  mkdirSync(`${ex}/.git`, { recursive: true }); writeFileSync(`${ex}/.git/HEAD_NAME`, "master"); writeFileSync(`${ex}/.git/ORIGIN`, "https://github.com/acme/existing.git");
+  mkdirSync(`${ex}/force-app/main/default/classes`, { recursive: true });
+  writeFileSync(`${ex}/force-app/main/default/classes/fflib_SObjectDomain.cls`, "public class fflib_SObjectDomain {}");
+  const existing = run(ex);
+  assert.equal(existing.status, 0, existing.out);
+  assert.doesNotMatch(existing.log, /\binit\b|\bclone\b/, "an existing repository: no git init, no FFLib clone");
+  assert.match(existing.out, /FFLib is already in force-app .*fflib_SObjectDomain\.cls.*not vendored/);
+  assert.ok(existsSync(`${ex}/force-app/main/default/classes/fflib_SObjectDomain.cls`));
+  assert.match(existing.out, /existing repository.*branch master/i);
+  assert.match(existing.out, /git switch -c pipeline-setup/, "an existing repository: the change goes through a PR, never a push to its default branch");
+  assert.match(existing.out, /ships from main.*rename/i, "a default branch other than main is named, with how to rename it");
+  // --org --fill-only: production's org ID into the pushed repo, nothing copied over it
+  writeFileSync(`${t}/acme-sf/CLAUDE.md`, readFileSync(`${t}/acme-sf/CLAUDE.md`, "utf8") + "\nProject rule kept.\n");
+  const fill = run(`${t}/acme-sf`, "--org", "00D000000000001AAA", "--fill-only");
+  assert.equal(fill.status, 0, fill.out);
+  assert.match(readFileSync(`${t}/acme-sf/config/scratch-dev.json`, "utf8"), /00D000000000001AAA/);
+  assert.match(readFileSync(`${t}/acme-sf/CLAUDE.md`, "utf8"), /Project rule kept/, "the template is not copied again");
+  assert.doesNotMatch(fill.out, /^wrote /m);
+  assert.equal(fill.log, "", "fill-only touches no git and no FFLib");
+  // --no-fflib
+  mkdirSync(`${t}/bare`);
+  const skip = run(`${t}/bare`, "--no-fflib");
+  assert.equal(skip.status, 0, skip.out);
+  assert.ok(!existsSync(`${t}/bare/force-app/vendor`), "--no-fflib vendors nothing");
+});

@@ -4,6 +4,14 @@ What a story's Apex tests look like here: two layers, one test matrix, one facto
 `docs/agents/salesforce.md` (seams, Flow tests, the CI user) for Apex; where the two seem to differ, salesforce.md's
 platform facts win. FFLib itself (domain, selector, unit of work) is explained in `docs/fflib.md`.
 
+**What a new repo starts with.** The fflib parts below apply once FFLib is vendored (`docs/vendor.md` lists
+`fflib-apex-common` and `fflib-apex-mocks`; the pipeline skill's `bootstrap.sh` vendors both unless `--no-fflib`).
+Without it, keep the two layers and mock with `Test.StubProvider`. `TestDataFactory` and the `<Object>Builder` classes
+are the repo's own code, not part of the pipeline: the first story that needs a persona adds `TestDataFactory`, and
+the first story that tests an object adds its builder (Test data, below). With FFLib vendored, production validation
+runs `PROD_TEST_LEVEL=RunLocalTests`: some of upstream's classes stay below the 75% per class that `RunRelevantTests`
+needs (check with `sf apex run test --test-level RunLocalTests --code-coverage`).
+
 ## The number
 
 - **Every Apex class or trigger a change touches reaches 85% coverage** in CI (`COVERAGE_MIN`, pipeline/src/tests.mjs).

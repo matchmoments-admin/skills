@@ -91,7 +91,8 @@ business glossary is `docs/org/GLOSSARY.md`; `GLOSSARY.md` is the pipeline's.
 - A test that cannot fail (asserts what it just set, or nothing) is a blocker in review.
 - Every Apex class or trigger the change touches reaches **85% coverage** (CI fails below it). Write the tests as
   `docs/agents/apex-testing.md` says: DML-free unit tests with fflib mocks for the logic, a few seam tests with
-  `System.runAs` for what a mock cannot prove, and records from `<Object>Builder` classes.
+  `System.runAs` for what a mock cannot prove, and records from `<Object>Builder` classes. The fflib mocks need FFLib
+  vendored (`docs/vendor.md`); a repo without it yet uses the same two layers with `Test.StubProvider` stubs.
 
 ## The agreed plan
 When the story file has an "Agreed plan" (from `/plan`) and "Answers", build what the plan says; where an answer
