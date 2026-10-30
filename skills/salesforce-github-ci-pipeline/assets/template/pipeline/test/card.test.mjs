@@ -27,7 +27,7 @@ import * as closeout from "../src/closeout.mjs";
 import { lane, jobId, wakeAll, waiterJob } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
-import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
+import { storyCards, releaseCard, newStoryCard, maintenanceCard } from "../src/card.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
 import * as evidence from "../src/evidence.mjs";
@@ -297,4 +297,27 @@ test("Slack notices: one message when a card's turn changes (a person is needed,
   const posted = [];
   await notify.slackNotifier({ url: "https://hooks.slack.test/x", post: async (u, b) => { posted.push([u, JSON.parse(b)]); return { ok: true }; } })({ text: "hi" });
   assert.deepEqual(posted, [["https://hooks.slack.test/x", { text: "hi" }]]);
+});
+
+test("maintenance card: a pipeline PR into main says what it still needs, and how to merge it alone", async () => {
+  const pr = { number: 406, state: "OPEN", title: "docs: handoff", headRefName: "arch-docs", baseRefName: "main", headRefOid: "h", author: { login: "dev" } };
+  const run = (name, conclusion) => ({ name, conclusion, status: "completed", started_at: "2026-10-05T10:00:00Z" });
+  const green = [run("static checks (no org)", "success"), run("deploy and Apex tests (scratch org)", "success")];
+  const facts = { pr, checkRuns: green, statuses: [], reviews: [] };
+  const waiting = maintenanceCard({ repoUrl: "https://github.com/o/r", pr, facts, decision: gate.evaluate(facts) });
+  assert.match(waiting, /Pipeline maintenance: no story/);
+  assert.match(waiting, /\*\*Next:\*\* Waiting: not approved/);
+  assert.match(waiting, /someone other than @dev\. Working alone\? An admin can merge it/);
+  assert.doesNotMatch(waiting, /Production validation/, "no force-app change: nothing to validate");
+  const approved = { ...facts, reviews: [{ user: { type: "User", login: "lead" }, state: "APPROVED", commit_id: "h", submitted_at: "2026-10-05T12:00:00Z" }] };
+  const ready = maintenanceCard({ repoUrl: "https://github.com/o/r", pr, facts: approved, decision: gate.evaluate(approved) });
+  assert.match(ready, /approved by @lead/);
+  assert.match(ready, /Nothing to do: the gate merges it/);
+  assert.match(maintenanceCard({ repoUrl: "u", pr, facts: { ...facts, checkRuns: [run("static checks (no org)", "failure")] }, decision: gate.evaluate(facts) }), /❌ \| CI/);
+  // refreshPr writes it on the PR (no story card speaks for it)
+  const edits = [];
+  const host = { repoUrl: "https://github.com/o/r", prFacts: () => facts, hasApp: () => false };
+  const t = (who) => ({ comments: async () => [], card: async (k) => edits.push(`${who}:${k}`) });
+  assert.equal(await storyCards({ host, tracker: t("issue"), prTracker: t("pr"), slack: null }).refreshPr(406), "maintenance");
+  assert.deepEqual(edits, ["pr:406"]);
 });
