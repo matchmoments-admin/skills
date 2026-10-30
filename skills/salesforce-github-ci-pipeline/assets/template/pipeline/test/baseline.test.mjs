@@ -56,7 +56,12 @@ test("baseline: all of production, minus the managed, the platform's own and exc
   }, "standard objects come only through their children; standard-object children only when a person made them after the org's setup");
   assert.match(baselineMod.packageXml({ Flow: ["Weather_Check"] }), /<members>Weather_Check<\/members>\n    <name>Flow<\/name>/);
   const cert = new URL("../../.claude/skills/salesforce-github-ci-pipeline/scripts/make-ci-cert.sh", import.meta.url);
-  if (readdirSync(new URL("../../.claude/skills/", import.meta.url)).includes("salesforce-github-ci-pipeline")) assert.match(readFileSync(cert, "utf8"), /permissionsets\/Pipeline_CI\.permissionset-meta\.xml/, "the CI permission set the baseline excludes is the one make-ci-cert.sh writes");
+  if (existsSync(cert)) assert.match(readFileSync(cert, "utf8"), /permissionsets\/Pipeline_CI\.permissionset-meta\.xml/, "the CI permission set the baseline excludes is the one make-ci-cert.sh writes");
+  // this repo's own CI permission sets (devhub-setup: Lifecycle_CI here, Pipeline_CI from make-ci-cert.sh) never reach a scratch org
+  const ps = new URL("../../devhub-setup/main/default/permissionsets/", import.meta.url);
+  const own = existsSync(ps) ? readdirSync(ps).map((f) => f.replace(/\.permissionset-meta\.xml$/, "")) : [];
+  for (const n of own) assert.ok(baselineMod.excluded("PermissionSet", n, config.exclude), `config/baseline.json excludes PermissionSet:${n} (devhub-setup's CI permission set)`);
+  if (existsSync(new URL("../../devhub-setup/main/default/connectedApps/Lifecycle_CI.connectedApp-meta.xml", import.meta.url))) assert.ok(own.includes("Lifecycle_CI"), "this repo's CI permission set is checked");
 
   const dash = baselineMod.sanitize("x.dashboard-meta.xml", "<Dashboard><dashboardType>SpecifiedUser</dashboardType>\n<runningUser>admin@prod.com</runningUser></Dashboard>");
   assert.doesNotMatch(dash, /admin@prod/); assert.match(dash, /<dashboardType>LoggedInUser<\/dashboardType>/);
@@ -64,7 +69,7 @@ test("baseline: all of production, minus the managed, the platform's own and exc
   assert.doesNotMatch(baselineMod.sanitize("Q.queue-meta.xml", "<Queue><queueMembers><users><user>a@b</user></users><roles><role>X</role></roles></queueMembers></Queue>"), /a@b/);
   assert.throws(() => baselineMod.sanitize("n.namedCredential-meta.xml", "<password>hunter2</password>"), /holds a secret/);
 
-  const { mkdtempSync, mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const t = mkdtempSync(join(tmpdir(), "bl-"));

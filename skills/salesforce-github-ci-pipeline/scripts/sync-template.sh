@@ -29,6 +29,12 @@ fi
 if [ -f "$T/config/baseline.json" ]; then
   sed -i.bak -e 's#"PermissionSet:Lifecycle_CI", ##' -e 's#; Lifecycle_CI is the same for the repo the template came from##' "$T/config/baseline.json" && rm -f "$T/config/baseline.json.bak"
   grep -q '"PermissionSet:Pipeline_CI"' "$T/config/baseline.json" || { echo "!! config/baseline.json must exclude PermissionSet:Pipeline_CI (make-ci-cert.sh's)" >&2; exit 1; }
+  ! grep -q 'Lifecycle_CI' "$T/config/baseline.json" || { echo "!! the template's config/baseline.json still names Lifecycle_CI: the reference repo's text changed, update the rewrite above" >&2; exit 1; }
+fi
+# FFLib's pinned commits for bootstrap.sh: the reference repo's docs/vendor.md rows, never a second copy by hand
+# (name, repository, commit, folders; tab-separated; the why is the new repo's own, written by bootstrap.sh)
+if [ -f "$SRC/docs/vendor.md" ]; then
+  node -e 'const fs=require("fs");const rows=[...fs.readFileSync(process.argv[1],"utf8").matchAll(/^\| `(fflib-apex-[a-z]+)` \| (\S+) \| `([0-9a-f]{40})` \| (.+?) \| .+? \|$/gm)].map((m)=>[m[1],m[2],m[3],m[4].replace(/`/g,"")].join("\t"));if(rows.length!==2){console.error("!! docs/vendor.md: expected fflib-apex-common and fflib-apex-mocks rows, found "+rows.length);process.exit(1)}fs.writeFileSync(process.argv[2],rows.join("\n")+"\n")' "$SRC/docs/vendor.md" "$SKILL/assets/fflib-pins.tsv"
 fi
 # the org's business glossary is the project's own: the template starts it empty
 mkdir -p "$T/docs/org" && printf '# The Salesforce org: domain glossary\n\nThe business words specs and stories use, and what each one is in the org.\n\n| Term | Meaning | In the org |\n| --- | --- | --- |\n' > "$T/docs/org/GLOSSARY.md"

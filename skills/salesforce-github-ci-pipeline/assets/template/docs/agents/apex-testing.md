@@ -9,8 +9,8 @@ platform facts win. FFLib itself (domain, selector, unit of work) is explained i
 Without it, keep the two layers and mock with `Test.StubProvider`. `TestDataFactory` and the `<Object>Builder` classes
 are the repo's own code, not part of the pipeline: the first story that needs a persona adds `TestDataFactory`, and
 the first story that tests an object adds its builder (Test data, below). With FFLib vendored, production validation
-runs `PROD_TEST_LEVEL=RunLocalTests`: upstream's `fflib_SObjectSelector` is at 73.99%, under the 75% per class that
-`RunRelevantTests` needs.
+runs `PROD_TEST_LEVEL=RunLocalTests`: some of upstream's classes stay below the 75% per class that `RunRelevantTests`
+needs (check with `sf apex run test --test-level RunLocalTests --code-coverage`).
 
 ## The number
 

@@ -85,17 +85,24 @@ Done when: the three answers and the defaults are written down.
 2. **Copy the template**: [`scripts/bootstrap.sh`](scripts/bootstrap.sh) `<repo-dir> --owner <github-owner>
    [--project <repo-name>] [--org <prod-org-id>] [--alias <prod-alias>] [--no-fflib]`. It copies the template, keeps
    any existing `force-app/`, fills every placeholder (owner, the App's bot name `<owner>-pipeline`, project,
-   production alias; the org ID can come after Phase 2 step 4) and refuses to finish with one left. It makes the
-   directory a git repository on `main` if it is not one, and vendors FFLib (`fflib-apex-common` and
-   `fflib-apex-mocks`, through `scripts/vendor.sh`, at the commits the reference repo runs; `docs/vendor.md` records
-   them). The template's Apex test standard (`CLAUDE.md`, `docs/agents/apex-testing.md`: fflib mocks, builders) is
-   written for FFLib; `--no-fflib` leaves it out, and the tests then use `Test.StubProvider`. Then it runs `npm ci` and
-   the pipeline's tests. The skills repo's CI does the same for a made-up owner on every push, so the template is
-   known to stand up on its own. `CLAUDE.md` and `REVIEW.md` work as they are; tune them for the project later,
-   through a PR.
-3. **First push**, the only direct push to `main`, before Phase 3's rulesets refuse it:
-   `git remote add origin https://github.com/<owner>/<repo>.git` (skip if `origin` exists), then
-   `git add -A && git commit -m "chore: pipeline from the template" && git push -u origin main`.
+   production alias; the org ID can come after Phase 2 step 4) and refuses to finish with one left. A directory that
+   is not the top of its own repository (a new one, or one inside another repository) becomes a git repository on
+   `main`. It vendors FFLib (`fflib-apex-common` and `fflib-apex-mocks`, through `scripts/vendor.sh`, at the commits
+   the reference repo runs; `docs/vendor.md` records them). It skips that when `force-app` already holds FFLib's
+   classes (no duplicates) or `docs/vendor.md` already has those commits (a re-run clones nothing). The template's Apex
+   test standard (`CLAUDE.md`, `docs/agents/apex-testing.md`: fflib mocks, builders) is written for FFLib;
+   `--no-fflib` leaves it out, and the tests then use `Test.StubProvider`. Then it runs `npm ci` and the pipeline's
+   tests. The skills repo's CI does the same for a made-up owner on every push, so the template is known to stand up
+   on its own. `CLAUDE.md` and `REVIEW.md` work as they are; tune them for the project later, through a PR.
+3. **First push.** The bootstrap's *Next* prints the exact commands for the case it found.
+   - **A new repository:** this is the only direct push to `main`, before Phase 3's rulesets refuse it:
+     `git remote add origin https://github.com/<owner>/<repo>.git`, then
+     `git add -A && git commit -m "chore: pipeline from the template" && git push -u origin main`.
+   - **An existing repository:** never push to its default branch. Commit on a branch (`git switch -c pipeline-setup`),
+     push it, and open a PR into `main` (`gh pr create --base main`). The pipeline ships from `main`. If the default
+     branch is another (`master`), rename it first, as the bootstrap's *Next* says:
+     `gh api -X POST repos/<owner>/<repo>/branches/<old>/rename -f new_name=main`. An `origin` that already exists is
+     kept.
 
 Done when: `npm ci && npm run test:pipeline` passes in the repo, `actionlint .github/workflows/*.yml` is clean, and
 `gh repo view <owner>/<repo>` shows the commit on `main`.
@@ -107,7 +114,8 @@ Order matters; each step depends on the one before.
 1. **Dev Hub**: Setup → Dev Hub → Enable (one-way). Also enable **Scratch Org Snapshots** there (one-way): new story, CI, staging and UAT orgs then start from a snapshot with production's baseline and the test data already in (`snapshot-refresh`, Phase 3). If the Dev Hub's edition does not offer Snapshots, set `SCRATCH_SNAPSHOT=off` in Phase 3: every org is then built from the shape (slower, same result). The production baseline is captured in Phase 3, once the secrets it needs exist.
 2. **CI certificate and connected app**: choose the CI user first: a dedicated integration user where a licence allows ([`references/enterprise.md`](references/enterprise.md)), otherwise (a Developer Edition) the admin running the setup. [`scripts/make-ci-cert.sh`](scripts/make-ci-cert.sh) `<repo-dir> <contact-email>` generates `secrets/ci.key` + certificate and writes `devhub-setup/.../Pipeline_CI.connectedApp-meta.xml`. Deploy `devhub-setup/` to production, then **assign** the `Pipeline_CI` permission set to the CI user (`sf org assign permset`): the assignment is what pre-authorizes the app, and it is data, not metadata. `config/baseline.json` already excludes `PermissionSet:Pipeline_CI`, so it never reaches a scratch org.
 3. **Prove the JWT login** locally: `sf org login jwt --client-id <consumer key> --jwt-key-file secrets/ci.key --username <ci user> --instance-url https://login.salesforce.com`.
-4. **Org Shape**: deploy `devhub-setup/main/default/settings/DevHub.settings-meta.xml`, then the user adds production's **15-character** org ID under Setup → Scratch Orgs → "Allow a Dev Hub org to create scratch orgs using this org's shape" (no API for this), then `sf org create shape -o <prod>`. Put that 18-char ID in `config/scratch-{dev,qa,hotfix,training}.json` as `sourceOrg`.
+4. **Org Shape**: deploy `devhub-setup/main/default/settings/DevHub.settings-meta.xml`, then the user adds production's **15-character** org ID under Setup → Scratch Orgs → "Allow a Dev Hub org to create scratch orgs using this org's shape" (no API for this), then `sf org create shape -o <prod>`. Put that 18-char ID in `config/scratch-{dev,qa,hotfix,training}.json` as `sourceOrg`: `scripts/bootstrap.sh <repo-dir> --owner <owner> --org <id> --fill-only` fills only that placeholder, and copies nothing over the pushed repo.
+5. **Commit what Phase 2 wrote, through a PR**: `devhub-setup/` (the connected app and the `Pipeline_CI` permission set from `make-ci-cert.sh`; `secrets/` stays out, `.gitignore` keeps it out) and `config/scratch-*.json` with the org ID. Use `git switch -c phase-2-setup`, commit, push, then `gh pr create --base main`, and merge it. Phase 3's rulesets do not exist yet, so nothing blocks it. CI's jobs that need Salesforce fail until Phase 3 adds the secrets; that is expected here. It must be on `main` before the production baseline (Phase 3), because every scratch org reads `sourceOrg`.
 
 Done when: `sf org list shape` shows the production shape **Active**, and a test scratch org created from `config/scratch-dev.json` deploys `force-app` (delete it afterwards).
 
@@ -117,7 +125,7 @@ Run [`scripts/github-setup.sh`](scripts/github-setup.sh) `<owner/repo> <ci-usern
 
 Then the pipeline App, which only a person can confirm: [`scripts/create-app.sh`](scripts/create-app.sh) `<owner> <repo>` opens a pre-filled manifest page; the user clicks Create, pastes back the `code`, the script stores `PIPELINE_APP_ID` and `PIPELINE_APP_PRIVATE_KEY` without printing the key; the user installs the App on the repo.
 
-Then the variables: `PIPELINE_BOTS=github-actions,<app-slug>` (the only bots allowed to start agents; bare logins, no `[bot]`; every agent step reads it, and a pipeline test checks each workflow does); `APPROVERS` for a team (Phase 0; one person leaves it unset until `AI_REVIEW` is on, then sets it and `APPROVAL_MODE=solo`); `PROD_TEST_LEVEL=RunLocalTests` when FFLib is vendored (its `fflib_SObjectSelector` is at 73.99%, under the 75% per class that the default `RunRelevantTests` needs in production); `SCRATCH_SNAPSHOT=off` without Snapshots; and each switch the user chose (`gh variable set AI_REVIEW --body true`). Leave the rest unset.
+Then the variables: `PIPELINE_BOTS=github-actions,<app-slug>` (the only bots allowed to start agents; bare logins, no `[bot]`; every agent step reads it, and a pipeline test checks each workflow does); `APPROVERS` for a team (Phase 0; one person leaves it unset until `AI_REVIEW` is on, then sets it and `APPROVAL_MODE=solo`); `PROD_TEST_LEVEL=RunLocalTests` when FFLib is vendored (some of FFLib's own classes stay below the 75% per class that the default `RunRelevantTests` needs in production; check with `sf apex run test -o <prod> --test-level RunLocalTests --code-coverage`); `SCRATCH_SNAPSHOT=off` without Snapshots; and each switch the user chose (`gh variable set AI_REVIEW --body true`). Leave the rest unset.
 
 Then the **production baseline**, which needs the Salesforce secrets and the App from above: Actions → `prod-baseline` → Run workflow. It opens a PR with production's copy of everything not in `force-app` (all of production by default; tune `config/baseline.json`). Review it and merge it: the rulesets now protect `main`, so it goes through the PR, and its merge commit is the first **CI on main** (Phase 4 step 1). With one person, GitHub does not let you approve a PR you opened, but the App opened this one, so you can; a repository admin can also merge it with `gh pr merge <n> --merge --admin`, which the `merged` workflow records. Then Actions → `snapshot-refresh` (skip it with `SCRATCH_SNAPSHOT=off`): the snapshot new orgs start from, 15 to 30 minutes.
 
