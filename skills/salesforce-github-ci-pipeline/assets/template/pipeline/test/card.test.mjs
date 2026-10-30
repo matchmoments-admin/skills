@@ -401,3 +401,14 @@ test("maintenance card: a pipeline PR into main says what it still needs, and ho
   assert.equal(await storyCards({ host, tracker: t("issue"), prTracker: t("pr"), slack: null }).refreshPr(406), "maintenance");
   assert.deepEqual(edits, ["pr:406"]);
 });
+
+test("a new story's card offers Start the next sprint, not Start, when no sprint is open (story #444 on 30 Oct)", async () => {
+  const written = [];
+  const tracker = { prior: async () => "", card: async (k, body) => { written.push(body); return "u"; }, story: async () => ({ title: "Story: x" }) };
+  await storyCards({ host: { openRelease: () => null }, tracker, prTracker: tracker, slack: null }).newStory("444");
+  assert.match(written.at(-1), /No sprint is open/);
+  await storyCards({ host: { openRelease: () => "release/2027-w04" }, tracker, prTracker: tracker, slack: null }).newStory("445");
+  assert.doesNotMatch(written.at(-1), /No sprint is open/);
+  await storyCards({ host: { openRelease: () => { throw new Error("api down"); } }, tracker, prTracker: tracker, slack: null }).newStory("446");
+  assert.doesNotMatch(written.at(-1), /No sprint is open/, "an unreadable host leaves the card as before");
+});

@@ -435,7 +435,9 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
     },
     /** A new story's card (before /start): what to do first, with the boxes to do it. */
     async newStory(key, { spec = false, stage = "new", stories = [], tag = null, questions = 0 } = {}) {
-      await write(tracker, key, newStoryCard({ key, ai: aiFeatures(), spec, stage, stories, tag, questions }), { kinds: ["you", "failed"] }).catch((e) => log(`::warning::${e.message}`));
+      let sprintOpen = true;   // unknown (no host, or it cannot be read): the card stays as before
+      try { if (host.openRelease) sprintOpen = Boolean(host.openRelease()); } catch { /* keep true */ }
+      await write(tracker, key, newStoryCard({ key, ai: aiFeatures(), spec, stage, stories, tag, questions, sprintOpen }), { kinds: ["you", "failed"] }).catch((e) => log(`::warning::${e.message}`));
     },
     /** The card of the pull request a commit was merged by (the release workflow knows only the SHA). */
     async refreshCommit(sha, opts) {
