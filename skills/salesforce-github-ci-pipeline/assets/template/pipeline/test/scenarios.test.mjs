@@ -8,6 +8,8 @@ import { violations, finish, observe, actAs, nextDeps } from "./invariants.mjs";
 import { next } from "../src/journey.mjs";
 import { finish as finishStage, reconcile } from "../src/finish.mjs";
 import { STATUS, GATE_STATUS, standing, approvalRecord } from "../src/gate.mjs";
+import { storyCards, CARD_MARK } from "../src/card.mjs";
+import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 
 process.env.PIPELINE_BOTS = "github-actions,__owner__-pipeline";
 process.env.APPROVERS = "boss,deputy";
@@ -242,4 +244,23 @@ test("solo approval on the simulated world (27 Oct review): the one approver's o
   } finally {
     for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
+});
+
+test("TRACKER=jira on the simulated host: a Jira story's card is a Jira comment, its PR's card stays on GitHub, the login from the workflow env", async () => {
+  const SITE = "https://acme.atlassian.net", jira = [];
+  const fetch = async (url, init) => {
+    jira.push(`${init.method} ${url.replace(SITE, "")}`);
+    const body = /\/comment\?/.test(url) ? { comments: [] } : { key: "LIFE-12", fields: { summary: "Story: Tier", status: { statusCategory: { key: "indeterminate" } }, labels: [] } };
+    return { ok: true, status: 200, json: async () => body };
+  };
+  const env = { PIPELINE_VARS: JSON.stringify({ TRACKER: "jira", JIRA_BASE_URL: SITE }), JIRA_EMAIL: "ci@acme.test", JIRA_API_TOKEN: "t" };
+  const w = world();
+  w.branch("release/2027-w01");
+  w.push("LIFE-12", ["force-app/main/default/classes/A.cls"], { from: "release/2027-w01" });
+  w.pr(41, { head: "LIFE-12", base: "release/2027-w01" });
+  const cards = storyCards({ host: w.host(), tracker: makeTracker({ ...w.io, fetch }, env), prTracker: githubTracker({ gh: w.io.gh, ghPages: w.io.ghPages, repo: "o/r" }), slack: null });
+  await cards.refresh("LIFE-12");
+  assert.ok(jira.includes("POST /rest/api/3/issue/LIFE-12/comment"), `the story card went to Jira: ${jira.join(", ")}`);
+  assert.ok((w.state.comments[41] || []).some((c) => c.body.includes(CARD_MARK)), "the PR's card is on GitHub");
+  assert.equal(w.state.comments["LIFE-12"], undefined, "nothing posted to a GitHub issue named after a Jira key");
 });

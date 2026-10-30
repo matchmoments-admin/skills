@@ -37,6 +37,7 @@ export const SETTINGS = [
   ["PIPELINE_BOTS", "github-actions", "the pipeline's own bot logins, trusted to start agents"],
   ["BOARD_PROJECT", "", "a GitHub Project number for the delivery board"],
   ["TRACKER", "github", "github or jira"],
+  ["JIRA_BASE_URL", "", "TRACKER=jira: the Jira site (https://<site>.atlassian.net); its login is secrets JIRA_EMAIL and JIRA_API_TOKEN"],
   ["SLACK_ACTIONS", "false", "Slack notices carry action buttons (the Slack actions Worker is set up)"],
   // UAT
   ["UAT_ENABLED", "false", "releases go to UAT and need /uat-pass"],

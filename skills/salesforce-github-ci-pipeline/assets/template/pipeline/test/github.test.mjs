@@ -11,7 +11,7 @@ import * as journey from "../src/journey.mjs";
 import * as capacity from "../src/capacity.mjs";
 import * as settings from "../src/settings.mjs";
 import { plan } from "../src/closeout.mjs";
-import { jiraTracker, githubTracker, adfToText } from "../src/tracker.mjs";
+import { jiraTracker, githubTracker, adfToText, tracker as makeTracker } from "../src/tracker.mjs";
 import { orgRegistry, packageList, findOrphans, personaOf as orgPersonaOf, expandSeed, sameSourceVia } from "../src/org.mjs";
 import { summarize, toMarkdown, aiCost } from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview, storyReadiness } from "../src/jev.mjs";
@@ -58,6 +58,68 @@ test("Jira adapter: reads a story, comments and transitions to Done (mocked REST
   await t.done("LIFE-123", "Shipped");
   assert.deepEqual(calls.slice(1), ["POST /rest/api/3/issue/LIFE-123/comment", "GET /rest/api/3/issue/LIFE-123/transitions", "POST /rest/api/3/issue/LIFE-123/transitions"]);
   assert.throws(() => jiraTracker({ fetch, base: "", email: "", token: "" }), /JIRA_BASE_URL/);
+});
+
+test("TRACKER=jira from the repository's settings: JIRA_BASE_URL rides in PIPELINE_VARS, the login comes from the workflow's secrets", async () => {
+  const calls = [];
+  const fetch = async (url, init) => { calls.push(`${init.method} ${url}`); return { ok: true, status: 200, json: async () => ({ key: "LIFE-7", fields: { summary: "Tier", status: { statusCategory: { key: "new" } }, labels: [] } }) }; };
+  const vars = JSON.stringify({ TRACKER: "jira", JIRA_BASE_URL: "https://acme.atlassian.net/" });
+  const t = makeTracker({ fetch }, { PIPELINE_VARS: vars, JIRA_EMAIL: "ci@acme.test", JIRA_API_TOKEN: "t" });
+  assert.equal(t.name, "jira");
+  assert.equal((await t.story("LIFE-7")).url, "https://acme.atlassian.net/browse/LIFE-7");
+  assert.deepEqual(calls, ["GET https://acme.atlassian.net/rest/api/3/issue/LIFE-7?fields=summary,description,status,labels"]);
+  // the secrets missing (a workflow that never got them): the error says which and where they go
+  assert.throws(() => makeTracker({ fetch }, { PIPELINE_VARS: vars }), /JIRA_EMAIL and JIRA_API_TOKEN.*secrets/);
+  assert.throws(() => makeTracker({ fetch }, { PIPELINE_VARS: JSON.stringify({ TRACKER: "jira" }), JIRA_EMAIL: "e", JIRA_API_TOKEN: "t" }), /JIRA_BASE_URL.*variable/);
+  assert.equal(makeTracker({ gh: () => null }, {}).name, "github", "unset: GitHub Issues, no Jira login needed");
+});
+
+const jiraSetup = new URL("../../.claude/skills/salesforce-github-ci-pipeline/scripts/jira-setup.sh", import.meta.url).pathname;
+test("the skill's jira-setup.sh checks the login, the project and its statuses, sets nothing, and prints the commands (a fake curl)", { skip: !existsSync(new URL("../../.claude/skills/salesforce-github-ci-pipeline/", import.meta.url)) && "the pipeline skill is not vendored here" }, async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, chmodSync, readFileSync: read } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const script = jiraSetup;
+  const bin = mkdtempSync(`${tmpdir()}/jira-setup-`);
+  // the fake curl answers from FAKE_JIRA ({path: [code, body]}), writes -o's file, prints -w's code, logs each call
+  writeFileSync(`${bin}/curl`, `#!/usr/bin/env node
+const a = process.argv.slice(2), fs = require("fs"), r = JSON.parse(process.env.FAKE_JIRA);
+const url = a.find((x) => /^https?:/.test(x)), path = url.replace(/^https?:\\/\\/[^/]+/, "");
+fs.appendFileSync(process.env.FAKE_LOG, (a.includes("-u") ? "auth " : "") + path + "\\n");
+const [code, body] = r[path] || [404, {}];
+if (a.includes("-o")) fs.writeFileSync(a[a.indexOf("-o") + 1], JSON.stringify(body));
+if (a.includes("-w")) process.stdout.write(String(code));
+`);
+  chmodSync(`${bin}/curl`, 0o755);
+  const statuses = (names) => [{ name: "Story", statuses: names.map((n) => ({ name: n, statusCategory: { key: n === "Done" ? "done" : "indeterminate" } })) }];
+  const ok = { "/rest/api/3/myself": [200, { emailAddress: "ci@acme.test" }], "/rest/api/3/project/LIFE": [200, { key: "LIFE", name: "Lifecycle" }],
+    "/rest/api/3/project/LIFE/statuses": [200, statuses(["To Do", "In Progress", "AI Build", "Done"])] };
+  const run = (fake, extra = {}) => spawnSync("bash", [script, "acme/app", "https://acme.atlassian.net", "LIFE"], { encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_JIRA: JSON.stringify(fake), FAKE_LOG: `${bin}/log`, JIRA_EMAIL: "ci@acme.test", JIRA_API_TOKEN: "s3cret-token", ...extra } });
+  const good = run(ok);
+  assert.equal(good.status, 0, good.stdout + good.stderr);
+  assert.match(good.stdout, /gh variable set TRACKER -R acme\/app --body jira/);
+  assert.match(good.stdout, /gh variable set JIRA_BASE_URL -R acme\/app --body https:\/\/acme\.atlassian\.net/);
+  assert.match(good.stdout, /gh secret set JIRA_EMAIL -R acme\/app/);
+  assert.match(good.stdout, /gh secret set JIRA_API_TOKEN -R acme\/app/);
+  assert.match(good.stdout, /POST https:\/\/api\.github\.com\/repos\/acme\/app\/dispatches/);
+  for (const t of ["jira-start", "jira-implement", "jira-sprint-start", "jira-release-cut"]) assert.match(good.stdout, new RegExp(`"event_type":"${t}"`), t);
+  assert.doesNotMatch(good.stdout + good.stderr, /s3cret-token/, "the token is never printed");
+  assert.ok(read(`${bin}/log`, "utf8").split("\n").filter(Boolean).every((l) => l.startsWith("auth ")), "every call logs in");
+  // a refused login, a missing project, a workflow without "In Progress": each fails and says what to fix
+  const bad = run({ ...ok, "/rest/api/3/myself": [401, {}] });
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stdout + bad.stderr, /login refused/i);
+  const noProject = run({ ...ok, "/rest/api/3/project/LIFE": [404, {}] });
+  assert.notEqual(noProject.status, 0);
+  assert.match(noProject.stdout + noProject.stderr, /project LIFE/);
+  const noStart = run({ ...ok, "/rest/api/3/project/LIFE/statuses": [200, statuses(["To Do", "Done"])] });
+  assert.notEqual(noStart.status, 0);
+  assert.match(noStart.stdout + noStart.stderr, /In Progress/);
+  assert.match(noStart.stdout + noStart.stderr, /AI Build.*only with AI_IMPLEMENT/);
+  const noLogin = run(ok, { JIRA_API_TOKEN: "" });
+  assert.notEqual(noLogin.status, 0);
+  assert.match(noLogin.stdout + noLogin.stderr, /JIRA_EMAIL and JIRA_API_TOKEN/);
 });
 
 test("GitHub adapter: carry over removes the milestone; sprint stories map to keys", async () => {

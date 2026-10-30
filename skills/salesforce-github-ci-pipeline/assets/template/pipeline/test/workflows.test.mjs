@@ -144,6 +144,29 @@ test("every workflow passes every repository variable in one line, and lists no 
   }
 });
 
+test("TRACKER=jira needs no workflow edits: every workflow that runs pipe passes the Jira login, no agent sees it, release-cut has its Jira trigger", () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const dir = new URL("../../.github/workflows/", import.meta.url);
+  const callers = readdirSync(dir).filter((f) => f.endsWith(".yml") && readFileSync(new URL(f, dir), "utf8").includes("pipe.mjs"));
+  assert.ok(callers.length >= 30, `found ${callers.length}`);
+  for (const f of callers) {
+    const y = readFileSync(new URL(f, dir), "utf8"), env = yaml.load(y).env || {};
+    // pipe builds the tracker on every command (pipe.mjs), so a workflow without the login fails under TRACKER=jira
+    assert.equal(env.JIRA_EMAIL, "${{ secrets.JIRA_EMAIL }}", `${f}: JIRA_EMAIL in the workflow env`);
+    assert.equal(env.JIRA_API_TOKEN, "${{ secrets.JIRA_API_TOKEN }}", `${f}: JIRA_API_TOKEN in the workflow env`);
+    assert.doesNotMatch(y, /vars\.JIRA_BASE_URL/, `${f}: JIRA_BASE_URL is a setting and arrives with PIPELINE_VARS`);
+  }
+  // the agent reads untrusted story text: its step gets the Jira login blanked (the pipe steps around it keep it)
+  const a = yaml.load(readFileSync(new URL("../../.github/actions/claude-agent/action.yml", import.meta.url), "utf8"));
+  const claude = a.runs.steps.find((s) => s.id === "claude");
+  assert.equal(claude.env.JIRA_EMAIL, "", "the agent never sees JIRA_EMAIL");
+  assert.equal(claude.env.JIRA_API_TOKEN, "", "the agent never sees JIRA_API_TOKEN");
+  // Jira Automation starts each button by repository_dispatch, like the GitHub label or button does
+  const on = (n) => yaml.load(readFileSync(new URL(`${n}.yml`, dir), "utf8")).on;
+  for (const [n, type] of [["issue-start", "jira-start"], ["ai-implement", "jira-implement"], ["sprint-start", "jira-sprint-start"], ["release-cut", "jira-release-cut"]])
+    assert.deepEqual(on(n).repository_dispatch, { types: [type] }, `${n} starts on ${type}`);
+});
+
 test("fix rounds are this PR's earlier completed ai-fix runs, whatever the commits were called", () => {
   const runs = [{ id: 1, display_title: "ai-fix PR #90", status: "completed", conclusion: "success" }, { id: 2, display_title: "ai-fix PR #90", status: "completed", conclusion: "cancelled" },
     { id: 3, display_title: "ai-fix PR #91", status: "completed", conclusion: "success" }, { id: 4, display_title: "ai-fix PR #90", status: "in_progress" }, { id: 5, display_title: "ai-fix PR #90", status: "completed", conclusion: "failure" }];

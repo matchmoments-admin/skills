@@ -19,6 +19,8 @@ permissions:
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
+  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}           # TRACKER=jira: the tracker's login (empty when unset); JIRA_BASE_URL is a setting
+  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
 jobs:
   build:
     if: vars.SCRATCH_SNAPSHOT != 'off'
