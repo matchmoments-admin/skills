@@ -3,7 +3,7 @@
 // arguments, calls the module that owns the command, and writes step outputs; the work lives in pipeline/src/.
 //   context   [--key K] [--branch B] [--labels a,b]     names for a story / the open sprint, as KEY=value lines
 //   labels    sync                                       create or update every label the pipeline uses
-//   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits · capacity [--devs N] [--uat-sandbox] (load and cost)
+//   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits · capacity [--devs N] [--in-use N (active orgs other projects hold; not this pipeline's staging, UAT or story orgs)] [--uat-sandbox] (load and cost)
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
 //   next      --after review|ci|staging|release-pr|org-freed|any [--pr N]   what the journey owes next, started (journey.mjs)
 //   finish    review|ui-test|ci|staging|uat --pr N|--branch B --sha S --outcome O [--detail D]   end a stage (finish.mjs)
@@ -38,11 +38,11 @@
 //   pr        card <n> | --sha S [--now "what" [--failed]] [--tag T]   the release card, or the story card of a story PR
 //   story     new <key>                                  the card of a story not started yet (boxes: plan, start) · blockers <key> (merged?)
 //   spec      context <n> --out F · pending <n> --now W [--failed] · post <n> --file F   bigger work (then "Make it a story")
-//   baseline  capture [--out drift.md] · snapshot refresh [--minutes M]   production baseline and scratch-org snapshots
+//   baseline  capture [--out drift.md] · snapshot refresh [--minutes M] [--if-older-than H] [--if-changed [--on-push]]   production baseline and scratch-org snapshots
 //   evidence  publish --key K --pr N --sha S --dir D [--org-url U] · squash   UI evidence screenshots (UI_EVIDENCE)
 import { appendFileSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { io, PIPELINE_ROOT } from "../src/io.mjs";
+import { io as rawIo, counted, PIPELINE_ROOT } from "../src/io.mjs"; const io = counted(rawIo);   // every GitHub call counted where it runs (#422)
 import * as names from "../src/conventions.mjs";
 import { orgSettings, settingsTable } from "../src/settings.mjs";
 import * as gate from "../src/gate.mjs"; import { landedOf } from "../src/facts.mjs";   // the decisions; a fact one command reads
@@ -55,7 +55,7 @@ import { storyCards } from "../src/card.mjs";
 import * as tests from "../src/tests.mjs";
 import * as capacity from "../src/capacity.mjs";
 import * as production from "../src/production.mjs";
-import { orgRegistry, personaOf as orgPersona, packageList, sameSourceVia } from "../src/org.mjs";
+import { orgRegistry, personaOf as orgPersona, packageList, sameSourceVia, snapshotDescription } from "../src/org.mjs";
 import { orgCommands } from "./commands/org.mjs";
 import { evalCommands } from "./commands/eval.mjs";
 import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
@@ -110,7 +110,7 @@ const budgetOf = roles.budgetReader({ read: (onFail) => events.readLog(io, { day
 const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, jev: triageJev(), budgetOf, freeSlots: () => { const a = orgs().limits().active; return a.remaining === undefined ? 1 : a.remaining - (Number(names.setting("ORG_RESERVE")) || 0); }, log });
 const freed = async () => { try { log((await nextAfter("org-freed")).said); } catch (e) { log(`::warning::could not start what waited for a slot: ${e.message}`); } };   // UAT first, else the story waiting longest
 let registry; const orgs = () => (registry ||= orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, sameSource: sameSourceVia((a, b) => host.api("GET", `repos/${host.repo}/compare/${a}...${b}`)), env: { ...process.env, ...orgSettings() } }));   // one per process (its Dev Hub reads are shared); every setting org provisioning reads, resolved (SEED=off once never arrived)
-const { record } = host;
+const { record } = host; const meter = host.meter(`${cmd} ${sub ?? ""}`.trim(), { pr: flag("pr") || (["gate", "pr"].includes(cmd) && /^\d+$/.test(arg(0) || "") ? arg(0) : null) }), stopMeter = () => { try { meter.stop(); } catch { /* never fails a command */ } }; process.once("exit", stopMeter); process.once("SIGTERM", () => { stopMeter(); process.exit(143); });   // the GitHub calls this process made (#422), recorded as it exits: process.exit, and a cancelled or timed-out job too
 const jev = () => typesafeJev(process.env.TYPESAFE_API_KEY);
 const triageJev = () => (names.setting("AI_TRIAGE") === "true" && process.env.TYPESAFE_API_KEY ? jev() : null);   // the fix gate (start.fixGate)
 
@@ -293,11 +293,10 @@ const commands = {
     record("baseline", { action: changes.length ? "drift" : "refreshed", changed: changes.length }); return say(`${changes.length} file(s) differ from git`);
   },
   "snapshot refresh": () => {   // a source org (shape + packages + baseline + source + seed), snapshotted; the newest Active one is used
-    const age = orgs().snapshotAgeHours();   // --if-older-than: scheduled rebuilds at most daily (each costs a daily org)
-    if (flag("if-older-than") && age !== null && age < Number(flag("if-older-than"))) return say(`snapshot is ${age.toFixed(1)} h old: not rebuilt`);
-    const o = orgs().ready("snapshot", { commit: io.git(["rev-parse", "HEAD"])?.trim() });
-    const name = `LCB${new Date().toISOString().replace(/\D/g, "").slice(2, 12)}`;
-    const r = orgs().snapshot(o.alias, { name, description: `main@${(io.git(["rev-parse", "--short", "HEAD"]) || "").trim()}${orgs().baselineId() ? ` b${orgs().baselineId()}` : ""}`, waitMinutes: Number(flag("minutes", "60")) });
+    // whether to build, decided once (snapshot.mjs snapshotPlan, #430): --if-older-than H (scheduled: at most daily), --if-changed (a push or a release: only what changed), --on-push
+    const plan = orgs().snapshotPlan({ ifChanged: has("if-changed"), onPush: has("on-push"), olderThan: flag("if-older-than") || null }); if (!plan.rebuild) return say(plan.why); log(`building a snapshot: ${plan.why}`);
+    const o = orgs().ready("snapshot", { commit: io.git(["rev-parse", "HEAD"])?.trim() }), name = `LCB${new Date().toISOString().replace(/\D/g, "").slice(2, 12)}`;
+    const r = orgs().snapshot(o.alias, { name, description: snapshotDescription({ ...plan.ids, commit: (io.git(["rev-parse", "--short", "HEAD"]) || "").trim() }), waitMinutes: Number(flag("minutes", "60")) });
     if (r.active) orgs().remove("snapshot"); record("snapshot", { action: r.active ? "active" : "pending", name, status: r.status }); output({ name, active: r.active });
     return say(r.active ? `snapshot ${name} is active: new orgs start from it` : `snapshot ${name} is ${r.status || "not active yet"}: new orgs keep using the previous one until it is`);
   },
@@ -330,7 +329,7 @@ const commands = {
     const activity = flag("now") ? { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl, retry: flag("retry") } : null;
     if (activity) record("stage", { story: key, what: activity.what, state: activity.state });
     if (has("starting")) { await cards.starting(key, activity); return say(`starting card for ${key}`); }
-    await cards.refresh(key, { base: flag("base"), tag: flag("tag"), activity });
+    await cards.refresh(key, { base: flag("base"), tag: flag("tag"), activity, light: Boolean(activity) });   // --now: the Now line alone while the card describes the PR's head (#427); --failed: always the full card
     return say(`card updated for ${key}`);
   },
   "story base": async () => say(names.baseFor({ labels: (await tracker.story(arg(0))).labels, openReleaseBranch: host.openRelease() })),   // as /start: hotfix -> main, else the sprint

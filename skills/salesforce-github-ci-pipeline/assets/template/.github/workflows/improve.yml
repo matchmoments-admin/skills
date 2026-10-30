@@ -31,7 +31,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (contains(fromJSON('["failure","startup_failure"]'), github.event.workflow_run.conclusion) &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 3
     env:
       GH_TOKEN: ${{ github.token }}

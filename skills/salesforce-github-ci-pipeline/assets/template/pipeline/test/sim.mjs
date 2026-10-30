@@ -26,7 +26,7 @@ export function world({ start = Date.parse("2026-10-14T00:00:00Z"), aiReview = f
     commits: { root: { sha: "root", parents: [], files: [], headline: "init", authors: [], at: tick() } },
     branches: { main: "root" },
     prs: {}, issues: {}, statuses: {}, checks: {}, reviews: {}, comments: {}, events: {}, runs: {}, labels: {},
-    calls: [], inflight: [], aiReview,
+    calls: [], tokens: [], inflight: [], aiReview,
   };
   const sha = () => `s${String(++s.n).padStart(39, "0")}`;
 
@@ -94,8 +94,8 @@ export function world({ start = Date.parse("2026-10-14T00:00:00Z"), aiReview = f
     return [];
   }
   const io = {
-    gh(args) {
-      s.calls.push(["gh", ...args].join(" "));
+    gh(args, o = {}) {
+      s.calls.push(["gh", ...args].join(" ")); s.tokens.push([o.env?.GH_TOKEN || "actions", ["gh", ...args].join(" ")]);   // which token each call carried (#427)
       const [a, b] = args;
       if (a === "pr" && b === "view") { const v = prView(args[2]); return args.includes("commits") && args.at(-1) === "commits" ? { commits: v.commits } : v; }
       if (a === "pr" && b === "list") {
@@ -118,9 +118,9 @@ export function world({ start = Date.parse("2026-10-14T00:00:00Z"), aiReview = f
       if (a === "api") return api(args.filter((x) => !x.startsWith("-")).at(-1));
       return null;
     },
-    ghPages: (path, key) => pages(path),
+    ghPages: (path, key, o = {}) => { s.tokens.push([o.env?.GH_TOKEN || "actions", `gh api --paginate ${path}`]); return pages(path); },
     run(cmd, args, o = {}) {
-      s.calls.push([cmd, ...args].join(" "));
+      s.calls.push([cmd, ...args].join(" ")); s.tokens.push([o.env?.GH_TOKEN || "actions", [cmd, ...args].join(" ")]);
       const method = args[args.indexOf("-X") + 1], path = args[args.indexOf("-X") + 2];
       if (method === "GET") { const r = api(path); return r === null ? "" : JSON.stringify(r); }
       if (method === "POST" && /check-runs$/.test(path)) return JSON.stringify({ id: 1 });

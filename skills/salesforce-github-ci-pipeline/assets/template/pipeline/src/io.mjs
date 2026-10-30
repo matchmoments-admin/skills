@@ -52,9 +52,10 @@ export const gh = (args, opts) => {
   return t.startsWith("{") || t.startsWith("[") ? parseJson(t) : t;
 };
 
-/** All pages of a REST list endpoint, flattened. `key` picks the array inside an object page (e.g. "check_runs"). */
-export function ghPages(path, key) {
-  const pages = gh(["api", "--paginate", "--slurp", path]) || [];
+/** All pages of a REST list endpoint, flattened. `key` picks the array inside an object page (e.g. "check_runs"); opts as
+ *  gh's (env: another token, #427). */
+export function ghPages(path, key, opts) {
+  const pages = gh(["api", "--paginate", "--slurp", path], opts) || [];
   return pages.flatMap((p) => (key ? p[key] || [] : p));
 }
 
@@ -99,3 +100,40 @@ export function sourceFiles({ base = null, head = "HEAD", dirs = (process.env.SO
 }
 
 export const io = { gh, ghPages, sf, git, run, sourceFiles };
+
+/** Which GitHub budget a gh call spends: `gh api graphql` and gh's own pr/issue/release commands are GraphQL (one
+ *  query or mutation each, as the pipeline issues them); `gh api` otherwise, run, workflow and label are REST
+ *  (`workflow run` looks the workflow up, then dispatches: 2). Pure. */
+export function budgetOf(args = []) {
+  const [a, b] = args;
+  if (a === "api") return args.includes("rate_limit") ? ["rest", 0] : args.includes("graphql") ? ["graphql", 1] : ["rest", 1];   // rate_limit is free
+  if (["pr", "issue", "release"].includes(a)) return ["graphql", 1];
+  if (a === "workflow" && b === "run") return ["rest", 2];
+  return ["rest", 1];
+}
+
+/**
+ * The io seam, counting every GitHub call where it runs (#422, review of #434: exact, per process, where diffs of the
+ * repository-wide rate limit double-counted parallel jobs): per token (the job's own, or another: the pipeline App's)
+ * and per budget (REST, GraphQL); a paginated read counts each page. usage() is the tally; count(token, budget) adds a
+ * call made outside gh (the App's GraphQL by fetch). `token()` is the job's own token (GH_TOKEN), the Actions token
+ * unless `jobIsApp()` (PIPELINE_TOKEN_IS_APP, set by the pipeline-identity action when it acts as the App).
+ */
+export function counted(raw, { token = () => process.env.GH_TOKEN, jobIsApp = () => process.env.PIPELINE_TOKEN_IS_APP === "true" } = {}) {
+  const tally = { actions: { rest: 0, graphql: 0 }, app: { rest: 0, graphql: 0 } };
+  // another token than the job's is the App's; the job's own is the App's after pipeline-identity (it says so)
+  const whose = (o) => (o?.env?.GH_TOKEN && o.env.GH_TOKEN !== token() ? "app" : jobIsApp() ? "app" : "actions");
+  const count = (who, budget, n = 1) => { tally[who][budget] += n; };
+  return {
+    ...raw,
+    gh: (args, o) => { const [b, n] = budgetOf(args); count(whose(o), b, n); return raw.gh(args, o); },
+    ghPages: (path, key, o) => {
+      const pages = raw.gh(["api", "--paginate", "--slurp", path], o) || [];
+      count(whose(o), "rest", Math.max(1, pages.length));
+      return pages.flatMap((p) => (key ? p[key] || [] : p));
+    },
+    run: (cmd, args, o) => { if (cmd === "gh") { const [b, n] = budgetOf(args); count(whose(o), b, n); } return raw.run(cmd, args, o); },
+    count,
+    usage: () => structuredClone(tally),
+  };
+}

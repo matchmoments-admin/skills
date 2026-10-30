@@ -22,7 +22,7 @@ env:
 jobs:
   off:
     if: github.event.label.name == 'ai:implement' && vars.AI_IMPLEMENT != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 2
     env:
       GH_TOKEN: ${{ github.token }}
@@ -183,7 +183,7 @@ jobs:
     # Fresh runner, no agent: starts CI and the review when the build did not act as the App (its pushes start nothing).
     needs: implement
     if: always() && needs.implement.result == 'success' && needs.implement.outputs.is-app != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 3
     permissions:
       actions: write

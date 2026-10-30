@@ -86,7 +86,7 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   // who the story needs now (journey.needs, from Standing): its approver once everything else passed (notifyNeeds
   // mentions them once)
   const needs = st && !merged ? whoIsNeeded(st, facts, { decision, prUrl, key }) : null;
-  return render(key, next, rows, now, merged ? mergedActions : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }), { needs });
+  return render(key, next, rows, now, merged ? mergedActions : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }), { needs, head: pr });
 }
 
 /** The Approval row: who approved, or who should and how; a refused approval says why (approval() in gate.mjs). */
@@ -235,6 +235,27 @@ export function activityLine(a) {
   return a.state === "failed" ? `❌ **Failed:** ${a.what}${link}${a.retry ? ` · ${a.retry}` : ""}` : `⏳ **Now:** ${a.what}${link}`;
 }
 
+/** The PR head (and its state) a story card describes, as a hidden line on it: <!-- pipeline:head <sha> <state> -->.
+ *  A Now update edits the card in place only while it still describes the PR as it is (#438 review). */
+const headLine = (pr) => `<!-- pipeline:head ${pr.headRefOid} ${pr.state} -->`;
+export function headOf(body) {
+  const m = String(body || "").match(/<!-- pipeline:head ([0-9a-z]+) ([A-Z]+) -->/);
+  return m ? { sha: m[1], state: m[2] } : null;
+}
+
+/** A card with its Now (or Failed) line replaced by this activity's, where render() puts it (just above Next), or null
+ *  when the body is not a card with a Next line. The rest of the card is left as the last full refresh wrote it. Pure. */
+export function withActivity(body, activity) {
+  const lines = String(body || "").split("\n");
+  const next = lines.findIndex((l) => l.startsWith("**Next:**"));
+  if (!lines[0]?.includes(CARD_MARK) || next < 0) return null;
+  const head = lines.slice(0, next);
+  const at = head.findIndex((l) => /^(⏳ \*\*Now:\*\*|❌ \*\*Failed:\*\*) /.test(l));
+  if (at >= 0) head.splice(at, head[at + 1] === "" ? 2 : 1);
+  const now = activityLine(activity);
+  return [...head, ...(now ? [now, ""] : []), ...lines.slice(next)].join("\n");
+}
+
 /** The card before a branch or org exists: the first thing anyone sees after /start. */
 export function startingCard({ key, activity }) {
   return render(key, "Wait: the pipeline is setting this story up.", [["running", "Branch and scratch org", "being created"]], activityLine(activity));
@@ -279,7 +300,7 @@ export async function notifyNeeds({ tracker, number, body, mark = CARD_MARK }) {
 }
 const testers = () => { try { return Object.keys(JSON.parse(setting("UAT_TESTERS") || "{}")); } catch { return []; } };
 
-function render(key, next, rows, now = null, actions = [], { release = false, needs = null } = {}) {
+function render(key, next, rows, now = null, actions = [], { release = false, needs = null, head = null } = {}) {
   return [
     CARD_MARK,
     `### ${release ? `Release status: ${key.replace(/^release /, "sprint ")}` : CARD_TITLE} (kept up to date by the pipeline)`,
@@ -294,6 +315,7 @@ function render(key, next, rows, now = null, actions = [], { release = false, ne
     "|---|---|---|",
     ...rows.map(([s, stage, d]) => `| ${ICON[s]} | ${stage} | ${d} |`),
     ...(needsLine(needs) ? ["", needsLine(needs)] : []),
+    ...(head?.headRefOid ? ["", headLine(head)] : []),
   ].join("\n");
 }
 
@@ -346,8 +368,8 @@ export function maintenanceCard({ repoUrl, pr, facts = {}, decision = null }) {
 export function storyCards({ host, tracker, prTracker, log = () => {}, slack = slackNotifier({ log }) }) {
   const seen = new Map();
   // write a card; with Slack set up, tell the channel when its turn changed (the card before against the card after)
-  async function write(t, key, body, { name = null, kinds } = {}) {
-    const before = slack && t.prior ? await t.prior(key, CARD_MARK).catch(() => "") : "";
+  async function write(t, key, body, { name = null, kinds, before: prior = null } = {}) {
+    const before = prior ?? (slack && t.prior ? await t.prior(key, CARD_MARK).catch(() => "") : "");
     const url = await t.card(key, body, CARD_MARK, CARD_TITLE);
     if (!slack) return url;
     const title = name ?? (await tracker.story(key).catch(() => null))?.title?.replace(/^(Story|Spec):\s*/i, "") ?? "";
@@ -365,9 +387,27 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
     const releasePr = pr?.state === "MERGED" && openRel ? host.releasePrOf(openRel) : null;   // memoized per process
     return { branch, pr, ai, facts: f, planned, releasePr, sprintOpen: Boolean(openRel), base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
   }
+  // A Now update in a process that read no facts (#427): the card already on the story with its Now line replaced, on
+  // the story and its PR, without the facts read (~16 requests). Only while the card describes the PR as it is now
+  // (its head and state, the hidden head line): its rows, Next and the board's column then still hold, and only the
+  // Now line changed. A new push, a merged or closed PR, a failure (its rows, Next and retry boxes), no card yet or a
+  // tracker that cannot read its card back (Jira): false, and the caller does the full refresh.
+  async function nowOnly(key, activity) {
+    if (activity?.state !== "running" || !tracker.prior) return false;
+    const pr = host.storyPr(storyBranch(key));
+    const before = await tracker.prior(key, CARD_MARK).catch(() => "");
+    const on = headOf(before);
+    if (!pr || !on || on.sha !== pr.headRefOid || on.state !== pr.state) return false;
+    const body = withActivity(before, activity);
+    if (!body) return false;
+    await write(tracker, key, body, { kinds: ["you", "failed"], before });
+    await prTracker.card(pr.number, body, CARD_MARK, CARD_TITLE);
+    return true;
+  }
   return {
     async refresh(key, { base = null, tag = null, activity = null, light = false } = {}) {
       try {
+        if (light && activity && !tag && !seen.has(key) && await nowOnly(key, activity)) return;
         let c = light ? seen.get(key) : null;
         if (!c) { c = await facts(key, base); seen.set(key, c); }
         // not started (no PR, no branch): the card offers Plan and Start, never "branch and org" it does not have

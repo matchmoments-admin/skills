@@ -7,16 +7,17 @@ import { join, basename } from "node:path";
 import { orgFor, ORG_LIFETIME_DAYS, DEFINITION } from "./conventions.mjs";
 import { PIPELINE_ROOT, sfFailure } from "./io.mjs";
 import { baselineId as idOf, composeProject, DIR as BASELINE_DIR } from "./baseline.mjs";
-import { DEVHUB, fleetMethods, shapeOutdated, capacityProblem, poolToMake } from "./org/fleet.mjs";
+import { DEVHUB, fleetMethods, shapeOutdated, capacityProblem, poolToMake, stalePool } from "./org/fleet.mjs";
 import { dataMethods } from "./org/data.mjs";
 import { usersMethods } from "./org/users.mjs";
-import { snapshotMethods } from "./org/snapshot.mjs";
+import { snapshotMethods, shapeInputsId, snapshotHolds } from "./org/snapshot.mjs";
 import { setupChangesMethods } from "./org/setup-changes.mjs";
 // the helpers that moved to org/, still importable from here
 /** A Salesforce login or network failure: worth one more try, and no fault of a snapshot. */
-export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB, poolToMake, POOL } from "./org/fleet.mjs";
+export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB, poolToMake, stalePool, POOL } from "./org/fleet.mjs";
 export { expandSeed, seedReplaceApex, VOLUME_MARKER, volumeApex, foldSeeds } from "./org/data.mjs";
 export { roleRebuild, personaOf, permissionSets, permissionSetGroups, assignAccess } from "./org/users.mjs";
+export { snapshotDescription, snapshotHolds } from "./org/snapshot.mjs";
 
 // Scratch definitions come from the trusted pipeline checkout, so a PR cannot change its own org's shape.
 const definitionPath = (d) => join(PIPELINE_ROOT, d);
@@ -100,30 +101,49 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
   // a snapshot Salesforce refused once is never tried again (each attempt spends a daily scratch org): marked by the caller
   snapshotRefused = () => false, refuseSnapshot = () => {},
   // (held, head) => true when nothing deployable changed between them (sameSourceVia): ready() then only re-marks the org
-  sameSource = () => false }) {
+  sameSource = () => false,
+  // main's checkout: the Settings metadata and scratch definition a snapshot's shape depends on (snapshot.shapeInputsId)
+  shapeRoot = PIPELINE_ROOT }) {
   // the production baseline (BASELINE: off | soft (default) | strict), from main's trusted checkout, never the branch's
   const baselineMode = String(env.BASELINE || "soft").toLowerCase();
   const baseline = () => (baselineMode !== "off" && existsSync(baselineDir) ? idOf(baselineDir) : null);
   // test data (data/seed: synthetic, for people and UI tests; Apex tests never see it), from main's trusted checkout
   const seedId = () => (String(env.SEED || "on").toLowerCase() !== "off" && existsSync(join(seedDir, "plan.json")) ? idOf(seedDir) : null);
+  const shapeId = () => shapeInputsId(shapeRoot, { dirs: String(env.SOURCE_DIRS || "force-app").split(/\s+/).filter(Boolean), definition: DEFINITION.story });
   // The Dev Hub's active orgs, read once until this registry changes them (a create, a delete, a pool claim) or a minute
   // passes: ready() on a live org read them twice, a pool claim twice a try, each a few seconds of `sf` (28 Oct review)
   let snap = null, clientId = null;
   const changed = () => { snap = null; };
   const active = () => {
     if (snap && Date.now() - snap.at < 60e3) return snap.records;
-    const records = sf(["data", "query", "-o", DEVHUB, "-q", "SELECT SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate FROM ScratchOrgInfo WHERE Status = 'Active' ORDER BY CreatedDate DESC"]).records || [];
+    const records = sf(["data", "query", "-o", DEVHUB, "-q", "SELECT SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate, Snapshot FROM ScratchOrgInfo WHERE Status = 'Active' ORDER BY CreatedDate DESC"]).records || [];
     snap = { at: Date.now(), records };
     return records;
+  };
+  // The Dev Hub's snapshots, read once like active() until this registry makes or deletes one: a pool claim, ready() and
+  // the janitor's top-up each asked for the list again (#426 review)
+  let snapList = null;
+  const snapshotsChanged = () => { snapList = null; };
+  const snapshotList = () => {
+    if (snapList && Date.now() - snapList.at < 60e3) return snapList.list;
+    const raw = sf(["org", "list", "snapshot", "-v", DEVHUB], { allowFail: true }) || [];
+    snapList = { at: Date.now(), list: Array.isArray(raw) ? raw : [] };
+    return snapList.list;
+  };
+  /** The production baseline a snapshot holds (the b<id> its description carries), by name: what ScratchOrgInfo.Snapshot
+   *  holds (live Dev Hub, 30 Oct: "LCB2610250836"). Null for an unknown or deleted snapshot. */
+  const snapshotBaselineOf = (name) => {
+    const s = name ? snapshotList().find((x) => x.SnapshotName === name) : null;
+    return snapshotHolds(s?.Description).baseline;
   };
   /** Delete through the Dev Hub's ActiveScratchOrg record: no login to the org itself, so it works on any org. */
   const deleteRecord = (username) => { try { return Boolean(sf(["data", "delete", "record", "-o", DEVHUB, "-s", "ActiveScratchOrg", "-w", `SignupUsername='${username}'`], { allowFail: true })); } finally { changed(); } };
 
   // the methods of each concern (pipeline/src/org/), then the provisioning core below, which composes them
-  const ctx = { sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord, changed };
+  const ctx = { sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, shapeId, active, deleteRecord, changed, snapshotList, snapshotBaselineOf, snapshotsChanged };
   const self = {
     ...fleetMethods(ctx), ...dataMethods(ctx), ...usersMethods(ctx), ...snapshotMethods(ctx), ...setupChangesMethods(ctx),
-    /** The Dev Hub's active orgs (ScratchOrgInfo: SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate). */
+    /** The Dev Hub's active orgs (ScratchOrgInfo: SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate, Snapshot). */
     live: () => active(),
     /** The live org for a target, or null. Description is long text, which SOQL cannot filter, so match here. */
     find(target, opts) {
@@ -189,7 +209,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
      * the Dev Hub's limits (a story keeps ORG_RESERVE free) and a new org. The one place an org is allocated.
      */
     allocate(org) {
-      const pooled = self.claimPool(org);
+      const pooled = self.claimPool(org);   // with its snapshot's baseline: ready() deploys force-app only when it is current
       if (pooled) return pooled;
       self.assertCapacity(org.kind === "story" ? Number(env.ORG_RESERVE || 0) : 0);
       return self.create(org);
@@ -197,9 +217,19 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
     /** Make the warm pool's missing orgs (ORG_POOL; the janitor, after its sweep). Returns their descriptions. */
     topUpPool(size = Number(env.ORG_POOL) || 0) {
       // pool orgs come from the snapshot only: one from production's shape would skip the roles setup a claim relies on
-      if (!size || !self.currentSnapshot()) return [];
+      const snapshot = size ? self.currentSnapshot() : null;
+      if (!snapshot) return [];
+      // a pool org on an older baseline than the current snapshot's (when that one holds this baseline) is made again, so
+      // a claim does not redeploy the baseline; only as many as can be made again now, so the pool never shrinks for it
+      const records = active();
+      const stale = stalePool({ records, current: baseline(), fresh: self.snapshotBaseline(snapshot), baselineOf: snapshotBaselineOf });
+      const toMake = poolToMake({ records: records.filter((r) => !stale.includes(r)), size, limits: self.limits(), reserve: Number(env.ORG_RESERVE || 0) });
+      for (const r of stale.filter((x) => toMake.includes(x.Description))) {
+        if (deleteRecord(r.SignupUsername)) { record("org", { action: "retired", org: r.Description, snapshot: r.Snapshot }); log(`retired ${r.Description}: its snapshot ${r.Snapshot} holds an older production baseline`); }
+        else toMake.splice(toMake.indexOf(r.Description), 1);
+      }
       const made = [];
-      for (const d of poolToMake({ records: active(), size, limits: self.limits(), reserve: Number(env.ORG_RESERVE || 0) })) {
+      for (const d of toMake) {
         try {
           const how = self.create({ kind: "pool", alias: d, description: d, days: ORG_LIFETIME_DAYS.story, definition: DEFINITION.story });
           if (!how.fromSnapshot) { self.removeTagged(d); log(`::warning::${d} came from production's shape, not the snapshot: deleted`); continue; }
@@ -210,8 +240,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       return made;
     },
     /** The production baseline's id as it would be deployed now (null: BASELINE=off or none). */
-    baselineId() { return baseline(); },
-    /** Kept for callers that do not know a commit: ready() for the source in the working directory. */
+    baselineId() { return baseline(); },    /** Kept for callers that do not know a commit: ready() for the source in the working directory. */
     ensure(target, opts = {}) { return self.ready(target, opts); },
 
     /**

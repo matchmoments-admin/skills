@@ -19,7 +19,7 @@ env:
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
 jobs:
   wake:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 8   # up to 5 waiting for the parked run to end (a job re-runs only in a finished run)
     env:
       GH_TOKEN: ${{ github.token }}

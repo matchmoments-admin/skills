@@ -343,7 +343,7 @@ test("baseline in orgs: one combined deploy; soft falls back to force-app alone;
   assert.ok(names.touchesPipeline(["baseline/main/default/objects/X.xml"]).length, "story PRs cannot edit baseline/");
   const rel = readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
   assert.match(rel, /gh workflow run prod-baseline\.yml --ref main/);
-  assert.match(rel, /gh workflow run snapshot-refresh\.yml --ref main/);
+  assert.match(rel, /gh workflow run snapshot-refresh\.yml --ref main -f if-changed=true/, "#430: a release rebuilds the snapshot only if it changed the shape inputs");
   assert.match(readFileSync(new URL("../../.github/workflows/prod-baseline.yml", import.meta.url), "utf8"), /github\.event_name != 'schedule' \|\| vars\.BASELINE_NIGHTLY == 'true'/);
 });
 
@@ -449,7 +449,7 @@ test("enterprise A: a CLI warning never hides the real error; a refused snapshot
   assert.equal(Math.round(r.snapshotAgeHours(Date.parse("2026-10-09T07:53:51Z"))), 12);
   const src = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(src, /polls\+\+ % 8/, "no card refresh on every few test polls");
-  assert.match(readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8"), /snapshot-refresh\.yml --ref main -f if-older-than=20/);
+  assert.match(readFileSync(new URL("../../.github/workflows/org-shape-refresh.yml", import.meta.url), "utf8"), /snapshot-refresh\.yml --ref main -f if-older-than=20/, "the weekly rebuild is at most daily");
 });
 
 test("admins' path (enterprise D): a login to the story's org from the story itself, as the persona or as an admin; Setup changes come back as a commit; people's changes only", () => {
@@ -664,6 +664,46 @@ test("orgs know what they hold: the seed loads on every ready() (even when the c
       reg(f.sf, { BASELINE: "soft", SEED: "off" }).ready("story:90", { commit: "c0ffee" });
       assert.equal(f.calls.some((c) => (c + " ").includes(" -d baseline ")), full, desc);
     }
+    // a claimed warm pool org came from a snapshot too: the same rule, no baseline redeploy when that snapshot holds this
+    // baseline (#426: a claim redeployed it every time). ScratchOrgInfo.Snapshot holds the snapshot's name (live Dev Hub,
+    // 30 Oct: "LCB2610250836" on uat-2027-w03). pool-1 is older but on this baseline; pool-2 is newer, on an older one.
+    const snaps = (current = id) => [{ SnapshotName: "LCB2610250836", Status: "Active", CreatedDate: "2026-10-25", Description: `main@abc b${current}` },
+      { SnapshotName: "LCB2610162243", Status: "Active", CreatedDate: "2026-10-16", Description: "main@abc b0000000000" }];
+    const pool = () => [{ Description: "pool-1", SignupUsername: "p1@x", LoginUrl: "https://s", CreatedDate: "2026-10-26", Snapshot: "LCB2610250836" },
+      { Description: "pool-2", SignupUsername: "p2@x", LoginUrl: "https://s", CreatedDate: "2026-10-27", Snapshot: "LCB2610162243" }];
+    const devhub = (live, snapshots = snaps()) => {
+      const g = fake({ live, snapshots }), calls = [];
+      const sf = (args, opts) => {
+        calls.push(args.join(" "));
+        if (args[0] === "data" && args[1] === "update" && args.includes("ScratchOrgInfo")) {
+          const who = args[args.indexOf("-w") + 1].match(/'(.+)'/)[1];
+          live.find((r) => r.SignupUsername === who).Description = args[args.indexOf("-v") + 1].match(/'(.+)'/)[1];
+          return { success: true };
+        }
+        return g.sf(args, opts);
+      };
+      return { sf, calls };
+    };
+    let live = pool(), d = devhub(live);
+    reg(d.sf, { BASELINE: "soft", SEED: "off", ORG_POOL: "2" }).ready("story:91", { commit: "c0ffee" });
+    assert.deepEqual(live.map((r) => r.Description), ["issue-91", "pool-2"], "the pool org on this baseline is claimed first, though older");
+    assert.ok(!d.calls.some((c) => c.startsWith("org create scratch")), "no new org");
+    assert.ok(!d.calls.some((c) => (c + " ").includes(" -d baseline ")), "its snapshot holds this baseline: force-app only");
+    assert.ok(d.calls.some((c) => /^data query .*SELECT SignupUsername, .*\bSnapshot\b.* FROM ScratchOrgInfo/.test(c)), "the registry reads which snapshot each org came from");
+    assert.equal(d.calls.filter((c) => c.startsWith("org list snapshot")).length, 1, "the snapshot list is read once per registry");
+    // only a pool org on an older baseline left: still claimed (it saves the create), with the full deploy
+    live = [pool()[1]]; d = devhub(live);
+    reg(d.sf, { BASELINE: "soft", SEED: "off", ORG_POOL: "2" }).ready("story:92", { commit: "c0ffee" });
+    assert.equal(live[0].Description, "issue-92");
+    assert.ok(d.calls.some((c) => (c + " ").includes(" -d baseline ")), "an older baseline: the full deploy");
+    // the janitor retires a pool org on an older baseline once the current snapshot holds this one, and makes it again
+    live = pool(); d = devhub(live);
+    assert.deepEqual(reg(d.sf, { BASELINE: "soft", SEED: "off", ORG_POOL: "2" }).topUpPool(2), ["pool-2"]);
+    assert.deepEqual(d.calls.filter((c) => c.startsWith("data delete record")).map((c) => c.match(/SignupUsername='(.+)'/)[1]), ["p2@x"], "only the stale one");
+    // ... but not while the current snapshot holds an older baseline too: its replacement would be no better
+    live = pool(); d = devhub(live, snaps("0000000000"));
+    assert.deepEqual(reg(d.sf, { BASELINE: "soft", SEED: "off", ORG_POOL: "2" }).topUpPool(2), []);
+    assert.ok(!d.calls.some((c) => c.startsWith("data delete record")), "nothing retired");
   } finally { process.chdir(cwd); }
   // the core seed has no email-origin Cases: they queue ClassifyCaseJob, whose pending async job blocked every baseline
   // redeploy of its classes (6 files retried on every org build, 14 Oct)
@@ -889,4 +929,72 @@ test("org.ci: the change's own deploy failing inside ready() is marked as a depl
   const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
   assert.match(ci, /code-failed: .*steps\.org\.outputs\.deploy-failed == 'true'/);
   assert.match(readFileSync(new URL("../bin/commands/org.mjs", import.meta.url), "utf8"), /"no open PR for this run"/, "a hand-run CI with no open PR never rebuilds a story org");
+});
+
+test("#430: the snapshot is rebuilt only when main's baseline, seed or the release's shape inputs differ from what it holds", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = mkdtempSync(join(tmpdir(), "snap-430-"));
+  const baselineDir = join(root, "baseline"), seedDir = join(root, "data/seed");
+  mkdirSync(join(baselineDir, "objects"), { recursive: true }); mkdirSync(seedDir, { recursive: true });
+  mkdirSync(join(root, "force-app/main/default/settings"), { recursive: true }); mkdirSync(join(root, "config"), { recursive: true });
+  writeFileSync(join(baselineDir, "objects", "X.xml"), "<x/>");
+  writeFileSync(join(seedDir, "plan.json"), "[]");
+  writeFileSync(join(root, "force-app/main/default/settings/Account.settings-meta.xml"), "<AccountSettings/>");
+  writeFileSync(join(root, "config/scratch-dev.json"), "{}");
+  let lists = 0;
+  const registry = (snapshots, env = {}) => orgRegistry({ sf: (a) => (a[0] === "org" && a[1] === "list" && a[2] === "snapshot" ? (lists++, snapshots) : {}), log: () => {}, packages: [], baselineDir, seedDir, shapeRoot: root, env });
+  const ids = registry([]).snapshotPlan({ ifChanged: true }).ids;
+  const { baseline: b, seed: s, shape: h } = ids;
+  for (const id of [b, s, h]) assert.match(id, /^[0-9a-f]{10}$/);
+  const NOW = Date.parse("2026-10-30T05:00:00Z");
+  const snap = (Description, extra = {}) => ({ SnapshotName: "LCB2610300100", Status: "Active", CreatedDate: "2026-10-30T01:00:00.000+0000", Description, ...extra });
+  const plan = (snaps, opts = { ifChanged: true }, env) => registry(snaps, env).snapshotPlan({ now: NOW, ...opts });
+  const held = `b${b} s${s} h${h} main@1234567`;
+
+  lists = 0;
+  assert.equal(plan([snap(held)]).rebuild, false, "it holds all three: nothing to rebuild");
+  assert.equal(lists, 1, "one snapshot listing per decision");
+  assert.match(plan([snap(`b0000000000 s${s} h${h}`)]).why, /baseline/, "the baseline changed");
+  assert.match(plan([snap(`b${b} s0000000000 h${h}`)]).why, /seed/, "the seed changed");
+  assert.match(plan([snap(`b${b} s${s} h0000000000`)]).why, /shape/, "a release changed production's settings: the shape the snapshot was made from is old");
+  assert.equal(plan([snap(`b${b} s${s} h0000000000`)]).rebuild, true);
+  assert.match(plan([snap(`main@1234567 b${b} s${s}`)]).why, /shape/, "a snapshot made before #430 names no shape: rebuilt once");
+  assert.match(plan([]).why, /no Active snapshot/);
+  // a second push queued behind the first: the first one's snapshot, still being made, already holds main's ids
+  const building = snap(held, { SnapshotName: "LCB2610300400", Status: "InProgress", CreatedDate: "2026-10-30T04:00:00.000+0000" });
+  const pending = plan([snap(`b0000000000 s${s} h${h}`), building]);
+  assert.equal(pending.rebuild, false); assert.match(pending.why, /LCB2610300400 .*InProgress/);
+  assert.equal(plan([building]).rebuild, false, "no Active one yet, but one holding main's ids is on its way");
+  assert.equal(plan([snap(`b0000000000 s${s} h${h}`), { ...building, Status: "Error" }]).rebuild, true, "a failed one does not count");
+  assert.equal(plan([snap(held, { CreatedDate: "2026-10-29T01:00:00.000+0000", SnapshotName: "LCB2610290100" }), snap(`b0000000000 s${s} h${h}`)]).rebuild, true, "an older snapshot holding them is not the one new orgs use");
+  // a release merge that changes the seed and Settings: its push must not build on the old shape and claim the new
+  // shape inputs, or the release's own run (after its shape job) would find them held and skip
+  const both = plan([snap(`b${b} s0000000000 h0000000000`)], { ifChanged: true, onPush: true });
+  assert.equal(both.rebuild, false); assert.match(both.why, /release rebuilds it after its shape job/);
+  assert.equal(plan([snap(`b${b} s0000000000 h${h}`)], { ifChanged: true, onPush: true }).rebuild, true, "the seed alone: the push rebuilds");
+  assert.equal(plan([snap(`main@1 b${b} s0000000000`)], { ifChanged: true, onPush: true }).rebuild, true, "a snapshot from before #430 names no shape: not deferred");
+  // a short main SHA that starts with b is not a baseline id (the old \bb regex read main@b1c2d3e as baseline 1c2d3e)
+  assert.match(plan([snap(`main@b1c2d3e s${s} h${h}`)]).why, /baseline/);
+  // --if-older-than and an explicit run
+  assert.equal(plan([snap("main@1")], { olderThan: 20 }).rebuild, false, "4 hours old");
+  assert.equal(plan([snap("main@1")], { olderThan: 2 }).rebuild, true);
+  assert.equal(plan([snap(held)], {}).rebuild, true, "by hand, nothing asked: always");
+  // a pinned snapshot: nothing new would be used, so nothing is built
+  const pinned = plan([snap("main@1")], {}, { SCRATCH_SNAPSHOT: "LCB2610010100" });
+  assert.equal(pinned.rebuild, false); assert.match(pinned.why, /::notice::SCRATCH_SNAPSHOT pins LCB2610010100/);
+  assert.equal(plan([], {}, { SCRATCH_SNAPSHOT: "off" }).rebuild, false);
+
+  // what a new snapshot says it holds: ids first, so the 255-character cut only ever shortens the free text
+  const { snapshotDescription, snapshotHolds } = await import("../src/org/snapshot.mjs");
+  const d = snapshotDescription({ ...ids, commit: "1234567" });
+  assert.equal(d, held);
+  assert.deepEqual(snapshotHolds(d), ids);
+  const long = snapshotDescription({ ...ids, commit: "x".repeat(400) });
+  assert.equal(long.length, 255); assert.deepEqual(snapshotHolds(long), ids);
+  assert.deepEqual(snapshotHolds("main@b1c2d3e"), { baseline: null, seed: null, shape: null });
+  assert.equal(registry([snap(`main@b1c2d3e b${b} s${s}`)]).snapshotBaseline("LCB2610300100"), b, "older descriptions (main@ first) still read");
+  const src = readFileSync(new URL("../src/org/snapshot.mjs", import.meta.url), "utf8");
+  assert.equal((src.match(/\.slice\(0, 255\)/g) || []).length, 1, "the description is cut in one place");
 });

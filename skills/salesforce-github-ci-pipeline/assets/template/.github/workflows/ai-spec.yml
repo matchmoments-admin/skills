@@ -21,7 +21,7 @@ env:
 jobs:
   off:
     if: github.event.label.name == 'ai:spec' && vars.AI_PLAN != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 2
     env:
       GH_TOKEN: ${{ github.token }}

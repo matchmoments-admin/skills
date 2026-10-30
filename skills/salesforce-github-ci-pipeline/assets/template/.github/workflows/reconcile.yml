@@ -25,7 +25,7 @@ env:
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
 jobs:
   reconcile:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     concurrency:
       group: reconcile
       cancel-in-progress: false
@@ -38,7 +38,9 @@ jobs:
         with: { ref: main, fetch-depth: 0 }   # pipeline code from main; history and tags for the watchdog (it fetches: a private repo needs the token)
       - name: Reconcile (re-run what never started; start what is owed on every idle open PR)
         continue-on-error: true
-        env:
+        env:   # APP_TOKEN_READS: one facts read per idle PR, on the pipeline App's token (#427); off, no App key
+          PIPELINE_APP_ID: ${{ vars.APP_TOKEN_READS == 'true' && secrets.PIPELINE_APP_ID || '' }}
+          PIPELINE_APP_PRIVATE_KEY: ${{ vars.APP_TOKEN_READS == 'true' && secrets.PIPELINE_APP_PRIVATE_KEY || '' }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node pipeline/bin/pipe.mjs reconcile

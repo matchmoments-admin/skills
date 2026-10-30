@@ -30,6 +30,7 @@ runs:
         echo "::add-mask::$T"
         echo "token=$T" >> "$GITHUB_OUTPUT"
         echo "GH_TOKEN=$T" >> "$GITHUB_ENV"
+        [ -z "$APP_TOKEN" ] || echo "PIPELINE_TOKEN_IS_APP=true" >> "$GITHUB_ENV"   # the API count puts these steps' calls on the App's budget (#422)
     - uses: actions/checkout@v4
       with:
         token: ${{ steps.pick.outputs.token }}

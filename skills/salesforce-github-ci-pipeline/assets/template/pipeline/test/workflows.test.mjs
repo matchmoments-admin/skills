@@ -521,3 +521,87 @@ test("the gate does no IO: Standing and the gate decide on facts that facts.mjs 
   const src = readFileSync(new URL("../src/gate.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(src, /\b(gh|ghPages|api)\(\[|\bghPages\(|readFileSync|execFileSync/, "gate.mjs calls no gh, API or file seam");
 });
+
+// pipe commands that need the Salesforce CLI (they call io.sf or the org registry, orgs()). Keep it current: the test
+// below derives the ones whose own body says so and fails if one is missing here; add by hand a command that reaches
+// sf through a shared helper (closeout run -> closeoutCmd). `pipe next` is not one: it asks the Dev Hub for free slots
+// only after an org was freed, and goes on without it (journey.mjs freeSlots).
+const SF_PIPE = ["org", "snapshot refresh", "baseline capture", "tests run", "prod validate", "event rollback", "start followups", "sample guard", "uat tester", "closeout run"];
+const heavyStep = (s) => {
+  const uses = s.uses || "", run = s.run || "";
+  return /\.github\/actions\/(sf-auth|claude-agent|playwright)$|microsoft\/playwright|sfdx|salesforce\/(cli|setup)/.test(uses)
+    || /(^|[\s;&|(`])sf\s+[a-z]/m.test(run)                       // any sf call
+    || /\bnpm (ci|install)\b|\bnpx( -y)? playwright\b|\bplaywright (test|install)\b/.test(run)
+    || SF_PIPE.some((c) => new RegExp(`pipe\\.mjs ${c}(\\s|"|$)`, "m").test(run));
+};
+
+test("#430: short jobs with no Salesforce CLI, agent, npm install or browser run on the small runner; the rest stay standard", () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const dir = new URL("../../.github/workflows/", import.meta.url);
+  const SMALL = "${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}";
+  const small = [], standard = [];
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".yml"))) {
+    for (const [name, j] of Object.entries(yaml.load(readFileSync(new URL(f, dir), "utf8")).jobs)) {
+      const heavy = (j.steps || []).some(heavyStep);
+      (heavy ? standard : small).push(`${f}/${name}`);
+      if (heavy) assert.equal(j["runs-on"], "ubuntu-latest", `${f}/${name} needs the sf CLI, an agent, npm packages or a browser: standard runner`);
+      else {
+        assert.equal(j["runs-on"], SMALL, `${f}/${name} runs only node, gh, git and jq: the small runner`);
+        assert.ok(j["timeout-minutes"] <= 15, `${f}/${name}: ubuntu-slim stops a job at 15 minutes`);
+      }
+    }
+  }
+  for (const j of ["ai-review.yml/route", "ai-review.yml/verdict", "ci.yml/nudge", "gate.yml/decide", "ai-fix.yml/follow-up", "reconcile.yml/reconcile", "release.yml/tag", "issue-start.yml/blockers"]) assert.ok(small.includes(j), `${j} is small`);
+  for (const j of ["ci.yml/static", "ci.yml/apex", "gate.yml/ship", "ai-review.yml/review", "scratch-janitor.yml/sweep", "merged.yml/closed", "ui-test.yml/run", "release.yml/closeout"]) assert.ok(standard.includes(j), `${j} stays standard`);
+  // the rule itself
+  assert.ok(heavyStep({ run: "x=1; sf data query -q 'SELECT Id FROM Account'" }) && heavyStep({ run: "npm ci" }) && heavyStep({ run: "npx playwright test" }));
+  assert.ok(heavyStep({ run: "node .pipeline/pipeline/bin/pipe.mjs org ready story:1" }) && heavyStep({ run: 'node pipeline/bin/pipe.mjs closeout run --tag "$TAG"' }));
+  assert.ok(!heavyStep({ run: "node pipeline/bin/pipe.mjs next --after release-pr" }), "pipe next goes on without the Dev Hub");
+  assert.ok(!heavyStep({ run: 'node pipeline/bin/pipe.mjs story blockers "$KEY"' }) && !heavyStep({ run: "node pipeline/bin/pipe.mjs orgless" }));
+});
+
+test("#430: the list of pipe commands that need sf covers every command whose body calls io.sf or orgs()", () => {
+  const files = [new URL("../bin/pipe.mjs", import.meta.url), ...readdirSync(new URL("../bin/commands/", import.meta.url)).map((f) => new URL(`../bin/commands/${f}`, import.meta.url))];
+  const found = [];
+  for (const u of files) {
+    let cur = null, body = [];
+    const flush = () => { if (cur && /orgs\(\)|io\.sf\b|production\.\w+\(|tests\.runForCheckout|baseline\.capture/.test(body.join("\n"))) found.push(cur); };
+    for (const l of readFileSync(u, "utf8").split("\n")) {
+      const m = /^ {2}"([a-z-]+(?: [a-z-]+)*)": /.exec(l);
+      if (m) { flush(); cur = m[1]; body = [l]; } else body.push(l);
+    }
+    flush();
+  }
+  assert.ok(found.includes("org ready") && found.includes("snapshot refresh"), `found ${found.join(", ")}`);
+  for (const c of found) assert.ok(SF_PIPE.some((p) => c === p || c.startsWith(`${p} `)), `pipe ${c} calls sf: add it to SF_PIPE`);
+});
+
+test("#430: issue-start's blockers check stays its own job (3 minutes, sparse checkout) on the small runner; start waits for it", () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const doc = yaml.load(readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8"));
+  const { blockers, start } = doc.jobs;
+  assert.equal(blockers["runs-on"], "${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}");
+  assert.equal(blockers["timeout-minutes"], 3);
+  assert.match(blockers.steps[0].with["sparse-checkout"], /^pipeline\nconfig$/, "only the pipeline code, not main's history");
+  assert.equal(start.needs, "blockers"); assert.equal(start.if, "needs.blockers.outputs.ok == 'true'");
+});
+
+test("#430: the snapshot is rebuilt when the baseline or seed changed, after a release only if the shape inputs changed, weekly, or by hand", () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");
+  const snap = yaml.load(wf("snapshot-refresh"));
+  assert.deepEqual(snap.on.push.paths, ["baseline/**", "data/seed/**"], "a change to the baseline or seed on main starts it");
+  const step = snap.jobs.build.steps.find((s) => /snapshot refresh/.test(s.run || ""));
+  assert.match(step.run, /snapshot refresh .*\$CHANGED/);
+  assert.match(step.env.CHANGED, /github\.event_name == 'push' && '--if-changed --on-push' \|\| inputs\.if-changed && '--if-changed'/, "a push rebuilds only when the newest snapshot does not hold them (content ids, not paths)");
+  assert.ok(snap.on.workflow_dispatch.inputs["if-changed"], "a person can ask for it too");
+  const rel = yaml.load(wf("release"));
+  const base = rel.jobs.baseline;
+  assert.ok(base.needs.includes("shape"), "after the release's shape job has captured production's shape");
+  assert.match(base.steps.map((s) => s.run).join("\n"), /gh workflow run snapshot-refresh\.yml --ref main -f if-changed=true/, "a release rebuilds only if it changed the shape inputs");
+  assert.match(base.steps.map((s) => s.run).join("\n"), /gh workflow run prod-baseline\.yml --ref main/, "the production baseline is still captured after each release");
+  assert.match(wf("org-shape-refresh"), /gh workflow run snapshot-refresh\.yml --ref main -f if-older-than=20/, "the weekly rebuild stays (seasonal upgrades)");
+  const pipe = readFileSync(new URL("../bin/pipe.mjs", import.meta.url), "utf8");
+  assert.match(pipe, /snapshotPlan\(\{ ifChanged: has\("if-changed"\)/, "pipe snapshot refresh asks the registry once");
+  assert.match(pipe, /snapshotDescription\(\{ \.\.\.plan\.ids/, "a new snapshot names the ids the decision hashed (one hash)");
+});

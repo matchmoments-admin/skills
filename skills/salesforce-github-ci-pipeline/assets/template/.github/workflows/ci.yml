@@ -86,11 +86,11 @@ jobs:
       - run: npm run format:check
       - run: npm run lint
       - run: npm run test:unit
-      - name: Does the evidence() browser test need Chromium? (only when the helper or its tests changed)
+      - name: Do the browser tests (evidence(), login() and openPath()) need Chromium? (only when a helper or its tests changed)
         id: evidence
         run: |
           BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
-          if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(e2e/support/evidence\.ts|pipeline/src/evidence\.mjs|pipeline/test/evidence/)'; then echo "need=true" >> "$GITHUB_OUTPUT"; fi
+          if git diff --name-only "origin/$BASE...HEAD" | grep -qE '^(e2e/support/(evidence|login)\.ts|pipeline/src/evidence\.mjs|pipeline/test/(evidence|login)/)'; then echo "need=true" >> "$GITHUB_OUTPUT"; fi
       - uses: ./.pipeline/.github/actions/playwright
         if: steps.evidence.outputs.need == 'true'
       - run: npm run test:pipeline
@@ -232,7 +232,7 @@ jobs:
     # starts otherwise.
     needs: [static, apex]
     if: failure() && (needs.static.result == 'failure' || needs.apex.outputs.code-failed == 'true') && github.event_name == 'pull_request' && vars.AI_AUTO_CHAIN == 'true' && vars.AI_FIX == 'true' && needs.static.outputs.kind == 'story'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 3
     steps:
       - id: app
@@ -251,7 +251,7 @@ jobs:
     # The Apex job may be skipped (nothing to deploy): that passes, so the nudge still runs.
     needs: [static, apex]
     if: "!cancelled() && github.event_name != 'push' && needs.static.result == 'success' && (needs.apex.result == 'success' || needs.apex.result == 'skipped')"
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}

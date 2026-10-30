@@ -8,7 +8,7 @@
 
 export const BRANCH = "metrics";
 import { reviewKindOf } from "./gate.mjs";
-const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile", "overrule", "budget-ok", "eval"];
+const KINDS = ["stage", "tests", "validation", "gate", "release", "rollback", "org", "agent", "verdict", "lane", "evidence", "baseline", "snapshot", "jev", "seed", "shape", "reconcile", "overrule", "budget-ok", "eval", "api"];
 
 /** The envelope's own fields: a payload never sets them (Jev's `run` was silently replaced by the Actions run id). */
 export const RESERVED = ["v", "at", "kind", "run", "workflow", "job"];
@@ -165,6 +165,25 @@ export function summarize(events, { days = 28 } = {}) {
   for (const e of [...of("eval")].sort((a, b) => a.at.localeCompare(b.at))) evals[`${e.provider || "anthropic"}|${e.model || "?"}`] = e;
   const spend = {};
   for (const a of agents.filter((x) => x.story)) spend[a.story] = (spend[a.story] || 0) + (Number(a.usd) || 0);
+  // GitHub API use (#422): each pipe process's "api" event (its calls counted where they ran), summed per workflow
+  // run, per token (the job's Actions token; the pipeline App's). The busiest window per token is the one whose own
+  // total (rate_limit's used, read at exit) took the largest share of its own limit, labelled from its real start
+  const perRun = {}, windows = { actions: {}, app: {} };
+  const peak = (w, reset, used, limit) => { if (reset && used !== undefined && !(w[reset]?.used >= Number(used))) w[reset] = { used: Number(used) || 0, limit: Number(limit) || null }; };
+  for (const a of of("api")) {
+    const r = (perRun[a.run || a.at] ||= { workflow: a.workflow || "?", rest: 0, graphql: 0, appRest: null, appGraphql: null });
+    r.rest += Number(a.rest) || 0; r.graphql += Number(a.graphql) || 0;
+    if (a.appRest !== undefined || a.appGraphql !== undefined) { r.appRest = (r.appRest || 0) + (Number(a.appRest) || 0); r.appGraphql = (r.appGraphql || 0) + (Number(a.appGraphql) || 0); }
+    peak(windows.actions, a.coreReset, a.coreUsed, a.coreLimit);
+    peak(windows.app, a.appCoreReset, a.appCoreUsed, a.appCoreLimit);
+  }
+  const apiRuns = Object.values(perRun), byWf = {}, appRuns = apiRuns.filter((r) => r.appRest !== null);
+  for (const r of apiRuns) (byWf[r.workflow] ||= []).push(r);
+  const share = (x) => (x.limit ? x.used / x.limit : -1);
+  const busiestOf = (w) => {
+    const top = Object.entries(w).sort((a, b) => share(b[1]) - share(a[1]) || b[1].used - a[1].used)[0];
+    return top ? { start: `${new Date(Date.parse(top[0]) - HOUR).toISOString().slice(0, 16)}Z`, used: top[1].used, limit: top[1].limit, percent: pct(top[1].used, top[1].limit) } : null;
+  };
 
   return {
     days, events: events.length,
@@ -182,6 +201,14 @@ export function summarize(events, { days = 28 } = {}) {
       evidence: { posts: shots.filter((e) => e.shots > 0).length, shots: shots.reduce((a, e) => a + (Number(e.shots) || 0), 0), rejected: shots.reduce((a, e) => a + (Number(e.rejected) || 0), 0),
         medianKbPerShot: r1(median(shots.filter((e) => e.shots > 0).map((e) => e.kb / e.shots))), totalKb: shots.reduce((a, e) => a + (Number(e.kb) || 0), 0) },
       orgs: { created: orgs.filter((o) => o.action === "created").length, completed: orgs.filter((o) => o.action === "completed").length, deleted: orgs.filter((o) => o.action === "deleted").length, orgHours: r1(orgHours) },
+    },
+    api: {
+      runs: apiRuns.length,
+      perRun: { medianRest: median(apiRuns.map((r) => r.rest)), maxRest: apiRuns.length ? Math.max(...apiRuns.map((r) => r.rest)) : null, medianGraphql: median(apiRuns.map((r) => r.graphql)),
+        medianAppRest: median(appRuns.map((r) => r.appRest)), medianAppGraphql: median(appRuns.map((r) => r.appGraphql)) },
+      byWorkflow: Object.entries(byWf).map(([workflow, rs]) => ({ workflow, runs: rs.length, medianRest: median(rs.map((r) => r.rest)), maxRest: Math.max(...rs.map((r) => r.rest)), medianGraphql: median(rs.map((r) => r.graphql)) }))
+        .sort((a, b) => b.medianRest * b.runs - a.medianRest * a.runs),
+      busiest: { actions: busiestOf(windows.actions), app: busiestOf(windows.app) },
     },
     gateWaits: Object.entries(gateWaits).map(([reason, prs]) => ({ reason, prs: prs.size })).sort((a, b) => b.prs - a.prs).slice(0, 5),
     failedStages: Object.entries(failedStages).map(([what, n]) => ({ what, n })).sort((a, b) => b.n - a.n).slice(0, 5),
@@ -218,6 +245,16 @@ export function toMarkdown(s) {
     `| Waiting for an org's lane | ${s.stages.lanes.waits} waits, median ${v(s.stages.lanes.medianMinutes, " min")}, ${v(s.stages.lanes.totalMinutes, " runner-min")} in all |`,
     `| UI evidence | ${s.stages.evidence.posts} posts, ${s.stages.evidence.shots} screenshots (${s.stages.evidence.rejected} refused); median ${v(s.stages.evidence.medianKbPerShot, " KB")} each, ${s.stages.evidence.totalKb} KB in all |`,
     `| Scratch orgs | ${s.stages.orgs.created} created, ${s.stages.orgs.completed} finished after a failure, ${s.stages.orgs.deleted} deleted; ${v(s.stages.orgs.orgHours, " org-hours")} |`, "",
+    ...(s.api?.runs ? [
+      `GitHub API (each pipe process counts its calls where they run): ${s.api.runs} workflow runs, median ${s.api.perRun.medianRest} REST requests and ${s.api.perRun.medianGraphql} GraphQL points per run (most ${s.api.perRun.maxRest}).`,
+      ...[["actions", "the Actions token", "REST requests"], ["app", "the pipeline App's token", "REST requests, shared with every repository it is installed on and the Claude agents"]].map(([k, name, what]) => {
+        const b = s.api.busiest[k];
+        return b ? `Busiest hour on ${name}: from ${b.start}, ${b.used}${b.limit ? ` of ${b.limit}` : ""} ${what}${b.percent !== null ? ` (${b.percent}%)` : ""}.` : "";
+      }),
+      s.api.perRun.medianAppRest !== null ? `On the pipeline App's token: median ${s.api.perRun.medianAppRest} REST and ${s.api.perRun.medianAppGraphql} GraphQL per run.` : "", "",
+      "| Workflow | runs | median REST per run | most | median GraphQL per run |", "|---|---|---|---|---|",
+      ...s.api.byWorkflow.map((w) => `| ${w.workflow} | ${w.runs} | ${w.medianRest} | ${w.maxRest} | ${w.medianGraphql} |`), "",
+    ].filter((l, i, all) => l !== "" || all[i - 1] !== "") : ["GitHub API: nothing measured yet (API_METER, the api events).", ""]),
     "| What PRs waited on most (gate) | PRs |", "|---|---|",
     ...(s.gateWaits.length ? s.gateWaits.map((g) => `| ${g.reason} | ${g.prs} |`) : ["| nothing recorded | |"]), "",
     "| Stage that failed most | times |", "|---|---|",

@@ -17,7 +17,7 @@ env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
 jobs:
   cases:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 2
     outputs:
       names: ${{ steps.list.outputs.names }}
@@ -80,7 +80,7 @@ jobs:
     # Agent-free: reads the reviews, scores them, writes the event.
     needs: review
     if: always() && needs.review.result != 'skipped'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 5
     permissions:
       contents: write   # the event log (the metrics branch)

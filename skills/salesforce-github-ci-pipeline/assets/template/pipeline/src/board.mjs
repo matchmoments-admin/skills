@@ -16,7 +16,12 @@ export function stageOf({ pr = null, approved = false, shipped = null }) {
 }
 
 /** An installation token for the pipeline App (RS256 JWT -> /app/installations/{id}/access_tokens). */
-export async function appToken({ appId, privateKey, repo, fetcher = fetch }) {
+export async function appToken(opts) {
+  return (await mintInstallation(opts)).token;
+}
+
+/** The pipeline App's installation token with what GitHub granted it: { token, permissions, expiresAt }. */
+export async function mintInstallation({ appId, privateKey, repo, fetcher = fetch }) {
   const now = Math.floor(Date.now() / 1000);
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const unsigned = `${b64({ alg: "RS256", typ: "JWT" })}.${b64({ iat: now - 60, exp: now + 540, iss: String(appId) })}`;
@@ -26,7 +31,7 @@ export async function appToken({ appId, privateKey, repo, fetcher = fetch }) {
   if (!inst.id) throw new Error(`App not installed on ${repo}`);
   const tok = await (await fetcher(`https://api.github.com/app/installations/${inst.id}/access_tokens`, { method: "POST", headers: h })).json();
   if (!tok.token) throw new Error("could not mint an App token");
-  return tok.token;
+  return { token: tok.token, permissions: tok.permissions || {}, expiresAt: tok.expires_at || null };
 }
 
 /** Put the story on the board in its stage. `graphql(query, vars)` is the seam (tests pass a fake). */

@@ -29,7 +29,7 @@ env:
 jobs:
   route:
     if: github.event_name == 'pull_request_target' && github.event.label.name == 'ai:fix'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 2
     env:
       GH_TOKEN: ${{ github.token }}
@@ -195,7 +195,7 @@ jobs:
     # pushed nothing starts nothing (that was an endless review/fix loop); the round limit stops it before it starts.
     needs: fix
     if: always() && needs.fix.result != 'skipped' && needs.fix.outputs.before != '' && needs.fix.outputs.budget != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 3
     permissions:
       actions: write

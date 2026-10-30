@@ -49,6 +49,13 @@ export function poolToMake({ records = [], size = 0, limits = {}, reserve = 0 })
   return out;
 }
 
+/** The pool orgs to make again (pure): those whose snapshot holds another production baseline than `current`, only while
+ *  the current snapshot holds `current` (`fresh`), so a new pool org would be better. baselineOf: snapshot name -> id. */
+export function stalePool({ records = [], current = null, fresh = null, baselineOf = () => null }) {
+  if (!current || fresh !== current) return [];
+  return records.filter((r) => POOL.test(r.Description || "") && baselineOf(r.Snapshot) !== current);
+}
+
 /**
  * Why a new org cannot be created now, or null. Names who holds the slots (another project's orgs share the Dev Hub's
  * limit: story #193's /start failed on one), and keeps `reserve` slots free for staging, UAT and CI. Unknown limits
@@ -103,7 +110,7 @@ export async function doneStoryOrgs(records, { tracker, gh, log = () => {} }) {
 }
 
 /** The registry's fleet methods. ctx: orgRegistry's shared context (sf, log, env, ...). */
-export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord, changed = () => {} }) {
+export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord, changed = () => {}, snapshotBaselineOf = () => null }) {
   return {
     /** Delete every live org with this description (works when the alias was never set: a half-made CI org). */
     removeTagged(description) {
@@ -132,10 +139,13 @@ export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineD
       if (org.kind !== "story" || !(Number(env.ORG_POOL) > 0)) return null;
       // the newest first: the most days left (an org's expiry cannot be extended). Two stories starting at once may pick
       // the same pool org: only the one whose Description stuck has it, and the other tries the next pool org rather than
-      // spending a daily slot on a new one (27 Oct review). Up to three tries; then a new org.
-      const tried = new Set();
+      // spending a daily slot on a new one (27 Oct review). Up to three tries; then a new org. A pool org whose snapshot
+      // holds the current production baseline comes before a newer one that does not: it skips the baseline deploy (#426).
+      const tried = new Set(), current = baseline();
+      const behind = (x) => (current && snapshotBaselineOf(x.Snapshot) === current ? 0 : 1);
       for (let i = 0; i < 3; i++) {
-        const r = active().filter((x) => POOL.test(x.Description || "") && !tried.has(x.SignupUsername)).sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)))[0];
+        const r = active().filter((x) => POOL.test(x.Description || "") && !tried.has(x.SignupUsername))
+          .sort((a, b) => behind(a) - behind(b) || String(b.CreatedDate).localeCompare(String(a.CreatedDate)))[0];
         if (!r) return null;
         tried.add(r.SignupUsername);
         const ok = sf(["data", "update", "record", "-o", DEVHUB, "-s", "ScratchOrgInfo", "-w", `SignupUsername='${r.SignupUsername}'`, "-v", `Description='${org.description}'`], { allowFail: true });
@@ -144,7 +154,8 @@ export function fleetMethods({ sf, sleep, log, keyFile, packages, env, baselineD
         if (!mine) { log(`::warning::could not claim ${r.Description}: trying the next pool org`); continue; }
         record("org", { action: "claimed", org: org.description, from: r.Description });
         log(`claimed warm pool org ${r.Description} for ${org.alias}`);
-        return { fromSnapshot: true, pooled: r.Description };
+        // the snapshot it was made from (ScratchOrgInfo.Snapshot) and the baseline that snapshot holds
+        return { fromSnapshot: true, pooled: r.Description, snapshot: r.Snapshot || null, baseline: snapshotBaselineOf(r.Snapshot) };
       }
       log(`::warning::no pool org could be claimed: creating ${org.alias} instead`);
       return null;

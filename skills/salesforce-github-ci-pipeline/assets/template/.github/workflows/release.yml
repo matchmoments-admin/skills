@@ -36,7 +36,7 @@ env:
 jobs:
   plan:
     name: what ships
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.p.outputs.sha }}
@@ -116,9 +116,14 @@ jobs:
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - run: sf org create shape -o devhub
   baseline:
-    name: refresh the production baseline and the snapshot
-    needs: [plan, deploy, tag]
-    runs-on: ubuntu-latest
+    # After the shape job (production's shape as this release left it): the snapshot is rebuilt only if this release
+    # changed what its shape depends on (Settings metadata, the scratch definition: --if-changed, #430). A release of
+    # code alone keeps the snapshot; new orgs deploy main's force-app on top of it anyway. When production's
+    # customisations changed, the baseline PR's merge rebuilds it (the snapshot workflow's push trigger).
+    name: refresh the production baseline (and the snapshot if the shape inputs changed)
+    needs: [plan, deploy, tag, shape]
+    if: always() && needs.deploy.result == 'success' && needs.tag.result == 'success'   # shape may fail (continue-on-error)
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 5
     continue-on-error: true    # scratch orgs keep the previous baseline and snapshot if this fails
     permissions:
@@ -129,11 +134,11 @@ jobs:
     steps:
       - run: |
           gh workflow run prod-baseline.yml --ref main -f reason="release ${{ needs.tag.outputs.tag || needs.plan.outputs.sha }}"
-          gh workflow run snapshot-refresh.yml --ref main -f if-older-than=20
+          gh workflow run snapshot-refresh.yml --ref main -f if-changed=true
   tag:
     name: tag and release notes
     needs: [plan, deploy]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 5
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
@@ -183,7 +188,7 @@ jobs:
     name: back-merge into the open sprint
     needs: [plan, closeout]
     if: always() && needs.plan.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
     timeout-minutes: 3
     env:
       GH_TOKEN: ${{ github.token }}

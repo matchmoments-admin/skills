@@ -254,3 +254,245 @@ test("the code host finds a release branch's open PR once, and forgets a PR's fa
   host.forget(5); host.prFacts(5);
   assert.equal(views, 2, "after forget, the next card reads fresh facts");
 });
+
+test("API count (#422, review of #434): every gh call is counted where it runs, per token and per budget (REST, GraphQL), each page of a paginated read once", async () => {
+  const { counted } = await import("../src/io.mjs");
+  const raw = {
+    gh: (args) => (args.includes("--paginate") ? [[1, 2], [3], [4]] : {}),
+    run: () => "{}",
+    sf: () => ({}), git: () => "",
+  };
+  const io = counted(raw, { token: () => "actions-token" });
+  io.gh(["api", "repos/o/r/compare/a...b"]);                    // REST
+  io.gh(["api", "graphql", "-f", "query=query{viewer{login}}"]); // GraphQL
+  io.gh(["pr", "view", "9", "--json", "number"]);              // gh's own commands: GraphQL
+  io.gh(["issue", "comment", "9", "--body", "x"]);              // GraphQL
+  io.gh(["workflow", "run", "gate.yml", "--ref", "main"]);      // REST: the workflow looked up, then dispatched
+  assert.deepEqual(io.ghPages("repos/o/r/pulls/1/reviews"), [1, 2, 3, 4]);   // 3 pages: 3 REST
+  io.run("gh", ["api", "-X", "PUT", "repos/o/r/contents/x", "--input", "-"], { input: "{}" });   // REST
+  io.run("sf", ["org", "list"]);   // not GitHub
+  io.sf(["org", "list"]); io.git(["status"]);
+  io.gh(["api", "repos/o/r/branches/x"], { env: { GH_TOKEN: "app-installation-token" } });   // another token: the App's
+  io.gh(["api", "repos/o/r/branches/x"], { env: { GH_TOKEN: "actions-token" } });           // the job's own token
+  assert.deepEqual(io.usage(), { actions: { rest: 8, graphql: 3 }, app: { rest: 1, graphql: 0 } });
+  io.count("app", "graphql");   // a call made outside gh (the App's GraphQL for the board, by fetch)
+  assert.equal(io.usage().app.graphql, 1);
+  // a step that acts as the App (pipeline-identity sets GH_TOKEN to the App's token and PIPELINE_TOKEN_IS_APP): its calls are the App's
+  const asApp = counted(raw, { token: () => "t", jobIsApp: () => true });
+  asApp.gh(["api", "x"]);
+  assert.deepEqual(asApp.usage(), { actions: { rest: 0, graphql: 0 }, app: { rest: 1, graphql: 0 } });
+});
+
+test("API meter (#422, review of #434): at exit, the counts go in one api event with the hour's total from one rate_limit read, only when the process made calls; one attempt, never a blocking retry", async () => {
+  const { counted } = await import("../src/io.mjs");
+  {
+    const sent = [], notes = [];
+    let reads = 0, conflict = false;
+    const raw = {
+      gh: (args) => { if (args.join(" ") === "api rate_limit") { reads++; return { resources: { core: { limit: 1000, used: 417, reset: 1793361600 }, graphql: { limit: 1000, used: 52, reset: 1793361600 } } }; } return {}; },
+      run: (cmd, args, o) => {
+        if (args[2] === "PUT") { if (conflict) throw new Error("gh api -X PUT failed: HTTP 409: is at x but expected y"); sent.push(JSON.parse(Buffer.from(JSON.parse(o.input).content, "base64").toString())); }
+        return "{}";
+      },
+    };
+    const env = { GH_REPO: "o/r", GITHUB_RUN_ID: "77", GITHUB_WORKFLOW: "ci" };
+    let slept = 0;
+    const make = (e = env) => { const io = counted(raw, { token: () => "t" }); return { io, host: codeHost({ io, env: e, log: (s) => notes.push(s), sleep: () => slept++ }) }; };
+
+    // a process that made calls: one event at exit, its own write counted, the window's totals read once
+    let { io, host } = make();
+    const meter = host.meter("finish ci", { pr: 12 });
+    assert.equal(reads, 0, "nothing read when the meter starts");
+    io.gh(["api", "repos/o/r/compare/a...b"]); io.gh(["pr", "view", "12"]);
+    const used = meter.stop();
+    assert.equal(reads, 1, "one rate_limit read, at exit");
+    assert.equal(sent.length, 1);
+    const e = sent[0];
+    assert.deepEqual([e.kind, e.command, e.pr, e.rest, e.graphql, e.coreUsed, e.coreLimit, e.coreReset, e.graphqlUsed, e.run, e.workflow],
+      ["api", "finish ci", 12, 2, 1, 417, 1000, "2026-10-30T12:00:00.000Z", 52, "77", "ci"], "the event's own PUT is one of the 2 REST");
+    assert.equal(used.rest, 2);
+    assert.equal(e.appRest, undefined, "no App-token calls: no App fields");
+
+    // a conflict on the metrics branch: dropped with a notice, no retry, no sleep
+    ({ io, host } = make());
+    conflict = true;
+    const m2 = host.meter("x");
+    io.gh(["api", "x"]);
+    m2.stop();
+    assert.equal(slept, 0, "no blocking retry at exit");
+    assert.match(notes.join("\n"), /api counts not recorded \(409\)/);
+    conflict = false;
+
+    // a process that made no calls: no read, no event
+    const before = [reads, sent.length];
+    ({ io, host } = make());
+    assert.equal(host.meter("settings").stop(), null);
+    assert.deepEqual([reads, sent.length], before);
+
+    // off outside Actions, with the event log off, or API_METER=off
+    for (const off of [{ GH_REPO: "o/r" }, { ...env, PIPELINE_EVENTS: "off" }, { ...env, API_METER: "off" }]) {
+      ({ io, host } = make(off));
+      const m = host.meter("x");
+      io.gh(["api", "x"]);
+      assert.equal(m.stop(), null);
+    }
+    assert.deepEqual([reads, sent.length], before);
+  }
+});
+
+// the pipeline App's installation token, as GitHub mints it: the token, its permissions and its expiry (fake)
+const ALL_READS = { actions: "write", checks: "read", contents: "write", issues: "write", metadata: "read", pull_requests: "write", statuses: "read" };
+const fakeMint = (permissions = ALL_READS) => {
+  const calls = [];
+  const mint = (creds) => { calls.push(creds.appId); return { token: `app-token-${calls.length}`, permissions }; };
+  return { mint, calls };
+};
+const APP = { PIPELINE_APP_ID: "1", PIPELINE_APP_PRIVATE_KEY: "pem" };
+
+test("App-token reads (#427): with APP_TOKEN_READS on, every read is sent with the pipeline App's token, minted on the first read, and every write stays on the Actions token; off is today's", async () => {
+  const { world, REPO } = await import("./sim.mjs");
+  const setup = () => {
+    const w = world();
+    w.story("84");
+    const head = w.push("issue-84", ["force-app/main/default/classes/A.cls"]);
+    w.pr(90, { head: "issue-84", base: "main" });
+    w.status(head, "pipeline/ai-review", "success", "AI-REVIEW: PASS");
+    return { w, head };
+  };
+  const step = (w, head, env, m = fakeMint()) => {
+    const notes = [];
+    const host = codeHost({ io: w.io, env: { GH_REPO: REPO, GITHUB_RUN_ID: "1", PIPELINE_EVENTS: "off", ...env }, mintApp: m.mint, log: (s) => notes.push(s) });
+    w.state.tokens.length = 0;
+    // writes alone (a status, a check run, a dispatch, an event-log PUT): nothing minted
+    host.status(head, "pipeline/ui-test", "success", "passed");
+    host.checkRun(head, "Salesforce tests").update({ title: "done" }, "success");
+    host.dispatch("gate.yml", { pr: 90 });
+    host.api("PUT", "repos/o/r/contents/x", { a: 1 });
+    const mintedByWrites = m.calls.length;
+    // then the reads a stage's finish makes: the facts and the PR, the code host's lookups, a GET through api()
+    host.prFacts(90); host.storyPr("issue-84"); host.openRelease(); host.releasePrOf("release/w"); host.checkRuns(head); host.workflowRuns("ci.yml");
+    host.api("GET", "repos/o/r/branches/issue-84");
+    host.prFacts(91 - 1);
+    return { notes, mintedByWrites, mints: m.calls.length, tokens: [...w.state.tokens] };
+  };
+  const isWrite = (c) => / -X (POST|PATCH|PUT|DELETE) | -f |^gh workflow run /.test(c);
+
+  // on, with the App's key in the step: minted lazily, once; reads on the App, writes on the Actions token
+  let { w, head } = setup();
+  const on = step(w, head, { APP_TOKEN_READS: "true", ...APP });
+  assert.equal(on.mintedByWrites, 0, "a process that only writes mints nothing");
+  assert.equal(on.mints, 1, "minted once, on the first read");
+  const reads = on.tokens.filter(([, c]) => !isWrite(c)), writes = on.tokens.filter(([, c]) => isWrite(c));
+  assert.ok(reads.length >= 11, `the facts read, the lookups and api GET (${reads.length})`);
+  assert.deepEqual(reads.filter(([t]) => t !== "app-token-1"), [], "every read on the App's token, api() GETs too");
+  assert.equal(writes.length, 5, "status, check run created and completed, dispatch, event PUT");
+  assert.deepEqual(writes.filter(([t]) => t !== "actions"), [], "every write on the Actions token");
+
+  // off (the default): exactly today, nothing minted, every call on the Actions token
+  ({ w, head } = setup());
+  const off = step(w, head, { ...APP });
+  assert.equal(off.mints, 0);
+  assert.deepEqual(off.tokens.filter(([t]) => t !== "actions"), []);
+
+  // on, but no App key in this step: the Actions token, and the notice once per process however many reads
+  ({ w, head } = setup());
+  const bare = step(w, head, { APP_TOKEN_READS: "true" });
+  assert.equal(bare.notes.filter((n) => /credentials are not in this step/.test(n)).length, 1);
+  assert.deepEqual(bare.tokens.filter(([t]) => t !== "actions"), []);
+
+  // the App lacks a permission a read needs (statuses before the admin step): never a silent degrade. A ::warning::
+  // naming it, and every read on the Actions token
+  ({ w, head } = setup());
+  const { statuses, ...noStatuses } = ALL_READS;
+  const missing = step(w, head, { APP_TOKEN_READS: "true", ...APP }, fakeMint(noStatuses));
+  assert.equal(missing.notes.filter((n) => /^::warning::.*statuses/.test(n)).length, 1, missing.notes.join("\n"));
+  assert.deepEqual(missing.tokens.filter(([t]) => t !== "actions"), []);
+
+  // a token that cannot be minted: a ::warning::, the Actions token, never a failed step
+  ({ w, head } = setup());
+  const broken = step(w, head, { APP_TOKEN_READS: "true", ...APP }, { mint: () => { throw new Error("App not installed on o/r"); }, calls: [] });
+  assert.match(broken.notes.join("\n"), /::warning::.*App not installed/);
+  assert.deepEqual(broken.tokens.filter(([t]) => t !== "actions"), []);
+});
+
+test("App-token reads (#427): the token is minted again before its hour ends, and a 401 on the App's token is read again once on the Actions token", () => {
+  let t = 0;
+  const m = fakeMint();
+  const sent = [];
+  let reject = null;   // the token GitHub refuses (401), as an expired or revoked one
+  const io = {
+    gh: (args, o = {}) => { const tok = o.env?.GH_TOKEN || "actions"; sent.push([tok, args.join(" ")]); if (tok === reject) throw new Error("gh api repos/o/r failed: HTTP 401: Bad credentials"); return { ok: tok }; },
+    ghPages: (path, key, o = {}) => { const tok = o.env?.GH_TOKEN || "actions"; sent.push([tok, path]); if (tok === reject) throw new Error("gh api --paginate failed: HTTP 401: Bad credentials"); return [tok]; },
+    run: (cmd, args, o = {}) => { const tok = o.env?.GH_TOKEN || "actions"; sent.push([tok, args.join(" ")]); if (tok === reject) throw new Error("gh api -X GET failed: HTTP 401: Bad credentials"); return JSON.stringify({ ok: tok }); },
+  };
+  const host = codeHost({ io, env: { GH_REPO: "o/r", APP_TOKEN_READS: "true", ...APP }, mintApp: m.mint, now: () => t, log: () => {} });
+  host.workflowRuns("a.yml");
+  t = 49 * 60e3; host.workflowRuns("b.yml");
+  assert.equal(m.calls.length, 1, "still fresh at 49 minutes");
+  t = 51 * 60e3; host.workflowRuns("c.yml");
+  assert.equal(m.calls.length, 2, "minted again past 50 minutes (it lives an hour)");
+  assert.equal(sent.at(-1)[0], "app-token-2");
+
+  // GitHub refuses the App's token: each kind of read is retried once on the Actions token, and the next read mints anew
+  reject = "app-token-2";
+  sent.length = 0;
+  assert.deepEqual(host.api("GET", "repos/o/r/branches/x"), { ok: "actions" });
+  assert.deepEqual(sent.map(([tok]) => tok), ["app-token-2", "actions"]);
+  reject = "app-token-3";
+  sent.length = 0;
+  assert.deepEqual(host.checkRuns("sha"), ["actions"], "the page read again on the Actions token");
+  assert.deepEqual(sent.map(([tok]) => tok), ["app-token-3", "actions"]);
+  reject = "app-token-4";
+  sent.length = 0;
+  assert.deepEqual(host.workflowRuns("d.yml"), []);
+  assert.deepEqual(sent.map(([tok]) => tok), ["app-token-4", "actions"]);
+  assert.equal(m.calls.length, 4, "each refusal drops the token: the next read mints a new one");
+});
+
+test("API count with App-token reads (#427): reads are counted on the App's token and writes on the Actions token; the App's hour is read on its own token, only when it was used", async () => {
+  const { counted } = await import("../src/io.mjs");
+  const window = (used, limit) => ({ core: { limit, used, reset: 1793361600 }, graphql: { limit: 1000, used: 0, reset: 1793361600 } });
+  const rateReads = [];
+  const puts = [];
+  const raw = {
+    gh: (args, o = {}) => {
+      const tok = o.env?.GH_TOKEN || "job";
+      if (args.join(" ") === "api rate_limit") { rateReads.push(tok); return { resources: tok === "job" ? window(104, 1000) : window(2030, 5000) }; }
+      return { workflow_runs: [] };
+    },
+    run: (cmd, args, o) => { if (args[2] === "PUT") puts.push(JSON.parse(Buffer.from(JSON.parse(o.input).content, "base64").toString())); return "{}"; },
+  };
+  const env = { GH_REPO: "o/r", GITHUB_RUN_ID: "9", APP_TOKEN_READS: "true", ...APP };
+  const m = fakeMint();
+  let host = codeHost({ io: counted(raw, { token: () => "job", jobIsApp: () => false }), env, mintApp: m.mint });
+  let meter = host.meter("finish review", { pr: 90 });
+  host.workflowRuns("x.yml");                                  // a read: the App's token
+  host.status("sha", "pipeline/ai-review", "success", "ok");   // a write: the Actions token
+  const used = meter.stop();
+  assert.deepEqual([used.rest, used.graphql, used.appRest, used.appGraphql], [2, 0, 1, 0], "the status and the event's own write; one read on the App");
+  assert.deepEqual([used.coreUsed, used.appCoreUsed, used.appCoreLimit, used.appCoreReset], [104, 2030, 5000, "2026-10-30T12:00:00.000Z"]);
+  assert.deepEqual(rateReads, ["job", "app-token-1"], "each token's hour read on its own token, once, at exit");
+  assert.equal(puts[0].appRest, 1);
+
+  // a process that read nothing: no App token, no App reading, no App fields
+  rateReads.length = 0;
+  host = codeHost({ io: counted(raw, { token: () => "job", jobIsApp: () => false }), env, mintApp: m.mint });
+  meter = host.meter("x");
+  host.status("sha", "pipeline/ai-review", "success", "ok");
+  assert.equal(meter.stop().appRest, undefined);
+  assert.deepEqual(rateReads, ["job"]);
+  assert.equal(m.calls.length, 1, "minted only by the process that read");
+});
+
+test("a gh call is a read only when it provably changes nothing (#427): default deny, joined flag forms included", async () => {
+  const { isRead } = await import("../src/github.mjs");
+  for (const r of [["pr", "view", "9", "--json", "x"], ["pr", "list", "--head", "b"], ["issue", "view", "4"], ["api", "repos/o/r/compare/a...b"], ["api", "--paginate", "--slurp", "repos/o/r/pulls/1/reviews"],
+    ["api", "-X", "GET", "repos/o/r/branches/x"], ["api", "-XGET", "x"], ["api", "--method", "GET", "x"], ["api", "--method=get", "x"], ["api", "rate_limit"], ["api", "x", "--jq", ".a"]])
+    assert.equal(isRead(r), true, r.join(" "));
+  for (const wr of [["api", "repos/o/r/statuses/s", "-f", "state=success"], ["api", "-X", "PATCH", "repos/o/r/issues/comments/1", "-f", "body=x"], ["api", "-X", "PUT", "x", "--input", "-"],
+    ["api", "--method=POST", "x"], ["api", "-XPOST", "x"], ["api", "-XPATCH", "x"], ["api", "--method", "DELETE", "x"], ["api", "x", "--input=body.json"], ["api", "x", "-fstate=ok"], ["api", "x", "-Fn=1"],
+    ["api", "x", "--field=a=1"], ["api", "x", "--raw-field", "a=1"], ["api", "x", "-X"], ["api", "graphql", "-f", "query=mutation{}"], ["api", "graphql", "-F", "n=1"], ["api", "-H", "X-HTTP-Method-Override: DELETE", "x"],
+    ["pr", "edit", "9", "--add-label", "x"], ["pr", "comment", "9", "--body", "x"], ["issue", "comment", "4", "--body", "x"], ["workflow", "run", "x.yml"], ["pr", "merge", "9"], ["label", "create", "x"], ["pr", "view", "9", "--web"], []])
+    assert.equal(isRead(wr), false, wr.join(" "));
+});
+
