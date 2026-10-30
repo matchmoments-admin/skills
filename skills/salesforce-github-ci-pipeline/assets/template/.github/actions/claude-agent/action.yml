@@ -73,7 +73,8 @@ runs:
       uses: anthropics/claude-code-action@v1
       continue-on-error: true   # judged below from the transcript: a finished run that went past the turn cap is a success
       env:
-        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"   # agents ran tests in the background and ended before committing (F22, story #54)      with:
+        CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"   # agents ran tests in the background and ended before committing (F22, story #54)
+      with:
         claude_code_oauth_token: ${{ steps.rules.outputs.auth == 'oauth' && inputs.oauth-token || '' }}
         anthropic_api_key: ${{ contains(fromJSON('["api-key","gateway"]'), steps.rules.outputs.auth) && inputs.api-key || '' }}
         use_bedrock: ${{ steps.rules.outputs.auth == 'aws-oidc' }}
