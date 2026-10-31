@@ -141,6 +141,7 @@ const commands = {
       reasons: d.reasons.map((r) => `- ${r}`).join("\n"), head: facts.pr.headRefOid, open: facts.pr.state === "OPEN", merge: d.rules?.merge || "",
       validate: d.validate || false, after: (d.after || []).join(" "), approval: d.standing ? gate.approvalRecord(d.standing.approval) : "", lock: ["release", "hotfix", "maintenance"].includes(d.route) ? "main" : `pr-${pr}`,
     });
+    if (journey.idleOrgWanted(d, facts, io.gh)) { host.dispatch("scratch-janitor.yml"); log("a story waits for a slot and this PR waits only for its approval: started scratch-janitor to release its org"); }
     if (has("card")) await cards.refreshPr(pr);   // the same facts: one gather for the decision and the card
     return say(JSON.stringify({ route: d.route, mergeable: d.mergeable, reasons: d.reasons, story: d.story, validate: d.validate, after: d.after }, null, 2));
   },

@@ -8,6 +8,7 @@ import * as sample from "../../src/sample.mjs";
 import { personaOf as orgPersona, storyRefusal, doneStoryOrgs, advanceCovered, foldSeeds } from "../../src/org.mjs";
 import { lane, jobId, wakeAll, stillOwed, wakeDue } from "../../src/lane.mjs";
 import { standing } from "../../src/gate.mjs";
+import { freeIdleOrgs } from "../../src/journey.mjs";
 import { sfFailure } from "../../src/io.mjs";
 import { readLog, summarize } from "../../src/events.mjs";
 
@@ -24,8 +25,14 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
   "org ready": () => {   // Org provisioning: the target's org, holding the code in the working directory (org.mjs ready)
     let o;
     try { o = orgs().ready(arg(0), { hotfix: has("hotfix"), commit: io.git(["rev-parse", "HEAD"], { allowFail: true })?.trim(), manifest: flag("manifest"), refusal: storyRefusal(io.gh, flag("pr")) }); }
-    catch (e) { if ((e.kind || sfFailure(e.message)) === "slots") output({ waiting: true }); throw e; }   // no slot: the story waits in line
+    catch (e) {
+      if ((e.kind || sfFailure(e.message)) !== "slots") throw e;
+      output({ waiting: true });   // no slot: the story waits in line
+      if (!has("queue")) throw e;
+      log(`::notice::${e.message.split("\n")[0]} The story is in line (waiting:org) and starts by itself when a slot frees up.`); return;   // --queue (issue-start): waiting is not a failure
+    }
     if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
+    if (o.created && flag("pr")) io.gh(["issue", "edit", flag("pr"), "--remove-label", "org:released"], { allowFail: true });   // a released story org is back
     output({ alias: o.alias, created: o.created }); return say(o.alias);
   },
   "org advance": () => say(orgs().advance(arg(0), flag("sha"), (held) => advanceCovered(io.git, { held, head: flag("sha"), base: flag("base") })) ? `${arg(0)} holds ${flag("sha").slice(0, 7)}` : `${arg(0)} left as it was`),   // CI tested this commit
@@ -38,6 +45,7 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
     catch (e) { if (e.phase === "deploy") output({ "deploy-failed": true }); throw e; }   // the change's deploy: ci.yml's code-failed
     if (o.temp) record("org", { action: "created", org: o.description });
     else if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
+    if (o.created && !o.temp && flag("pr")) io.gh(["issue", "edit", flag("pr"), "--remove-label", "org:released"], { allowFail: true });   // a released story org is back
     output({ alias: o.alias, temp: o.temp, full: o.full }); return say(o.alias);
   },
   "org attach": () => { const o = orgs().attach(arg(0)); output({ alias: o.alias }); return say(o.alias); },
@@ -81,6 +89,14 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
     for (const g of gone) record("org", { action: "deleted", org: g.description, why: g.why });
     await freed();   // every run, not only after a delete: a slot also frees by expiry or by hand
     return say(`deleted ${gone.length} orphan org(s)${gone.length ? `: ${gone.map((o) => `${o.description} (${o.why})`).join(", ")}` : ""}`);
+  },
+  "org make-room": async () => {   // FREE_IDLE_ORGS: a story waiting for a slot gets the org of a story PR that waits only for its approval
+    if (names.setting("FREE_IDLE_ORGS") === "off") return say("FREE_IDLE_ORGS is off: waiting stories wait for a merge");
+    const live = new Set(orgs().live().map((r) => r.Description));
+    const removeOrg = (t) => { const o = names.orgFor(t); const gone = orgs().remove(t); if (gone) record("org", { action: "deleted", org: o?.description, story: o?.key, why: "idle: waits only for approval" }); return gone; };
+    const f = freeIdleOrgs({ host, gh: io.gh, live, removeOrg, log });
+    if (f.length) { for (const x of f) await cards.refreshPr(x.pr).catch(() => {}); await freed(); }
+    return say(f.length ? `freed ${f.map((x) => `story ${x.key}'s org (PR #${x.pr})`).join(", ")}` : "no idle story org to free (or no story waits)");
   },
   "org pool": () => {   // the warm pool (ORG_POOL): make what is missing while a slot stays free beyond ORG_RESERVE
     const made = orgs().topUpPool(Number(names.setting("ORG_POOL")) || 0);

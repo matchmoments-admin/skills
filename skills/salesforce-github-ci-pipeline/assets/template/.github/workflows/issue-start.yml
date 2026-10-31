@@ -104,16 +104,18 @@ jobs:
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "story:$KEY"
       - name: The story's scratch org (production's shape + the branch's code; a half-made one is finished)
         id: org
-        run: node .pipeline/pipeline/bin/pipe.mjs org ready "story:$KEY" ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}
+        run: node .pipeline/pipeline/bin/pipe.mjs org ready "story:$KEY" --queue ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}   # no slot: waiting=true, not a failure
       - name: No free slot? Wait in line (no runner waits; the next org deleted starts this story, journey.mjs)
-        if: failure() && steps.org.outputs.waiting == 'true'
+        if: steps.org.outputs.waiting == 'true'
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
           gh issue edit "$KEY" --add-label waiting:org
-          node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "waiting for a scratch-org slot (the Dev Hub's are all in use): it starts by itself when one frees up" || true
+          AHEAD=$(gh issue list --state open --label waiting:org --json number,createdAt --jq "[sort_by(.createdAt)[] | .number] | index($KEY) // 0")
+          node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "waiting for a scratch-org slot (the Dev Hub's are all in use; $((AHEAD + 1)) in line): it starts by itself when one frees up" || true
+          node .pipeline/pipeline/bin/pipe.mjs org make-room || true   # FREE_IDLE_ORGS: a story PR waiting only for its approval gives its org
       - name: Let the next job into the org's lane
         if: always()
         env:
@@ -122,6 +124,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "story:$KEY" || true
       - name: The story card (one comment, kept up to date at every stage)
+        if: steps.org.outputs.waiting != 'true'   # waiting: the card says so (above)
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}

@@ -65,7 +65,13 @@ jobs:
         run: |
           TARGET="${{ inputs.target }}"
           if [ -n "$TARGET" ]; then [[ "$TARGET" =~ ^(issue-[0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story branch"; exit 1; }
-            ALIAS=$(node pipeline/bin/pipe.mjs org attach "$TARGET")
+            if ! ALIAS=$(node pipeline/bin/pipe.mjs org attach "$TARGET"); then
+              # FREE_IDLE_ORGS gave its org to a waiting story: start it again from the branch (issue-start), then the login
+              [ -n "$(gh pr list --head "$TARGET" --label org:released --json number --jq '.[0].number // empty')" ] || exit 1
+              gh api "repos/$GH_REPO/dispatches" -f event_type=jira-start -f "client_payload[key]=${TARGET#issue-}" >/dev/null
+              gh issue comment "$PR" --body "@$WHO: this story's scratch org was freed while it waited for approval. It is being made again from the branch (about 5 minutes, or when a slot frees up: the story card says which). Then tick **Send me a login** again."
+              exit 0
+            fi
           else node pipeline/bin/pipe.mjs org attach "uat:$SPRINT" >/dev/null; ALIAS=uat; fi
           ADMIN=(); [ "${{ inputs.admin }}" = true ] && ADMIN=(--admin)
           node pipeline/bin/pipe.mjs uat tester --pr "$PR" --login "$WHO" --email "$EMAIL" --alias "$ALIAS" "${ADMIN[@]}"

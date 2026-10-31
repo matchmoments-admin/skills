@@ -1,7 +1,8 @@
 name: scratch-janitor
 # Every 6 hours: delete orphan scratch orgs (CI orgs whose run died, closed stories, staging and UAT of sprints no longer
-# open) through the Dev Hub, and report the allocation. Run by hand any time. The GitHub-only sweeps (reconcile, the
-# release watchdog, the evidence branch) are reconcile.yml's, hourly and without the Dev Hub key.
+# open) through the Dev Hub, give a waiting story the org of a PR that waits only for approval, and report the
+# allocation. Run by hand any time. The GitHub-only sweeps (reconcile, the release watchdog, the evidence branch) are
+# reconcile.yml's, hourly and without the Dev Hub key.
 on:
   schedule:
     - cron: "17 */6 * * *"   # every 6 hours: an orphan must not hold one of the Dev Hub's slots long, and a stalled PR waits one tick
@@ -40,4 +41,5 @@ jobs:
         run: |
           node pipeline/bin/pipe.mjs org sweep
           node pipeline/bin/pipe.mjs org pool    # ORG_POOL warm orgs (0: none), only while a slot stays free
+          node pipeline/bin/pipe.mjs org make-room   # FREE_IDLE_ORGS: a waiting story gets the org of a PR that waits only for approval
           node pipeline/bin/pipe.mjs org limits

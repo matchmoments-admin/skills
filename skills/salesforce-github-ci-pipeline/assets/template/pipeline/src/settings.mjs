@@ -56,6 +56,7 @@ export const SETTINGS = [
   ["VOLUME_RECORDS", "5000", "volume records in the staging org"],
   ["ORG_RESERVE", "0", "scratch-org slots a new story org leaves free"],
   ["ORG_POOL", "0", "warm scratch orgs kept ready from the snapshot for the next stories (each holds a slot)"],
+  ["FREE_IDLE_ORGS", "on", "a story waiting for a scratch-org slot gets the org of a story PR that waits only for its approval (rebuilt when that story needs it again); off: it waits for a merge"],
   // runners
   ["RUNNER_SMALL", "ubuntu-slim", "the runner of short jobs with no Salesforce CLI, agent or browser (ubuntu-latest to undo #430)"],
   // tests
