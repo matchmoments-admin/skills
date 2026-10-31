@@ -48,6 +48,7 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
     if (o.created && !o.temp && flag("pr")) io.gh(["issue", "edit", flag("pr"), "--remove-label", "org:released"], { allowFail: true });   // a released story org is back
     output({ alias: o.alias, temp: o.temp, full: o.full }); return say(o.alias);
   },
+  "org held": () => say(orgs().held(arg(0)) || ""),   // the commit the org holds (CI deploys what changed since it)
   "org attach": () => { const o = orgs().attach(arg(0)); output({ alias: o.alias }); return say(o.alias); },
   "org remove": () => { const o = names.orgFor(arg(0)); if (orgs().remove(arg(0))) record("org", { action: "deleted", org: o?.description, story: o?.key }); },
   "org remove-tagged": () => { if (orgs().removeTagged(arg(0))) record("org", { action: "deleted", org: arg(0) }); },

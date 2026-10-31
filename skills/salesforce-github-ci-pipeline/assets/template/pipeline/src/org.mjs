@@ -82,6 +82,8 @@ export const sameSourceVia = (compare) => (held, head) => {
   return ["ahead", "identical"].includes(c?.status) && files.length < 300 && !files.some((f) => [f.filename, f.previous_filename].some((p) => /^(force-app|config)\//.test(p || "")));
 };
 
+/** The commit a ready marker says the org holds (its first 12 characters), or null. Pure. */
+export const heldCommit = (title) => String(title || "").match(/^pipeline: ready ([0-9a-f]{7,40})\b/)?.[1] || null;
 export const readyMarker =(commit, baseline = null, seed = null) => (commit ? `${READY} ${String(commit).slice(0, 12)}${baseline ? ` b${baseline}` : ""}${seed ? ` s${seed}` : ""}` : READY);
 
 
@@ -347,6 +349,12 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       self.markReady(alias, want);
       log(`${alias} now holds ${String(commit).slice(0, 7)}`);
       return true;
+    },
+
+    /** The commit the org's ready marker says it holds, or null (not marked, or a temporary org). */
+    held(alias) {
+      const username = sf(["org", "display", "-o", alias], { allowFail: true })?.username;
+      return heldCommit(username && sf(["data", "query", "-o", alias, "-q", `SELECT Title FROM User WHERE Username = '${username}'`], { allowFail: true })?.records?.[0]?.Title);
     },
 
     /** A throwaway org for one CI run, deleted by the caller (from the snapshot when there is one, untracked). */
