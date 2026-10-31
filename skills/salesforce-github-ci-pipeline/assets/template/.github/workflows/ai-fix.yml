@@ -97,7 +97,7 @@ jobs:
         run: |
           KEY=$(node .pipeline/pipeline/bin/pipe.mjs context --branch "$BRANCH" | sed -n 's/^STORY=//p')
           echo "STORY_KEY=$KEY" >> "$GITHUB_ENV"
-          [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is fixing the review comments and failed checks (5 to 10 minutes)"
+          [ -z "$KEY" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is fixing the review comments and failed checks (5 to 10 minutes)" --hold
       - name: The head before the fix (the review runs again only on a new one)
         id: head
         run: echo "before=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"

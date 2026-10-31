@@ -76,7 +76,7 @@ jobs:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is building the story in its scratch org (5 to 15 minutes)"
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is building the story in its scratch org (5 to 15 minutes)" --hold
       - name: The story branch exists (start ran) and matches its route
         env:
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
@@ -93,6 +93,8 @@ jobs:
           app-id: ${{ secrets.PIPELINE_APP_ID }}
           private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
           ref: ${{ steps.ctx.outputs.STORY_BRANCH }}
+      # merged here, pushed with the build: pushed on its own it started CI on the old code, which failed the newer
+      # checks and queued an AI fix beside the build (#460)
       - name: Bring the story branch up to date with its base (the build sees the sprint as it is now, not as at /start)
         env:
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
@@ -101,7 +103,7 @@ jobs:
           git fetch -q origin "$BASE"
           if git merge-base --is-ancestor "origin/$BASE" HEAD; then echo "$BRANCH already has $BASE"
           elif git -c user.name="__owner__-pipeline[bot]" -c user.email="pipeline@users.noreply.github.com" merge -q --no-edit "origin/$BASE"; then
-            git push -q origin "HEAD:$BRANCH"; echo "merged $BASE into $BRANCH"
+            echo "merged $BASE into $BRANCH (pushed with the build)"
           else
             git merge --abort; echo "::warning::$BRANCH conflicts with $BASE: building on the branch as it is; the PR will show the conflicts"
           fi
@@ -145,7 +147,7 @@ jobs:
             Build the change in force-app, with Apex tests covering positive, negative, permission and bulk cases, structured as docs/agents/apex-testing.md says (unit tests with fflib mocks for the logic, seam tests with System.runAs, records from <Object>Builder classes; CI fails any changed class under 85% coverage), a permission set entry for any new field or object, and any layout or record page users need to see it (CLAUDE.md).
             If the story adds an object (or a field people will test), also write its test data: data/seed/stories/${{ env.KEY }}/plan.json and one file per object, as docs/agents/salesforce.md ("A story that adds an object ... ships its own seed") says: up to about 20 synthetic records that show the feature, with any parent records (a few synthetic Accounts) made in the same plan, since a tree plan's @references reach only its own records. The pipeline loads it into this story's org, staging and UAT.
             Deploy with `sf project deploy start -o ${{ steps.ctx.outputs.ORG_ALIAS }} -d force-app --ignore-conflicts`, run `sf apex run test -o ${{ steps.ctx.outputs.ORG_ALIAS }} --test-level RunLocalTests --code-coverage --result-format human --wait 20`, and fix failures until they pass. Run `npm run format` before committing.
-            Then open a pull request into ${{ steps.ctx.outputs.BASE_BRANCH }} with `gh pr create --base ${{ steps.ctx.outputs.BASE_BRANCH }} --title "<your commit subject>" --body-file <the body file>` (the PR body format is below). Stop after opening the PR.
+            Commit, push to ${{ steps.ctx.outputs.STORY_BRANCH }}, then, if the branch has no open pull request yet, open one into ${{ steps.ctx.outputs.BASE_BRANCH }} with `gh pr create --base ${{ steps.ctx.outputs.BASE_BRANCH }} --title "<your commit subject>" --body-file <the body file>` (the PR body format is below). Stop after opening the PR.
       - name: Let the next job into the org's lane
         if: always()
         env:
@@ -166,6 +168,8 @@ jobs:
           MILESTONE: ${{ steps.ctx.outputs.HOTFIX == 'true' && '' || steps.ctx.outputs.MILESTONE }}
         run: |
           git fetch -q origin "$BRANCH" "$BASE"
+          # commits the agent made but did not push (the base merge, at least) go up now; never a force push
+          if [ -n "$(git rev-list "origin/$BRANCH..HEAD" 2>/dev/null)" ] && git merge-base --is-ancestor "origin/$BRANCH" HEAD; then git push -q origin "HEAD:$BRANCH"; git fetch -q origin "$BRANCH"; fi
           [ "$(git rev-list --count "origin/$BASE..origin/$BRANCH")" -gt 0 ] || { node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "The AI run finished without pushing to \`$BRANCH\`. See the run's transcript artifact."; exit 1; }
           if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')" ]; then
             if [[ "$KEY" =~ ^[0-9]+$ ]]; then CLOSES="Story #$KEY"; else CLOSES="Story $KEY"; fi   # not "Closes": close-out closes it when it is in production

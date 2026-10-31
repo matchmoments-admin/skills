@@ -96,8 +96,9 @@ The rules that bite:
 - **Prefer an argument captor plus `Assert`** over `fflib_Match.sObjectWith(...)` when more than one field matters: the
   captor's failure names the field.
 - Verify order (`fflib_InOrder`) only when the order is the requirement.
-- Every test method has at least one `Assert` as well as any `mocks.verify`: Code Analyzer's
-  `ApexUnitTestClassShouldHaveAsserts` fails CI on a method that only verifies.
+- Every test method asserts: an `Assert`, or a `mocks.verify` (Code Analyzer's `ApexUnitTestMethodShouldAssertOrVerify`
+  counts both, and fails CI on a method with neither). "Nothing was registered" is `mocks.verify(uow, 0)`. Never
+  `@SuppressWarnings` it.
 - A mock cannot prove sharing or field access: permission tests are always seam tests.
 - Logic that reads the running user's permissions (`FeatureManagement.checkPermission`, a describe) runs inside
   `System.runAs` a persona even in a mock unit test: production's CI user holds permission sets a scratch org's user

@@ -6,7 +6,9 @@ ignores:
   files:
     - "vendor/**"
 engines:
-  pmd: { disable_engine: false }
+  pmd:
+    disable_engine: false
+    custom_rulesets: ["config/pmd-test-asserts.xml"]   # ApexUnitTestMethodShouldAssertOrVerify, below
   eslint: { disable_engine: false }
 # Apex security rules default to Moderate (3), below CI's threshold: raised to High (2) so they fail the build.
 # The pipeline's own access check (pipeline/src/access.mjs) covers metadata PMD cannot see (permission sets, Flows, OWD).
@@ -22,7 +24,10 @@ rules:
     ApexBadCrypto: { severity: 2 }
     ApexSuggestUsingNamedCred: { severity: 2 }
     # Test quality (docs/agents/apex-testing.md): a test method with no assert, or one that reads org data, fails the
-    # build; an assert without a message is reported only (most existing tests predate the rule).
-    ApexUnitTestClassShouldHaveAsserts: { severity: 2 }
+    # build; an assert without a message is reported only (most existing tests predate the rule). An fflib
+    # mocks.verify counts as an assert: PMD's rule with that pattern (config/pmd-test-asserts.xml) replaces the built-in
+    # one, which flagged verify-only mock tests and was suppressed instead (#460).
+    ApexUnitTestClassShouldHaveAsserts: { tags: [] }
+    ApexUnitTestMethodShouldAssertOrVerify: { severity: 2, tags: ["Recommended", "Apex", "BestPractices"] }
     ApexUnitTestShouldNotUseSeeAllDataTrue: { severity: 2 }
     ApexAssertionsShouldIncludeMessage: { severity: 3 }

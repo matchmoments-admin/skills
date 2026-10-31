@@ -67,17 +67,25 @@ jobs:
           [[ "$KEY" =~ ^[0-9]+$ ]] || { echo "::error::not a story"; exit 1; }
           node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS" > "$RUNNER_TEMP/ctx"
           BASE=$(sed -n 's/^BASE_BRANCH=//p' "$RUNNER_TEMP/ctx")
-          if [ -n "$BASE" ] && git fetch -q origin "$BASE"; then git checkout -q "origin/$BASE"; fi
-          echo "base=${BASE:-main}" >> "$GITHUB_OUTPUT"
+          BRANCH=$(sed -n 's/^STORY_BRANCH=//p' "$RUNNER_TEMP/ctx")
+          # a started story is re-planned on its own branch: what an earlier build committed is there (#452's plan read
+          # the sprint and said the Flow it had to delete did not exist). Started: the branch exists (the start label
+          # is gone once it has), or it is being created.
+          if [ -n "$BRANCH" ] && git fetch -q origin "$BRANCH" 2>/dev/null; then
+            git checkout -q "origin/$BRANCH"; echo "base=$BRANCH" >> "$GITHUB_OUTPUT"; echo "started=true" >> "$GITHUB_OUTPUT"
+          else
+            if [ -n "$BASE" ] && git fetch -q origin "$BASE"; then git checkout -q "origin/$BASE"; fi
+            echo "base=${BASE:-main}" >> "$GITHUB_OUTPUT"
+            if gh issue view "$KEY" --json labels --jq '[.labels[].name] | index("start")' | grep -q '[0-9]'; then echo "started=true" >> "$GITHUB_OUTPUT"; fi
+          fi
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --pack --out "$RUNNER_TEMP/story.md"
-          if gh issue view "$KEY" --json labels --jq '[.labels[].name] | index("start")' | grep -q '[0-9]'; then echo "started=true" >> "$GITHUB_OUTPUT"; fi
       - name: Show that Claude is planning, with a link (the plan comment at once; the card too once started)
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           node .pipeline/pipeline/bin/pipe.mjs story plan-pending "$KEY"
-          [ "${{ steps.ctx.outputs.started }}" != "true" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is planning the build (2 to 5 minutes)"
+          [ "${{ steps.ctx.outputs.started }}" != "true" ] || node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "Claude is planning the build (2 to 5 minutes)" --hold
       - uses: ./.pipeline/.github/actions/claude-agent
         with:
           role: plan

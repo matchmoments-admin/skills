@@ -87,6 +87,10 @@ export const fixRoundsUsed = (pr, { host, gh, runId = process.env.GITHUB_RUN_ID 
   fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), pr, runId, (id) => ranAgent(host.api("GET", `repos/${host.repo}/actions/runs/${id}/jobs`)?.jobs),
     lastHumanPush(gh(["pr", "view", String(pr), "--json", "commits"])?.commits));   // a person's push resets the count
 
+/** Is an AI fix of PR `pr` queued or running? runs: ai-fix.yml's dispatched runs. A second one would fix the same
+ * findings and push on top of it (#460: CI's autofix and a later failure each started one). Pure. */
+export const fixInFlight = (runs, pr) => runs.some((r) => r.display_title === `ai-fix PR #${pr}` && r.status !== "completed");
+
 /** Did this run's jobs run the agent step? jobs: the run's jobs API list. Pure. */
 // unknown jobs (an API error) count as a round, so the limit always holds
 export const ranAgent = (jobs) => !Array.isArray(jobs) || jobs.some((j) => (j.steps || []).some((s) => /claude-agent/.test(s.name || "") && ["success", "failure"].includes(s.conclusion)));
