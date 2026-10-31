@@ -21,7 +21,7 @@ This repo is a Salesforce DX project. Humans and AI agents both change it only t
   byte for byte at that commit and writes the docs row. Never copy, retype or edit vendored files yourself (keep
   upstream's API versions; they deploy as they are), and never put our own code there: the access check, Code
   Analyzer and Prettier skip that folder. Our code that uses the library follows every rule below.
-- One trigger per object, logic in a handler class, `with sharing` by default.
+- One trigger per object, logic in its FFLib domain class (see Record automation), `with sharing` by default.
 - Bulk-safe: no SOQL or DML in loops; handle 200 records.
 - Use `WITH USER_MODE` or `Security.stripInaccessible` on user-facing queries.
 - No hard-coded IDs, URLs or credentials. Use custom metadata or Named Credentials.
@@ -98,13 +98,31 @@ business glossary is `docs/org/GLOSSARY.md`; `GLOSSARY.md` is the pipeline's.
 When the story file has an "Agreed plan" (from `/plan`) and "Answers", build what the plan says; where an answer
 differs from the plan, the answer wins. Do not build anything the plan and the acceptance criteria do not ask for.
 
-## Flows
-- Prefer a record-triggered Flow for declarative automation. Before-save (`RecordBeforeSave`) for field updates on the
-  same record; after-save only for related records or actions. One flow per object and trigger type where possible.
+## Record automation (Apex first)
+Salesforce's record-triggered automation guide: **one entry point per object**, never Flow and Apex triggers mixed on
+it. Here that entry point is Apex, with FFLib (`docs/fflib.md`). CI's automation check (`pipe automation check`) fails
+a mix, and a new record-triggered Flow with no reason.
+- One trigger per object, one line: `fflib_SObjectDomain.triggerHandler(<Objects>.class);`, listing the events the
+  domain handles. The **domain** class `<Objects>` (plural, `Cases`) holds the object's rules: before-save field defaults
+  in `onBeforeInsert`/`onBeforeUpdate` (no DML needed), related records and actions in `onAfterInsert`/`onAfterUpdate`
+  ("changed to" by comparing with `ExistingRecords`). Queries go in a selector, DML in the unit of work from
+  `Application` (`Application.UnitOfWork.newInstance()`; the first story that needs it adds `Application` as
+  `docs/fflib.md` shows), one `commitWork()`. Never logic in the trigger body.
+- An object whose automation is already Apex (the story file's "The codebase today": **Automation entry point**) gets
+  the new rule in its domain. An object with no automation gets a trigger and a domain. An existing static handler
+  (`HealthCheckTriggerHandler`) moves into a domain when a story changes it.
+- A record-triggered Flow only for a named reason, written in its description as `flow: <why>` (an admin owns and
+  changes the rule, say), and only on an object with no Apex trigger. Adding a trigger to an object that has
+  record-triggered Flows means moving those Flows into the domain, and deleting them, in the same story. Screen,
+  scheduled and autolaunched Flows are not entry points: use them as before.
+
+### When a Flow is used
+- Before-save (`RecordBeforeSave`) for field updates on the same record; after-save only for related records or
+  actions. One flow per object and trigger type.
 - Every new or changed record-triggered Flow ships with at least one Flow test in `force-app/main/default/flowtests/`.
   A Flow test's triggering record must meet the Flow's entry criteria (a record that does not start the Flow fails
-  the test), so Flow tests cover the paths inside the Flow; cover "the Flow does not run" in the Apex test. File and API names use letters, digits and single underscores only, e.g.
-  `Case_Default_Web_Priority_Web_Medium.flowtest-meta.xml`.
+  the test), so Flow tests cover the paths inside the Flow; cover "the Flow does not run" in the Apex test. File and
+  API names use letters, digits and single underscores only, e.g. `Case_Default_Web_Priority_Web_Medium.flowtest-meta.xml`.
 - Put the conditions that decide whether the Flow runs in the trigger's entry criteria (the Start element's
   filters), not in a Decision after it. Without entry criteria the Flow runs on every save, and Code Analyzer's
   Flow scanner fails CI (`flow:TriggerEntryCriteria`).
@@ -113,6 +131,8 @@ differs from the plan, the answer wins. Do not build anything the plan and the a
   Flows as active (`enableFlowDeployAsActiveEnabled`), which needs Apex tests that exercise the active Flows.
 - Commit the Flow with `<status>Active</status>`. Run its tests with `sf flow run test -o issue-12 --test-level RunLocalTests`
   then `sf flow get test -o issue-12 --test-run-id <id>`.
+- Removing a Flow: a deploy cannot delete a Flow version that is active. Deactivate it first (commit the Flow with
+  `<status>Obsolete</status>`), and delete it in a later story; say in the plan which release does which.
 
 ## Deploying and testing in the scratch org
 The workflow gives you the story (title, acceptance criteria, where to see it) as a file, and an authenticated scratch org alias (for example `issue-12`) in the prompt. Type it literally: shell variables in commands are blocked by the agent's safety checks.

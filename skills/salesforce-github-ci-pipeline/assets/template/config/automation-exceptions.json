@@ -1,0 +1,8 @@
+[
+  { "object": "Case", "story": 461, "why": "Case_Default_Web_Priority predates the Apex-first rule; moving into Cases" },
+  { "object": "Health_Check__c", "story": 462, "why": "Health_Check_Negative_Follow_Up predates the Apex-first rule; moving into HealthChecks" },
+  { "object": "Customer_Feedback__c", "story": 463, "why": "Customer_Feedback_Negative_Follow_Up predates the Apex-first rule; moving into CustomerFeedbacks" },
+  { "object": "Renewal_Check__c", "story": 464, "why": "Renewal_Check_Negative_Follow_Up predates the Apex-first rule; moving into RenewalChecks" },
+  { "object": "Service_Review__c", "story": 465, "why": "Service_Review_Negative_Follow_Up predates the Apex-first rule; moving into ServiceReviews" },
+  { "object": "Site_Visit__c", "story": 466, "why": "Site_Visit_Negative_Follow_Up predates the Apex-first rule; moving into SiteVisits" }
+]

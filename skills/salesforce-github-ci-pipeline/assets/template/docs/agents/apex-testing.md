@@ -41,7 +41,7 @@ code needs:
 | Selector | none (its job is SOQL) | per method: records that match come back, records that do not are filtered out |
 | Trigger | none (no logic in it) | covered by the domain's seam tests |
 | Invocable / `@AuraEnabled` | 200 requests in, one response each | as a persona with and without the permission set |
-| Record-triggered Flow | Flow tests (salesforce.md, Tests) | Apex: the record after DML, 200 records, "the Flow does not run" |
+| Record-triggered Flow (only with `flow: <why>`) | Flow tests (salesforce.md, Tests) | Apex: the record after DML, 200 records, "the Flow does not run" |
 
 ## The matrix (each class)
 
