@@ -1,7 +1,7 @@
 // The tracker: where stories and sprints live (see GLOSSARY.md). One interface, two adapters.
 //   story(key) -> { key, title, body, state: "OPEN"|"CLOSED", labels[], url }
 //   comment(key, text) · done(key, text) · carry(key, sprint, text)
-//   sprintStories(sprint) -> [{ key, title, state }] · openSprint(sprint) · closeSprint(sprint)
+//   sprintStories(sprint) -> [{ key, title, state }] · openSprint(sprint) · closeSprint(sprint) · sprintNote?(sprint, text)
 // Pick with TRACKER=github (default) or TRACKER=jira. Everything Salesforce- or gate-related ignores the tracker.
 import { setting } from "./settings.mjs";
 import { milestoneTitle } from "./conventions.mjs";
@@ -64,6 +64,12 @@ export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || proce
       if (m) gh(["api", "-X", "PATCH", `repos/${repo}/milestones/${m.number}`, "-f", "state=closed"]);
     },
     async assignSprint(key, sprint) { gh(["issue", "edit", String(key), "--milestone", milestoneTitle(sprint)], { allowFail: true }); },
+    // the milestone's description: where the sprint stands (ready to release, or its release PR), on the page that
+    // lists its stories
+    async sprintNote(sprint, text) {
+      const m = milestone(sprint, "open");
+      if (m) gh(["api", "-X", "PATCH", `repos/${repo}/milestones/${m.number}`, "-f", `description=Release train ${sprint}. ${text}`], { allowFail: true });
+    },
   };
 }
 

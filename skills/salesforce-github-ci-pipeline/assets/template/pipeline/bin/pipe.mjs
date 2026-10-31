@@ -28,7 +28,7 @@
 //   automation check --base B [--report-only]   one record-automation entry point per object, Apex first (blockers fail)
 //   ship      candidate --pr N --base B --sha S --dir D · plan --sha S [--validated-job J --validated-tree T]
 //             renudge --base B --except N · watchdog      shipping keyed by commit (pipeline/src/shipping.mjs)
-//   release   notes <sprint>
+//   release   notes <sprint> · opened <sprint> --pr N   (the milestone and every story card link the release PR)
 //   closeout  plan|run --tag T --sha S [--previous TAG]  from the shipped SHA and the release before it
 //   triage    ui --log file [--story file] [--ci file] · review --base B --head H   (Jev, behind AI_TRIAGE; falls back safely)
 //   event     agent --role R --file transcript [--key K] [--pr N] · rollback --tag T --sha S   (the event log; the
@@ -224,7 +224,7 @@ const commands = {
     const steps = await start.startFollowUps(flag("after"), { pr: flag("pr"), base: flag("base"), sha: flag("sha"), job: flag("job", ""), tree: flag("tree", ""), story: flag("story", "") },
       { host, gh: io.gh, cards, removeOrg: (t) => { const o = names.orgFor(t); if (orgs().remove(t)) record("org", { action: "deleted", org: o?.description, story: o?.key }); return true; }, log,
         orgFreed: freed,   // UAT may have been waiting for that slot
-        regate: () => shipping.regate(io, host, log) });
+        regate: () => shipping.regate(io, host, log), tracker, approvers: gate.approverList(names.setting("APPROVERS")) });
     return say(`follow-ups: ${steps.join(" ") || "none"}`);
   },
   "start closed": () => { const p = start.closedPlan({ head: flag("head"), openPrs: (io.gh(["pr", "list", "--head", flag("head"), "--state", "open", "--json", "number"]) || []).length }); output({ story: p.story || "" }); return say(p.story ? `story ${p.story}: its org goes back` : `nothing to give back: ${p.why}`); },   // merged.yml closed
@@ -449,6 +449,13 @@ const commands = {
     return say(`watchdog: ${w.action} (${w.why})`);
   },
   "release notes": async () => say(await closeout.releaseNotes(io, tracker, arg(0))),
+  "release opened": async () => {   // the release PR is the sprint's one open place: its stories' cards and milestone point at it
+    const sprint = arg(0), pr = flag("pr");
+    await tracker.sprintNote?.(sprint, `Release PR: ${host.repoUrl}/pull/${pr} (staging, UAT, approval, production).`);
+    const open = (await tracker.sprintStories(sprint)).filter((x) => x.state !== "CLOSED");
+    for (const x of open) await cards.refresh(x.key);
+    return say(`release PR #${pr}: ${open.length} story card(s) and the milestone link it`);
+  },
   "closeout plan": () => closeoutCmd(false),
   "closeout run": () => closeoutCmd(true),
 

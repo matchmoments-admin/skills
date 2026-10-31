@@ -291,7 +291,7 @@ export function closedPlan({ head, openPrs = 0 }) {
  * (the story's org, then UAT if it waited for that slot; the in-sprint label). deps: { host, gh, cards, removeOrg,
  * orgFreed, regate, log }.
  */
-export async function startFollowUps(after, { pr, base, sha, job = "", tree = "", story = "" }, { host, gh, cards, removeOrg, orgFreed = async () => {}, regate = () => [], log = () => {} }) {
+export async function startFollowUps(after, { pr, base, sha, job = "", tree = "", story = "" }, { host, gh, cards, removeOrg, orgFreed = async () => {}, regate = () => [], log = () => {}, tracker = null, approvers = [] }) {
   const steps = String(after || "").split(/\s+/).filter(Boolean);
   for (const step of steps) {
     if (step === "staging") host.dispatch("staging-deploy.yml", {}, base);
@@ -306,6 +306,40 @@ export async function startFollowUps(after, { pr, base, sha, job = "", tree = ""
     // the gate's own rules changed on main: a success it posted on an open PR under the old rules is re-decided (E12)
     if (step === "regate") { try { log(`re-deciding the gate on ${regate().map((n) => `#${n}`).join(", ") || "no open PR"}`); } catch (e) { log(`::warning::could not re-run the gate on open PRs: ${e.message}`); } }
     if (step === "staging" && /^\d+$/.test(String(story))) gh(["issue", "edit", String(story), "--add-label", "in-sprint"], { allowFail: true });   // merged, ships with the release
+    if (step === "staging" && story && tracker) {
+      try { log(await announceSprintReady({ sprint: sprintOf(base), base, story }, { host, tracker, approvers })); } catch (e) { log(`::warning::could not check whether the sprint is ready: ${e.message}`); }
+    }
   }
   return steps;
+}
+
+export const SPRINT_READY_MARK = "<!-- pipeline:sprint-ready -->";
+/**
+ * The sprint is ready to release when every open story in it has its PR merged into the sprint, and no release PR is
+ * open yet. stories: [{ key, title, state, merged }] (merged: its PR is merged into the sprint). Returns the notice to
+ * post on the story that merged last, mentioning the approvers (GitHub notifies a mention, never a card edit), or
+ * null. Before this, the only "Cut the sprint's release" box was on the merged story's card, in the closed pile (#460).
+ * Pure.
+ */
+export function sprintReadyNotice({ sprint, stories = [], releasePr = null, approvers = [] }) {
+  const open = stories.filter((s) => s.state !== "CLOSED");
+  if (!sprint || releasePr || !open.length || open.some((s) => !s.merged)) return null;
+  const who = approvers.length ? `${approvers.map((l) => `@${l}`).join(" ")}: ` : "";
+  const list = open.map((s) => `#${s.key}`).join(", ");
+  return [SPRINT_READY_MARK, `${who}**Sprint ${sprint} is ready to release.** All ${open.length === 1 ? "of its story is" : `${open.length} of its stories are`} merged (${list}).`, "",
+    "**Next:** comment `/release-cut` here (or tick **Cut the sprint's release** on this story's card). It opens the release PR, and its card takes you through staging, UAT, your approval and production."].join("\n");
+}
+
+/** Post sprintReadyNotice on the story that just merged, if the sprint is now ready; the milestone says so too. */
+export async function announceSprintReady({ sprint, base, story }, { host, tracker, approvers = [] }) {
+  if (!sprint) return "not a sprint merge";
+  const stories = (await tracker.sprintStories(sprint)).map((s) => {
+    const p = s.state === "CLOSED" ? null : host.storyPr(storyBranch(s.key));
+    return { ...s, merged: String(s.key) === String(story) || (p?.state === "MERGED" && p.baseRefName === base) };
+  });
+  const body = sprintReadyNotice({ sprint, stories, releasePr: host.releasePrOf(base), approvers });
+  if (!body) return `sprint ${sprint}: not ready to release yet (or its release PR is open)`;
+  await tracker.comment(story, body);
+  await tracker.sprintNote?.(sprint, `Ready to release: every story is merged. Comment /release-cut on any of its stories.`);
+  return `sprint ${sprint} is ready: told the approvers on ${story}`;
 }
