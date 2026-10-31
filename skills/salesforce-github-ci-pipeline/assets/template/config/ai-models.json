@@ -39,8 +39,8 @@
       "$why": "Haiku made confident false Salesforce blockers on PR #144 (Apex), each costing a round: Sonnet reviews code, access and automation; Haiku only a change with none of them (jev.mjs isDeclarativeOnly)."
     },
     "ui-test": {
-      "model": "sonnet", "turns": 30, "turnLimitOk": true,
-      "$why": "Sonnet, not Haiku: both of story #200's Haiku runs used every turn, and a failed writer run costs ~15 Actions minutes (a runner holding the org's lane), far more than the price difference. The UI writer's 40 turns ran out on story #193 without it looking at its failure screenshot: 30, and it is told to stop and report before the end."
+      "model": "sonnet", "turns": 24, "turnLimitOk": true,
+      "$why": "Sonnet, not Haiku: both of story #200's Haiku runs used every turn, and a failed writer run costs ~15 Actions minutes (a runner holding the org's lane), far more than the price difference. The UI writer's 40 turns ran out on story #193 without it looking at its failure screenshot: 30, and it is told to stop and report before the end. 24 since 31 Oct: with an example spec (e2e/support/example-spec.md) and 2 attempts, stories #444-#452 used 7 to 23 turns."
     }
   },
   "experiments": []

@@ -85,7 +85,7 @@ test("a story made from a spec carries the whole spec to every agent; blockers m
   assert.equal(facts.landedOf(12, gh("CLOSED", false)), true);
   assert.match(gate.blockedMessage([12]), /blocked by #12, which has not merged yet\. Nothing was created/);
   const wf = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
-  assert.match(wf, /start:\n\s+needs: blockers\n\s+if: needs\.blockers\.outputs\.ok == 'true'/);
+  assert.match(wf, /id: b\n[\s\S]*?story blockers "\$KEY"[\s\S]*?- name: Names for this story\n\s+if: steps\.b\.outputs\.ok == 'true'/);
 });
 
 test("round 1: a person's push re-runs the review and resets the fix rounds; the round limit says what to do, once", () => {
@@ -144,6 +144,16 @@ test("start decisions: a job that has nothing to do is decided before a runner s
   assert.ok(ruleset && existsSync(new URL(`../../${ruleset}`, import.meta.url)), "the custom ruleset code-analyzer.yml names exists");
   assert.match(readFileSync(new URL(`../../${ruleset}`, import.meta.url), "utf8"), /name="ApexUnitTestMethodShouldAssertOrVerify"/);
   assert.match(ca, /ApexUnitTestClassShouldHaveAsserts: \{ tags: \[\] \}\n\s+ApexUnitTestMethodShouldAssertOrVerify: \{ severity: 2, tags: \["Recommended"/, "the built-in rule is off only while ours is on");
+  // #417's minute cuts: the build and the fix run CI's static checks themselves before pushing (a fix round is ~25
+  // billed minutes), and the UI writer starts from a spec that passed first time
+  for (const [wf, text] of [["ai-implement", impl], ["ai-fix", readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8")]]) {
+    assert.match(text, /allowed-tools: "[^"]*Bash\(node \.pipeline\/pipeline\/bin\/pipe\.mjs access check:\*\),Bash\(node \.pipeline\/pipeline\/bin\/pipe\.mjs automation check:\*\)"/, `${wf}: may run the checks`);
+    assert.match(text, /Before you commit, run what CI's static checks run[^\n]*access check --base origin\/[^\n]*automation check --base origin\/[^\n]*sf code-analyzer run --workspace force-app --severity-threshold 2[^\n]*REVIEW\.md's Blocker and Major/, `${wf}: told to`);
+  }
+  const ui = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");
+  assert.match(ui, /Read e2e\/support\/example-spec\.md first/);
+  assert.ok(existsSync(new URL("../../e2e/support/example-spec.md", import.meta.url)), "the example is in main's e2e/support (the harness overlay brings it)");
+  assert.match(ui, /at most 2 attempts/);
   const fix = readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8");
   for (const [wf, text] of [["ai-implement", impl], ["ai-plan", pl], ["ai-fix", fix]]) assert.match(text, /story card "\$KEY" --now "[^"]+" --hold/, `${wf}: the card says wait while it works`);
   // ui-test
@@ -489,9 +499,9 @@ test("FREE_IDLE_ORGS: one idle org per waiting story, the PR waiting longest for
 test("a /start with no free slot waits in line, green: issue-start queues, makes room, and keeps the waiting card", () => {
   const y = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
   assert.match(y, /org ready "story:\$KEY" --queue/);
-  assert.match(y, /if: steps\.org\.outputs\.waiting == 'true'\n/);
+  assert.match(y, /if: steps\.b\.outputs\.ok == 'true' && \(steps\.org\.outputs\.waiting == 'true'\)\n/);
   assert.match(y, /org make-room/);
-  assert.match(y, /The story card \(one comment[^\n]*\n\s+if: steps\.org\.outputs\.waiting != 'true'/);
+  assert.match(y, /The story card \(one comment[^\n]*\n\s+if: steps\.b\.outputs\.ok == 'true' && \(steps\.org\.outputs\.waiting != 'true'\)/);
   assert.match(readFileSync(new URL("../../.github/workflows/scratch-janitor.yml", import.meta.url), "utf8"), /org make-room/);
   assert.match(readFileSync(new URL("../../.github/workflows/uat-login.yml", import.meta.url), "utf8"), /--label org:released[\s\S]*event_type=jira-start/);
 });
