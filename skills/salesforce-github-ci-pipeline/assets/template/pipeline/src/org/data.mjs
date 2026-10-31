@@ -61,14 +61,15 @@ export function volumeApex(n, chunk = 1000) {
 /**
  * Fold shipped stories' seeds into the core seed (seed-fold.yml opens it as a PR). core: { plan, files: { name: text } };
  * stories: [{ key, plan, files }]. Each story file is renamed story-<key>-<file>, its plan entries appended to the core
- * plan, and the reference ids it defines prefixed S<key> (references to the core's own records stay as they are), so
+ * plan, and the reference ids it defines prefixed S<key> once (references to the core's own records stay as they are), so
  * two stories can never collide. A story's own marker file is dropped: the core marker covers it. Pure.
  */
 export function foldSeeds(core, stories) {
   const plan = [...core.plan], files = { ...core.files };
   for (const { key, plan: sp, files: sf } of stories) {
     const own = new Set(Object.values(sf).flatMap((t) => [...String(t).matchAll(/"referenceId"\s*:\s*"([^"]+)"/g)].map((m) => m[1])));
-    const rename = (t) => String(t).replace(/("referenceId"\s*:\s*"|"@)([^"]+)"/g, (m, pre, id) => (own.has(id) ? `${pre}S${key}${id}"` : m));
+    // an id the story already prefixed S<key> keeps it: #475 folded story 444's S444Acc01 as S444S444Acc01
+    const rename = (t) => String(t).replace(/("referenceId"\s*:\s*"|"@)([^"]+)"/g, (m, pre, id) => (own.has(id) && !id.startsWith(`S${key}`) ? `${pre}S${key}${id}"` : m));
     for (const entry of sp) {
       const kept = (entry.files || []).filter((f) => f !== "SeedMarker.json" && sf[f] !== undefined);
       if (!kept.length) continue;

@@ -719,6 +719,8 @@ test("shipped stories' seeds fold into the core seed: files renamed per story, t
   assert.match(r.files["story-283-Renewal_Check__c.json"], /"referenceId":"S283RC1"/);
   assert.match(r.files["story-283-Renewal_Check__c.json"], /"Account__c":"@Acc01"/, "a reference to the core's Account stays");
   assert.match(r.files["story-283-Renewal_Check__c.json"], /"Parent__c":"@S283RC1"/, "a reference to the story's own record follows the rename");
+  const pre = orgMod.foldSeeds(core, [{ key: "444", plan: [{ sobject: "Account", files: ["Account.json"] }], files: { "Account.json": '{"records":[{"attributes":{"type":"Account","referenceId":"S444Acc01"}}],"x":"@S444Acc01"}' } }]);
+  assert.match(pre.files["story-444-Account.json"], /"referenceId":"S444Acc01"\}[\s\S]*"@S444Acc01"/, "an id the story already prefixed is prefixed once (#475: S444S444Acc01)");
   const wf = readFileSync(new URL("../../.github/workflows/seed-fold.yml", import.meta.url), "utf8");
   assert.match(wf, /pipeline-identity/, "opened as the App, so its PR runs CI");
   assert.match(wf, /paths: \["data\/seed\/stories\/\*\*"\]/);
