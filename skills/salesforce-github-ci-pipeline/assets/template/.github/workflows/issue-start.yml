@@ -18,31 +18,10 @@ env:
   PIPELINE_VARS: ${{ toJSON(vars) }}   # every repository variable (AI switches, PIPELINE_BOTS, UAT_ENABLED...): pipe reads them
   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
 jobs:
-  blockers:
-    # A story "Blocked by #N" starts only once #N has merged: otherwise nothing is created (no branch, no scratch org,
-    # none of the Dev Hub's daily org allowance), the story says why, and its card offers Start again.
-    if: github.event_name == 'repository_dispatch' || github.event.label.name == 'start'
-    runs-on: ${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}
-    timeout-minutes: 3
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      KEY: ${{ github.event.client_payload.key || github.event.issue.number }}
-    outputs:
-      ok: ${{ steps.b.outputs.ok }}
-    steps:
-      - uses: actions/checkout@v4
-        with: { ref: main, sparse-checkout: "pipeline\nconfig", persist-credentials: false }
-      - id: b
-        env:
-          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-        run: |
-          [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
-          node pipeline/bin/pipe.mjs story blockers "$KEY"
   start:
-    needs: blockers
-    if: needs.blockers.outputs.ok == 'true'
+    # One job: the blocker check was its own job, a billed minute on every /start for 10 seconds of work (#417's
+    # minute cuts). A blocked story stops after it: no branch, no org, none of the Dev Hub's daily allowance.
+    if: github.event_name == 'repository_dispatch' || github.event.label.name == 'start'
     runs-on: ubuntu-latest
     timeout-minutes: 70   # 45 of them may be waiting for the org's lane
     env:
@@ -57,18 +36,27 @@ jobs:
         uses: actions/checkout@v4
         with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
       - run: echo ".pipeline/" >> .git/info/exclude
-      - name: Names for this story
-        id: ctx
+      - name: A story "Blocked by #N" starts only once #N has merged (it says why, and its card offers Start again)
+        id: b
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
           [[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ ]] || { echo "::error::not a story key: $KEY"; exit 1; }
+          node .pipeline/pipeline/bin/pipe.mjs story blockers "$KEY"
+      - name: Names for this story
+        if: steps.b.outputs.ok == 'true'
+        id: ctx
+        run: |
           node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$LABELS"
       - name: The story card says what is happening (seconds after /start)
+        if: steps.b.outputs.ok == 'true'
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "creating the branch and a production-shaped scratch org (3 to 5 minutes)"
       - name: Readiness check (Jev, AI_TRIAGE) - are the criteria testable, is the story large (skipped when planned)
-        if: vars.AI_TRIAGE == 'true'
+        if: steps.b.outputs.ok == 'true' && (vars.AI_TRIAGE == 'true')
         continue-on-error: true
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
@@ -78,6 +66,7 @@ jobs:
           node .pipeline/pipeline/bin/pipe.mjs tracker story "$KEY" --out "$RUNNER_TEMP/story.md" > /dev/null
           grep -q "^## Agreed plan" "$RUNNER_TEMP/story.md" || node .pipeline/pipeline/bin/pipe.mjs story readiness "$KEY"
       - name: The story branch (from its base; an existing one is kept)
+        if: steps.b.outputs.ok == 'true'
         env:
           BASE: ${{ steps.ctx.outputs.BASE_BRANCH }}
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
@@ -86,27 +75,30 @@ jobs:
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then echo "$BRANCH exists: the org is built from it"; git fetch -q origin "$BRANCH"; git checkout -q "origin/$BRANCH"
           else git checkout -q "origin/$BASE" && git push origin "HEAD:refs/heads/$BRANCH"; fi
       - name: Put the story in the sprint
-        if: steps.ctx.outputs.HOTFIX != 'true'
+        if: steps.b.outputs.ok == 'true' && (steps.ctx.outputs.HOTFIX != 'true')
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: node .pipeline/pipeline/bin/pipe.mjs tracker assign "$KEY" --sprint "${{ steps.ctx.outputs.SPRINT }}"
       - uses: ./.pipeline/.github/actions/sf-auth
+        if: steps.b.outputs.ok == 'true'
         with:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
       - name: Wait for the org's lane (one job at a time in an org; nobody is dropped)
+        if: steps.b.outputs.ok == 'true'
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "story:$KEY"
       - name: The story's scratch org (production's shape + the branch's code; a half-made one is finished)
+        if: steps.b.outputs.ok == 'true'
         id: org
         run: node .pipeline/pipeline/bin/pipe.mjs org ready "story:$KEY" --queue ${{ steps.ctx.outputs.HOTFIX == 'true' && '--hotfix' || '' }}   # no slot: waiting=true, not a failure
       - name: No free slot? Wait in line (no runner waits; the next org deleted starts this story, journey.mjs)
-        if: steps.org.outputs.waiting == 'true'
+        if: steps.b.outputs.ok == 'true' && (steps.org.outputs.waiting == 'true')
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
@@ -117,14 +109,14 @@ jobs:
           node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --starting --now "waiting for a scratch-org slot (the Dev Hub's are all in use; $((AHEAD + 1)) in line): it starts by itself when one frees up" || true
           node .pipeline/pipeline/bin/pipe.mjs org make-room || true   # FREE_IDLE_ORGS: a story PR waiting only for its approval gives its org
       - name: Let the next job into the org's lane
-        if: always()
+        if: always()   # releasing a lane it never took is a no-op
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane release "story:$KEY" || true
       - name: The story card (one comment, kept up to date at every stage)
-        if: steps.org.outputs.waiting != 'true'   # waiting: the card says so (above)
+        if: steps.b.outputs.ok == 'true' && (steps.org.outputs.waiting != 'true')   # waiting: the card says so (above)
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe command uses the tracker
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}

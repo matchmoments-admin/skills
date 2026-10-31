@@ -429,7 +429,7 @@ test("every workflow file parses as YAML (an unquoted ': ' in a step name broke 
 });
 
 test("agent roles: one table for model and turns; the UI writer reads its failure screenshot and stops to report; triage sees CI (E9, E10)", async () => {
-  assert.deepEqual(roles.budget("ui-test", ""), { model: "claude-sonnet-5-5", turns: 30, turnLimitOk: true, provider: "anthropic", arm: "" }, "the spec run judges the writer's work");
+  assert.deepEqual(roles.budget("ui-test", ""), { model: "claude-sonnet-5-5", turns: 24, turnLimitOk: true, provider: "anthropic", arm: "" }, "the spec run judges the writer's work");
   assert.equal(roles.budget("implement", "").turnLimitOk, false);
   assert.equal(roles.budget("review", "claude-opus-5-5").model, "claude-opus-5-5");
   assert.throws(() => roles.modelFor("poet", "x"), /Unknown AI role/, "an unknown role fails even with an override");
@@ -580,7 +580,7 @@ test("#430: short jobs with no Salesforce CLI, agent, npm install or browser run
       }
     }
   }
-  for (const j of ["ai-review.yml/route", "ai-review.yml/verdict", "ci.yml/nudge", "gate.yml/decide", "ai-fix.yml/follow-up", "reconcile.yml/reconcile", "release.yml/tag", "issue-start.yml/blockers"]) assert.ok(small.includes(j), `${j} is small`);
+  for (const j of ["ai-review.yml/route", "ai-review.yml/verdict", "ci.yml/nudge", "gate.yml/decide", "ai-fix.yml/follow-up", "reconcile.yml/reconcile", "release.yml/tag"]) assert.ok(small.includes(j), `${j} is small`);
   for (const j of ["ci.yml/static", "ci.yml/apex", "gate.yml/ship", "ai-review.yml/review", "scratch-janitor.yml/sweep", "merged.yml/closed", "ui-test.yml/run", "release.yml/closeout"]) assert.ok(standard.includes(j), `${j} stays standard`);
   // the rule itself
   assert.ok(heavyStep({ run: "x=1; sf data query -q 'SELECT Id FROM Account'" }) && heavyStep({ run: "npm ci" }) && heavyStep({ run: "npx playwright test" }));
@@ -605,14 +605,16 @@ test("#430: the list of pipe commands that need sf covers every command whose bo
   for (const c of found) assert.ok(SF_PIPE.some((p) => c === p || c.startsWith(`${p} `)), `pipe ${c} calls sf: add it to SF_PIPE`);
 });
 
-test("#430: issue-start's blockers check stays its own job (3 minutes, sparse checkout) on the small runner; start waits for it", () => {
+test("issue-start checks blockers first, in the start job: one billed minute fewer per /start (#417's minute cuts, was #430's own job)", () => {
   const yaml = createRequire(import.meta.url)("js-yaml");
   const doc = yaml.load(readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8"));
-  const { blockers, start } = doc.jobs;
-  assert.equal(blockers["runs-on"], "${{ vars.RUNNER_SMALL || 'ubuntu-slim' }}");
-  assert.equal(blockers["timeout-minutes"], 3);
-  assert.match(blockers.steps[0].with["sparse-checkout"], /^pipeline\nconfig$/, "only the pipeline code, not main's history");
-  assert.equal(start.needs, "blockers"); assert.equal(start.if, "needs.blockers.outputs.ok == 'true'");
+  assert.deepEqual(Object.keys(doc.jobs), ["start"]);
+  const steps = doc.jobs.start.steps;
+  const b = steps.findIndex((x) => x.id === "b");
+  assert.match(steps[b].run, /pipe\.mjs story blockers "\$KEY"/);
+  assert.ok(steps.slice(0, b).every((x) => !/branch|org|sprint/i.test(x.name || "")), "nothing is created before the check");
+  // every later step that makes something waits for it; only the label removal and the failure card do not
+  for (const x of steps.slice(b + 1)) if (!/Remove the button label|says it failed|Let the next job into the org's lane/.test(x.name || "")) assert.match(String(x.if), /^steps\.b\.outputs\.ok == 'true'/, x.name);
 });
 
 test("#430: the snapshot is rebuilt when the baseline or seed changed, after a release only if the shape inputs changed, weekly, or by hand", () => {
