@@ -104,3 +104,11 @@ test("settings come from the one PIPELINE_VARS line (toJSON(vars)); an env var o
   assert.deepEqual([names.aiFeatures(env).plan, names.aiFeatures(env).review], [true, false]);
   assert.equal(names.setting("UI_REGRESSION", { PIPELINE_VARS: "not json" }), "release");
 });
+
+test("every label the pipeline creates fits GitHub's limits (description up to 100 characters, a 6-digit colour): labels sync 422'd on org:released (#455)", () => {
+  for (const [name, l] of Object.entries(names.LABELS)) {
+    assert.ok(name.length <= 50, `${name}: name over 50 characters`);
+    assert.ok((l.description || "").length <= 100, `${name}: description is ${(l.description || "").length} characters`);
+    assert.match(l.color, /^[0-9A-Fa-f]{6}$/, name);
+  }
+});

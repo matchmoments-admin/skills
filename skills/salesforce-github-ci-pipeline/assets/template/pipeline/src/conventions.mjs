@@ -16,7 +16,7 @@ export const LABELS = {
   blocked: { color: "B60205", description: "A gate needs a person; see the latest comment" },
   release: { color: "0052CC", description: "The release PR of a sprint" },
   "waiting:org": { color: "FBCA04", description: "Waiting for a scratch-org slot: it starts by itself when one frees up" },
-  "org:released": { color: "C5DEF5", description: "Its scratch org went to a waiting story while it waits for approval: rebuilt when a change or a login needs it" },
+  "org:released": { color: "C5DEF5", description: "Its scratch org went to a waiting story; rebuilt when a change or a login needs it" },
   "in-sprint": { color: "0E8A16", description: "Merged into the sprint: ships with its release (the story closes when it is in production)" },
   "needs-triage": { color: "D4C5F9", description: "A person needs to look at this issue before it becomes a story" },
   "needs-info": { color: "D4C5F9", description: "Waiting on the person who raised it" },
