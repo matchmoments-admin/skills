@@ -3,8 +3,9 @@
 // passed on that commit; UAT waited for a staging run that had finished before the release PR existed). Now each
 // stage's job ends with `pipe next --after <stage>`, and this module decides from the head's Standing. Pure:
 // nextSteps() takes Standing and settings and returns what to start; `pipe next` gathers and acts.
-import { STATUS, standing, phaseOf, requiredVerdicts } from "./gate.mjs";
-import { CHECKS, uiNeeded, storyOf, sprintOf } from "./conventions.mjs";
+import { STATUS, standing, phaseOf, requiredVerdicts, evaluate, onlyApprovalLeft } from "./gate.mjs";
+import { CHECKS, uiNeeded, storyOf, sprintOf, orgFor } from "./conventions.mjs";
+import { setting } from "./settings.mjs";
 
 /** The stages, in order. Story PRs: into the sprint's release branch; the release PR: into main, then production. */
 export const STAGES = {
@@ -139,3 +140,42 @@ export function needs(st, facts, { decision = null, testers = [], prUrl = "", ke
 
 /** The verdict contexts each stage owns (what the card and the gate read for it). */
 export const OWNS = { review: STATUS.review, "ui-test": STATUS.ui, "sign-off": STATUS.signoff, uat: STATUS.uat };
+
+/** Should the gate start the janitor to release this PR's org (FREE_IDLE_ORGS)? It waits only for its approval, its org
+ *  is not released already, and a story waits for a slot. d: evaluate()'s result on facts. */
+export function idleOrgWanted(d, facts, gh) {
+  if (!onlyApprovalLeft(d) || setting("FREE_IDLE_ORGS") === "off" || (facts.pr.labels || []).some((l) => l.name === "org:released")) return false;
+  return (gh(["issue", "list", "--state", "open", "--label", "waiting:org", "--json", "number", "--limit", "1"], { allowFail: true }) || []).length > 0;
+}
+
+/** Which idle story orgs to free (pure): candidates [{ pr, key, since, idle, live }] (idle: onlyApprovalLeft; live: its
+ *  org exists), one for each waiting story, the PR that has waited longest for its approval first. */
+export function pickIdle(candidates = [], waiting = 0) {
+  return candidates.filter((c) => c.idle && c.live).sort((a, b) => String(a.since).localeCompare(String(b.since))).slice(0, Math.max(0, waiting));
+}
+
+/** Make room for the stories waiting for a slot (label waiting:org): free the org of each story PR that waits only for
+ *  its approval (pickIdle), label it org:released and say so on it. The jobs that need the org again rebuild it for an open
+ *  PR (org ready / org ci); `Send me a login` starts it again. Returns the freed [{ pr, key }]; the caller then starts
+ *  the waiting stories (freed()). deps: { host, gh, live: Set of org descriptions, removeOrg, log }. */
+export function freeIdleOrgs({ host, gh, live, removeOrg, log = () => {} }) {
+  const waiting = gh(["issue", "list", "--state", "open", "--label", "waiting:org", "--json", "number", "--limit", "50"], { allowFail: true }) || [];
+  if (!waiting.length) return [];
+  const prs = (gh(["pr", "list", "--state", "open", "--json", "number,headRefName,updatedAt", "--limit", "50"], { allowFail: true }) || [])
+    .filter((p) => storyOf(p.headRefName));
+  const candidates = prs.map((p) => {
+    const key = storyOf(p.headRefName), org = orgFor(`story:${key}`);
+    let idle = false;
+    try { idle = live.has(org?.description) && onlyApprovalLeft(evaluate(host.prFacts(p.number))); } catch (e) { log(`skipped PR #${p.number}: ${e.message}`); }
+    return { pr: p.number, key, since: p.updatedAt, idle, live: live.has(org?.description) };
+  });
+  const out = [];
+  for (const c of pickIdle(candidates, waiting.length)) {
+    try { if (!removeOrg(`story:${c.key}`)) continue; } catch (e) { log(`::warning::could not free story ${c.key}'s org: ${e.message}`); continue; }
+    gh(["issue", "edit", String(c.pr), "--add-label", "org:released"], { allowFail: true });
+    gh(["issue", "comment", String(c.pr), "--body", `Its scratch org went to a story waiting for a slot: this PR waits only for its approval, which needs no org. A change (a fix, a UI test) rebuilds it by itself, and **Send me a login** starts it again (about 5 minutes).`], { allowFail: true });
+    log(`freed story ${c.key}'s org (PR #${c.pr} waits only for its approval)`);
+    out.push({ pr: c.pr, key: c.key });
+  }
+  return out;
+}

@@ -413,6 +413,14 @@ export function evaluate(facts) {
   return { route: r, rules, reasons, other, blocking, mergeable: reasons.length === 0, story: storyOf(pr.headRefName), validate, after, standing: st };
 }
 
+/** Does a story PR wait only for a person's approval, everything else green? Its scratch org is then idle until a change
+ *  or a login needs it, so a story waiting for a slot may have it (FREE_IDLE_ORGS, journey.freeIdleOrgs). The approval
+ *  is evaluate()'s last reason, so it is the only one. Pure: evaluate()'s result. */
+export function onlyApprovalLeft(d) {
+  if (d?.route !== "feature" || d.mergeable || d.blocking === "failure" || !d.standing || d.standing.approval?.ok) return false;
+  return d.reasons.length === 1;
+}
+
 const validate_ = (rules, compare) => rules.validate === true || (rules.validate === "if-force-app" && Boolean(compare.forceAppChanged));
 
 /** Re-run the gate when a person has acted (or the PR needs no one), so it merges when its last input lands: an

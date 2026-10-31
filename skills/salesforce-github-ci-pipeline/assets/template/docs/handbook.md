@@ -174,6 +174,7 @@ who does each step for any combination.
 | `UAT_TESTER_ROLE` | **Send me a UAT login** gives the tester this role when no story names a `Persona:` | the tester has no role (every permission set in the code) |
 | `ORG_RESERVE` | scratch-org slots a new story org leaves free for staging, UAT and CI | 0 |
 | `ORG_POOL` | warm scratch orgs the janitor keeps ready from the snapshot (`pool-1`...): `/start` claims one instead of waiting for a new org. Each holds an active slot, and the janitor makes one only while a slot stays free beyond `ORG_RESERVE`; lowering it deletes the extras | 0 (no pool) |
+| `FREE_IDLE_ORGS` | a story waiting for a scratch-org slot gets the org of a story PR that waits only for its approval (see "One job at a time in an org"); `off`: it waits for a merge, a close or the janitor | on |
 | `UAT_SAMPLE` | `on`: after each UAT deploy, a masked subset of production goes into UAT ([Test data](#test-data); needs secret `SF_PROD_READ_USERNAME`, a read-only production user, and the `production-read` environment) | off: UAT has the synthetic seed only |
 | `UAT_SAMPLE_DOMAINS` | production's email domains (`acme.com,acme.co.uk`): the UAT sample fails if any survives masking | none: `UAT_SAMPLE=on` refuses to trust the sample |
 | `VOLUME_RECORDS` | volume records (accounts and opportunities) loaded into the staging org | 5000 |
@@ -424,6 +425,13 @@ is one CLI, so the Salesforce steps can run on Buildkite agents if a company alr
   checks, and a parked check would look passed. A parked job whose holder's runner died without releasing is not woken:
   run `lane-wake` by hand.
 - A story org that a failed `/start` left half made is finished by the next `/start` (packages, source, prepare).
+- **No free slot.** `/start` with every Dev Hub slot in use does not fail: the story gets `waiting:org`, its card says
+  its place in line, and it starts by itself when an org is deleted (oldest first). With `FREE_IDLE_ORGS` on (the
+  default), the pipeline also makes room: a story PR whose checks, AI review and UI test have all passed and that waits
+  only for its approval gives up its org (label `org:released`, a comment says so). An approval needs no org. A change
+  to that PR (a fix, a UI test, CI) rebuilds the org from its head, and **Send me a login** starts it again (about 5
+  minutes); the label goes when the org is back. The gate starts the janitor when such a PR and a waiting story meet;
+  `/start` and the janitor's 6-hourly sweep also try.
 
 ## Shipping, exactly what was validated
 

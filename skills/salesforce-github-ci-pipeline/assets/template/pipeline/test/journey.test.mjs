@@ -418,3 +418,59 @@ test("finish: each stage's verdict from its outcome, in one table (it was bash i
   assert.equal(v("uat", { outcome: "deployed", detail: "sandbox" }), "pending: In UAT (sandbox): test it, then tick UAT passed on the release card");
   assert.throws(() => verdictOf("deploy", {}), /unknown stage/);
 });
+
+test("FREE_IDLE_ORGS: only a story PR that waits for nothing but its approval may give up its org", () => {
+  const f = { ...open(fixture(23)), ai: {}, reviews: [], labelEvents: [], comments: [] };
+  const idle = gate.evaluate(f);
+  assert.ok(gate.onlyApprovalLeft(idle), "everything green, no sign-off yet");
+  const signed = { ...f, statuses: [{ sha: f.pr.headRefOid, context: gate.STATUS.signoff, state: "success", created_at: "2026-10-06T00:00:00Z", creator: { login: "github-actions[bot]" } }] };
+  assert.ok(!gate.onlyApprovalLeft(gate.evaluate(signed)), "signed off: it merges, nothing to release");
+  assert.ok(!gate.onlyApprovalLeft(gate.evaluate({ ...f, pr: { ...f.pr, isDraft: true } })), "a draft");
+  assert.ok(!gate.onlyApprovalLeft(gate.evaluate({ ...f, pr: { ...f.pr, mergeable: "CONFLICTING" } })), "conflicts: a change is coming");
+  assert.ok(!gate.onlyApprovalLeft(gate.evaluate({ ...open(fixture(12)), ai: {}, reviews: [], labelEvents: [], comments: [] })), "a hotfix keeps its org");
+  assert.ok(!gate.onlyApprovalLeft(gate.evaluate({ ...open(fixture(26)), ai: {}, reviews: [], labelEvents: [], comments: [] })), "a release");
+  assert.ok(!gate.onlyApprovalLeft({ ...idle, reasons: [...idle.reasons, "the AI review is running"] }), "a verdict still pending");
+  assert.ok(!gate.onlyApprovalLeft({ ...idle, blocking: "failure" }));
+});
+
+test("FREE_IDLE_ORGS: one idle org per waiting story, the PR waiting longest for approval first; the gate wakes the janitor only when both meet", () => {
+  const c = (pr, since, idle = true, live = true) => ({ pr, key: String(pr), since, idle, live });
+  assert.deepEqual(journey.pickIdle([c(3, "2026-10-30"), c(1, "2026-10-29"), c(2, "2026-10-28", false), c(4, "2026-10-27", true, false)], 1).map((x) => x.pr), [1]);
+  assert.deepEqual(journey.pickIdle([c(3, "2026-10-30"), c(1, "2026-10-29")], 5).map((x) => x.pr), [1, 3]);
+  assert.deepEqual(journey.pickIdle([c(1, "2026-10-29")], 0), []);
+
+  const f = { ...open(fixture(23)), ai: {}, reviews: [], labelEvents: [], comments: [] };
+  const story = f.pr.headRefName, key = names.storyOf(story), desc = names.orgFor(`story:${key}`).description;
+  const calls = [], removed = [];
+  const gh = (args) => {
+    calls.push(args.join(" "));
+    if (args[0] === "issue" && args[1] === "list") return [{ number: 452 }];
+    if (args[0] === "pr" && args[1] === "list") return [{ number: 23, headRefName: story, updatedAt: "2026-10-30T00:00:00Z" }, { number: 99, headRefName: "fix-something", updatedAt: "2026-10-01T00:00:00Z" }];
+    return null;
+  };
+  const freed = journey.freeIdleOrgs({ host: { prFacts: () => f }, gh, live: new Set([desc]), removeOrg: (t) => removed.push(t) > 0 });
+  assert.deepEqual(freed, [{ pr: 23, key }]);
+  assert.deepEqual(removed, [`story:${key}`]);
+  assert.ok(calls.includes("issue edit 23 --add-label org:released"));
+  assert.ok(calls.some((x) => x.startsWith("issue comment 23")));
+  assert.deepEqual(journey.freeIdleOrgs({ host: { prFacts: () => f }, gh, live: new Set(), removeOrg: () => assert.fail("no live org") }), [], "its org is already gone");
+  const none = (args) => (args[1] === "list" && args[0] === "issue" ? [] : gh(args));
+  assert.deepEqual(journey.freeIdleOrgs({ host: { prFacts: () => assert.fail("nobody waits: no reads") }, gh: none, live: new Set([desc]), removeOrg: () => assert.fail() }), []);
+
+  const d = gate.evaluate(f);
+  assert.equal(journey.idleOrgWanted(d, f, gh), true);
+  assert.equal(journey.idleOrgWanted(d, f, none), false, "no story waits");
+  assert.equal(journey.idleOrgWanted(d, { ...f, pr: { ...f.pr, labels: [{ name: "org:released" }] } }, gh), false, "already released");
+  process.env.FREE_IDLE_ORGS = "off";
+  try { assert.equal(journey.idleOrgWanted(d, f, gh), false, "switched off"); } finally { delete process.env.FREE_IDLE_ORGS; }
+});
+
+test("a /start with no free slot waits in line, green: issue-start queues, makes room, and keeps the waiting card", () => {
+  const y = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
+  assert.match(y, /org ready "story:\$KEY" --queue/);
+  assert.match(y, /if: steps\.org\.outputs\.waiting == 'true'\n/);
+  assert.match(y, /org make-room/);
+  assert.match(y, /The story card \(one comment[^\n]*\n\s+if: steps\.org\.outputs\.waiting != 'true'/);
+  assert.match(readFileSync(new URL("../../.github/workflows/scratch-janitor.yml", import.meta.url), "utf8"), /org make-room/);
+  assert.match(readFileSync(new URL("../../.github/workflows/uat-login.yml", import.meta.url), "utf8"), /--label org:released[\s\S]*event_type=jira-start/);
+});
