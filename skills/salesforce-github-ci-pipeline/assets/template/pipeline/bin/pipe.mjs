@@ -25,6 +25,7 @@
 //             flow-gaps --base B                        every changed record-triggered Flow has a Flow test
 //   prod      validate [--sha S] [--level L] [--deletions-from REF]   check-only deploy, live; prints the job id
 //   access    check --base B [--out file] [--report-only]  least-privilege access of what changed (blockers fail)
+//   automation check --base B [--report-only]   one record-automation entry point per object, Apex first (blockers fail)
 //   ship      candidate --pr N --base B --sha S --dir D · plan --sha S [--validated-job J --validated-tree T]
 //             renudge --base B --except N · watchdog      shipping keyed by commit (pipeline/src/shipping.mjs)
 //   release   notes <sprint>
@@ -58,8 +59,8 @@ import * as production from "../src/production.mjs";
 import { orgRegistry, personaOf as orgPersona, packageList, sameSourceVia, snapshotDescription } from "../src/org.mjs";
 import { orgCommands } from "./commands/org.mjs";
 import { evalCommands } from "./commands/eval.mjs";
+import { checkCommands } from "./commands/checks.mjs";
 import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
-import * as access from "../src/access.mjs";
 import * as pack from "../src/context-pack.mjs";
 import * as shipping from "../src/shipping.mjs";
 import * as events from "../src/events.mjs";
@@ -129,6 +130,7 @@ const commands = {
   // ---- orgs and lanes (commands/org.mjs)
   ...orgCommands({ io, host, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record: (...a) => record(...a), freed }),
   ...evalCommands({ flag, say, record: (...a) => record(...a) }),   // the reviewer eval set (commands/eval.mjs)
+  ...checkCommands({ io, flag, has, say, log, summary, root: PIPELINE_ROOT }),   // access and automation checks (commands/checks.mjs)
   // ---- the gate
   "gate evaluate": async () => {
     const pr = arg(0);
@@ -411,18 +413,6 @@ const commands = {
     for (const g of gaps) log(`::error title=Flow without a Flow test::${g} is a record-triggered Flow with no Flow test (force-app/main/default/flowtests/, <flowApiName>${g}</flowApiName>). Add one; if a Flow test cannot set up its records (it reads the Account), an Apex test that names its object and says \`// Flow test: ${g}: <why>\`.`);
     if (gaps.length) throw new Error(`${gaps.length} record-triggered Flow(s) without a Flow test: ${gaps.join(", ")}`);
     return say("every changed record-triggered Flow has a Flow test");
-  },
-  "access check": () => {
-    const { files, read, changed, added } = io.sourceFiles({ base: flag("base"), head: flag("head", "HEAD") });
-    const exFile = join(PIPELINE_ROOT, "config/access-exceptions.json");
-    const found = access.findings({ changed, added, files, read, exceptions: existsSync(exFile) ? JSON.parse(readFileSync(exFile, "utf8")) : [] });
-    for (const f of found) log(`::${f.level === "blocker" ? "error" : "warning"} file=${f.file},line=${f.line},title=access: ${f.rule}::${f.message}`);
-    const md = access.toMarkdown(found);
-    if (flag("out")) writeFileSync(flag("out"), md + "\n");
-    summary(md);
-    const blockers = found.filter((f) => f.level === "blocker").length;
-    say(`access check: ${changed.length} changed file(s), ${blockers} blocker(s), ${found.length - blockers} warning(s)`);
-    if (blockers && !has("report-only")) process.exit(1);
   },
   "prod validate": () => {
     // check-only deploy of this checkout, live; stdout is only the validation id (the quick deploy reads it)

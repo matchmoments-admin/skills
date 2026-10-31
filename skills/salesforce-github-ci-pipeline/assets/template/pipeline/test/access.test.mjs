@@ -171,3 +171,46 @@ test("vendored libraries (force-app/vendor/): the access check and the context p
   for (const role of ["implement", "fix", "review"]) assert.match(verdict.instructions(role, { key: "7" }), /Never edit pipeline files \(.*code-analyzer\.yml.*\): CI refuses/, `${role}: every pipeline path`);
   for (const role of ["spec", "plan"]) assert.match(verdict.instructions(role), /answered is no longer open: record its answer under Decisions \(a plan: in the Proposed build\) and remove it/, `${role}: answered questions leave Open questions`);
 });
+
+test("automation check: one record-automation entry point per object, Apex first (CLAUDE.md, Record automation)", async () => {
+  const a = await import("../src/automation.mjs");
+  const D = "force-app/main/default";
+  const flow = (obj, { reason = "", type = "RecordAfterSave" } = {}) => `<Flow><description>${reason}</description><start><object>${obj}</object><triggerType>${type}</triggerType></start></Flow>`;
+  const src = {
+    [`${D}/triggers/CaseTrigger.trigger`]: "trigger CaseTrigger on Case(before insert) { fflib_SObjectDomain.triggerHandler(Cases.class); }",
+    [`${D}/flows/Case_Old.flow-meta.xml`]: flow("Case"),
+    [`${D}/flows/Lead_Rating.flow-meta.xml`]: flow("Lead", { type: "RecordBeforeSave" }),
+    [`${D}/flows/Screen_Thing.flow-meta.xml`]: "<Flow><start><object>Case</object></start></Flow>",   // not record-triggered
+  };
+  const run = (extra = {}, { added = [], exceptions = [] } = {}) => {
+    const all = { ...src, ...extra };
+    return a.findings({ changed: Object.keys(extra), added, files: Object.keys(all), read: (p) => all[p] ?? "", exceptions });
+  };
+  assert.equal(a.flowObject(src[`${D}/flows/Screen_Thing.flow-meta.xml`]), null, "a screen or autolaunched Flow is no entry point");
+  assert.equal(a.triggerObject(src[`${D}/triggers/CaseTrigger.trigger`]), "Case");
+
+  const onCase = `${D}/flows/Case_New.flow-meta.xml`;
+  const f1 = run({ [onCase]: flow("Case", { reason: "flow: admins own it" }) }, { added: [onCase] });
+  assert.deepEqual(f1.map((f) => [f.level, f.rule]), [["blocker", "mixed-entry-point"]], "a Flow beside CaseTrigger, reason or not");
+  assert.equal(run({ [onCase]: flow("Case", { reason: "flow: x" }) }, { added: [onCase], exceptions: [{ object: "Case", story: 461, why: "migrating" }] })[0].level, "warning", "an object mid-migration is a warning");
+
+  const onLead = `${D}/flows/Lead_New.flow-meta.xml`;
+  assert.deepEqual(run({ [onLead]: flow("Lead") }, { added: [onLead] }).map((f) => f.rule), ["flow-without-reason"], "Apex first: a new Flow says why");
+  assert.deepEqual(run({ [onLead]: flow("Lead", { reason: "Rating is admin-owned. flow: admins change the thresholds" }) }, { added: [onLead] }), []);
+  assert.deepEqual(run({ [`${D}/flows/Lead_Rating.flow-meta.xml`]: flow("Lead", { type: "RecordBeforeSave" }) }), [], "changing an existing Flow needs no new reason");
+
+  const leadTrigger = `${D}/triggers/LeadTrigger.trigger`;
+  assert.deepEqual(run({ [leadTrigger]: "trigger LeadTrigger on Lead(before insert) {}" }, { added: [leadTrigger] }).map((f) => f.rule), ["mixed-entry-point"], "a trigger added beside a Flow moves the Flow in the same story");
+
+  const migrated = { ...src }; delete migrated[`${D}/flows/Case_Old.flow-meta.xml`];
+  assert.deepEqual(a.findings({ changed: [`${D}/triggers/CaseTrigger.trigger`], added: [], files: Object.keys(migrated), read: (p) => migrated[p] ?? "" }), [], "the Flow deleted: one entry point");
+
+  const deactivated = { ...src, [`${D}/flows/Case_Old.flow-meta.xml`]: flow("Case").replace("</Flow>", "<status>Obsolete</status></Flow>") };
+  assert.deepEqual(a.findings({ changed: [`${D}/flows/Case_Old.flow-meta.xml`], added: [], files: Object.keys(deactivated), read: (p) => deactivated[p] ?? "" }), [], "a deactivated Flow (step one of removing it) is no entry point");
+  const eps = a.entryPoints(Object.keys(src), (p) => src[p]);
+  assert.match(a.entryPointLine(eps.Case, { object: "Case", story: 461 }), /^mixed: .*migrating in #461/);
+  assert.match(a.entryPointLine(eps.Lead), /^Flow \(Lead_Rating\)/);
+  assert.match(a.entryPointLine(undefined), /^none yet: an Apex trigger and domain/);
+  for (const e of JSON.parse(readFileSync(new URL("../../config/automation-exceptions.json", import.meta.url), "utf8"))) assert.ok(e.object && Number(e.story) > 0 && e.why, JSON.stringify(e));
+  assert.match(readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"), /pipe\.mjs automation check --base "origin\/\$BASE"/);
+});

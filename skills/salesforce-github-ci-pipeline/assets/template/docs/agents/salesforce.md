@@ -25,8 +25,9 @@ Not seams: private helpers, a Flow's internal elements, a trigger's handler inte
 Publish a **Spec** issue (`docs/agents/issue-tracker.md`). In its template:
 
 - **User stories**: "As a <Salesforce persona: sales rep, service agent, admin>, I want..., so that...".
-- **Implementation decisions** say, for each object touched: new fields (type, required?), the automation (record-triggered
-  Flow before or after save, or a trigger handler; one per object and trigger type), the permission set that grants it,
+- **Implementation decisions** say, for each object touched: new fields (type, required?), the automation (its one entry
+  point: the object's FFLib domain class by default, before or after save; a record-triggered Flow only with a
+  `flow: <why>` reason, on an object with no trigger: CLAUDE.md, Record automation), the permission set that grants it,
   the layout or Lightning page it appears on, and the **Access** decision (org-wide default, run mode). No file paths.
 - **Testing decisions** use the seams above; prior art is the existing test class for the same object.
 - **One-way doors** (list them): deleting or retyping a field, changing an org-wide default, data changes in production,

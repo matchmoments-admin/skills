@@ -44,6 +44,14 @@ review it line by line, and never ask for it to follow our Apex rules.
   library missing from `docs/vendor.md` (repository, pinned commit, why); vendored code that differs from upstream at the recorded commit (`scripts/vendor.sh` with the same arguments
   reproduces it exactly).
 
+## Record automation (CLAUDE.md "Record automation": Apex first, one entry point per object)
+CI's automation check already fails a record-triggered Flow beside an Apex trigger on the same object, and a new
+record-triggered Flow with no `flow: <why>` in its description. Review the rest:
+- **major**: logic in a trigger body, or in a new static handler, where the object's domain class belongs; a domain that
+  queries or does DML itself instead of a selector and the unit of work (`docs/fflib.md`); a `flow: <why>` reason that
+  Apex would serve as well (a rule only developers change).
+- **major**: an after-save rule that registers records in a loop without one `commitWork()` for the batch.
+
 ## Flows
 - **blocker**: a Get, Create, Update or Delete element inside a Loop; a recursive trigger (a flow updating the record that
   triggers it, after save, with no entry condition that stops it); hard-coded record IDs.

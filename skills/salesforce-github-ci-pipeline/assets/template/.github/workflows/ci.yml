@@ -82,6 +82,11 @@ jobs:
         run: |   # main's rule and exceptions, as the access check (#227)
           BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
           node .pipeline/pipeline/bin/pipe.mjs tests flow-gaps --base "origin/$BASE"
+      - name: One record-automation entry point per object, Apex first (no Flow beside a trigger)
+        if: steps.what.outputs.sf == 'true'
+        run: |   # main's rule and exceptions (config/automation-exceptions.json), as the access check (#227)
+          BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
+          node .pipeline/pipeline/bin/pipe.mjs automation check --base "origin/$BASE"
       - run: npm ci --no-audit --no-fund --ignore-scripts
       - run: npm run format:check
       - run: npm run lint
