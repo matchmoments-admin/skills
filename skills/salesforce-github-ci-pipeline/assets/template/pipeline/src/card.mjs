@@ -71,6 +71,7 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   rows.push([shipped ? "done" : "waiting", "In production", shipped ? `released in [${shipped.tag}](${shipped.url})` : base === "main" ? "ships right after the merge" : "ships with the sprint's release"]);
 
   if (shipped) next = `Done: live in production since [${shipped.tag}](${shipped.url}).`;
+  else if (merged && base !== "main" && releasePr) next = `Nothing to do here: it ships with the sprint's release. Follow it on **[the release PR #${releasePr}](${repoUrl}/pull/${releasePr})** (staging, UAT, approval, production).`;
   else if (merged) next = base === "main" ? "Nothing to do: it is shipping to production now." : "Nothing to do: it ships with the sprint release.";
   else if (pr.state === "CLOSED") next = "The pull request was closed without merging (a carried-over story is closed when its sprint ships). To work on it again, tick **Start** below: a new branch and org from the current sprint.";
   else {

@@ -445,3 +445,33 @@ test("a new story's card offers Start the next sprint, not Start, when no sprint
   await storyCards({ host: { openRelease: () => { throw new Error("api down"); } }, tracker, prTracker: tracker, slack: null }).newStory("446");
   assert.doesNotMatch(written.at(-1), /No sprint is open/, "an unreadable host leaves the card as before");
 });
+
+test("a sprint whose stories are all merged tells its approvers once, and every merged story's card links the release PR (#460)", async () => {
+  const st = (key, merged, state = "OPEN") => ({ key, title: `Story ${key}`, state, merged });
+  const notice = start.sprintReadyNotice({ sprint: "2027-w04", stories: [st("444", true), st("452", true), st("400", false, "CLOSED")], approvers: ["alex-admin"] });
+  assert.match(notice, /^<!-- pipeline:sprint-ready -->\n@alex-admin: \*\*Sprint 2027-w04 is ready to release\.\*\* All 2 of its stories are merged \(#444, #452\)/);
+  assert.match(notice, /comment `\/release-cut` here/);
+  assert.equal(start.sprintReadyNotice({ sprint: "2027-w04", stories: [st("444", true), st("445", false)] }), null, "a story still in review");
+  assert.equal(start.sprintReadyNotice({ sprint: "2027-w04", stories: [st("444", true)], releasePr: 480 }), null, "the release PR is already open");
+  assert.equal(start.sprintReadyNotice({ sprint: "2027-w04", stories: [] }), null, "an empty sprint");
+
+  // announceSprintReady: the story that just merged counts as merged; others by their PR into the sprint
+  const said = [], notes = [];
+  const tracker = { sprintStories: async () => [st("444"), st("452")], comment: async (k, b) => said.push([k, b]), sprintNote: async (_, t) => notes.push(t) };
+  const host = (prs, rel = null) => ({ storyPr: (b) => prs[b] || null, releasePrOf: () => rel });
+  const base = "release/2027-w04";
+  await start.announceSprintReady({ sprint: "2027-w04", base, story: "452" }, { host: host({ "issue-444": { state: "MERGED", baseRefName: base } }), tracker, approvers: ["a"] });
+  assert.deepEqual(said.map(([k]) => k), ["452"], "posted on the story that merged last");
+  assert.match(notes[0], /Ready to release/);
+  await start.announceSprintReady({ sprint: "2027-w04", base, story: "452" }, { host: host({ "issue-444": { state: "OPEN", baseRefName: base } }), tracker });
+  await start.announceSprintReady({ sprint: "2027-w04", base, story: "452" }, { host: host({ "issue-444": { state: "MERGED", baseRefName: "release/2027-w03" } }), tracker });
+  assert.equal(said.length, 1, "nothing while another story is open, or merged into another sprint");
+
+  const f = { ...open(fixture(23)), ai: {}, statuses: [], reviews: [] };
+  const merged = { ...f.pr, state: "MERGED" };
+  const card = (releasePr) => storyCard({ key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/2027-w04", pr: merged, facts: f, releasePr });
+  assert.match(card(480), /\*\*Next:\*\* Nothing to do here: it ships with the sprint's release\. Follow it on \*\*\[the release PR #480\]\(https:\/\/github\.com\/o\/r\/pull\/480\)\*\*/);
+  assert.match(card(null), /tick \*\*Cut the sprint's release\*\*[\s\S]*act:release-cut/, "before the release PR: the box");
+  const cut = readFileSync(new URL("../../.github/workflows/release-cut.yml", import.meta.url), "utf8");
+  assert.match(cut, /pipe\.mjs release opened "\$SPRINT" --pr/, "opening the release PR refreshes the sprint's story cards");
+});

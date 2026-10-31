@@ -61,6 +61,8 @@ jobs:
           node pipeline/bin/pipe.mjs release notes "$SPRINT" > notes.md
           gh pr create --base main --head "$REL" --title "Release $SPRINT" --body-file notes.md --label release
           GH_TOKEN="${{ github.token }}" node pipeline/bin/pipe.mjs pr card "$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number')" || true
+          # merged stories' cards (in the closed pile only by their PRs) and the milestone link the release PR
+          GH_TOKEN="${{ github.token }}" node pipeline/bin/pipe.mjs release opened "$SPRINT" --pr "$(gh pr list --head "$REL" --base main --state open --json number --jq '.[0].number')" || true
           [ "${{ steps.id.outputs.is-app }}" = "true" ] || gh workflow run ci.yml --ref "$REL" -f ref="$REL"
           # UAT_ENABLED: the release candidate goes to UAT once the staging regression has passed on it (journey.mjs);
           # if staging is still running, its end starts UAT instead
