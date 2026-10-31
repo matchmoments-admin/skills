@@ -998,3 +998,16 @@ test("#430: the snapshot is rebuilt only when main's baseline, seed or the relea
   const src = readFileSync(new URL("../src/org/snapshot.mjs", import.meta.url), "utf8");
   assert.equal((src.match(/\.slice\(0, 255\)/g) || []).length, 1, "the description is cut in one place");
 });
+
+test("CI deploys what changed since the commit the story org holds, so a sprint merged into the story reaches the org (#450)", async () => {
+  const { heldCommit, readyMarker } = await import("../src/org.mjs");
+  assert.equal(heldCommit(readyMarker("0123456789abcdef0123", "123", "abc")), "0123456789ab");
+  assert.equal(heldCommit(readyMarker("0123456789abcdef")), "0123456789ab");
+  assert.equal(heldCommit("pipeline: ready"), null, "ready, with no commit");
+  assert.equal(heldCommit("Sales Rep"), null);
+  assert.equal(heldCommit(undefined), null);
+  const ci = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(ci, /HELD=\$\(node \.pipeline\/pipeline\/bin\/pipe\.mjs org held "\$ALIAS"/);
+  assert.match(ci, /git merge-base --is-ancestor "\$HELD" HEAD[^\n]*FROM="\$HELD"/);
+  assert.match(ci, /sf sgd source delta --to HEAD --from "\$FROM"/);
+});

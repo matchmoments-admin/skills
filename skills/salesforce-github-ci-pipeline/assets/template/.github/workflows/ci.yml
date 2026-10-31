@@ -186,7 +186,12 @@ jobs:
           ALIAS: ${{ steps.org.outputs.alias }}
         run: |
           mkdir -p delta
-          sf sgd source delta --to HEAD --from "origin/$BASE" --output-dir delta --source-dir force-app
+          # from the commit the org holds when it is on this branch's history: a sprint merged into the story since the org
+          # was built is in base...head's merge base, so a delta from the base would leave it out (#450: a group listing a
+          # permission set the org never got). Otherwise (not marked, a temporary org) from the base, as before.
+          FROM="origin/$BASE"; HELD=$(node .pipeline/pipeline/bin/pipe.mjs org held "$ALIAS" 2>/dev/null || true)
+          if [ -n "$HELD" ] && git merge-base --is-ancestor "$HELD" HEAD 2>/dev/null; then FROM="$HELD"; echo "the org holds ${HELD:0:7}: deploying what changed since"; fi
+          sf sgd source delta --to HEAD --from "$FROM" --output-dir delta --source-dir force-app
           if grep -q '<members>' delta/package/package.xml 2>/dev/null; then
             # deletions: a re-run (or a second CI run in the same org) deletes what is already gone, which Salesforce
             # reports as a warning ("No ApexClass named: X found"); it is not a failure (#353's re-run)

@@ -40,6 +40,7 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
     else if (o.created || o.completed) record("org", { action: o.created ? "created" : "completed", org: o.description, story: o.key });
     output({ alias: o.alias, temp: o.temp, full: o.full }); return say(o.alias);
   },
+  "org held": () => say(orgs().held(arg(0)) || ""),   // the commit the org holds (CI deploys what changed since it)
   "org attach": () => { const o = orgs().attach(arg(0)); output({ alias: o.alias }); return say(o.alias); },
   "org remove": () => { const o = names.orgFor(arg(0)); if (orgs().remove(arg(0))) record("org", { action: "deleted", org: o?.description, story: o?.key }); },
   "org remove-tagged": () => { if (orgs().removeTagged(arg(0))) record("org", { action: "deleted", org: arg(0) }); },
