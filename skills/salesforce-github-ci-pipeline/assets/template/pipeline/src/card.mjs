@@ -181,12 +181,17 @@ export function releaseCard({ repoUrl, pr, facts = {}, decision = null, uat = fa
   const ciState = merged ? "done" : ci.includes("failed") ? "failed" : ci.every((s) => s === "done") ? "done" : "running";
   rows.push([ciState, "CI (every test, staging org)", ciState === "failed" ? `[see what failed](${prUrl}/checks)` : ciState === "done" ? "passed" : `[running](${prUrl}/checks)`]);
   const staging = merged ? "done" : stateOf(st.checks[CHECKS.staging]?.conclusion || "missing");
-  rows.push([staging, "Staging regression", staging === "failed" ? `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)` : staging === "done" ? "passed on this commit" : "runs after each merge into the sprint"]);
+  // the staging run on this head while it runs: both rows link it (it runs the UI regression too), so nobody waits
+  // on a ⏳ with nothing to open
+  const run = runs.filter((c) => c.name === CHECKS.staging).sort((x, y) => String(x.started_at).localeCompare(String(y.started_at))).pop();
+  const live = !merged && run && run.status !== "completed" && run.html_url ? run.html_url : null;
+  const watch = live ? ` · **[watch it live](${live})**` : "";
+  rows.push([staging, "Staging regression", staging === "failed" ? `[see what failed](${run?.html_url || `${repoUrl}/actions/workflows/staging-deploy.yml`})` : staging === "done" ? "passed on this commit" : live ? `running on the staging org${watch}` : "runs after each merge into the sprint"]);
   // every UI spec, once per release (#273): it starts when the release PR opens, beside UAT
   const ui = merged ? { state: "success" } : st.uiRegression;
   const uiRow = { success: ["done", "every UI spec passed"], failure: ["failed", `[see what failed](${repoUrl}/actions/workflows/staging-deploy.yml)`],
     stale: ["waiting", "passed on an older commit: it runs again"], pending: ["running", "running on the staging org"], missing: ["running", "runs once per release, now that the release PR is open"] }[ui.state] || ["waiting", ui.state];
-  rows.push([uiRow[0], "UI regression (every UI spec)", uiRow[1]]);
+  rows.push([uiRow[0], "UI regression (every UI spec)", live && ["missing", "pending", "stale"].includes(ui.state) ? `runs in the staging run, after its Apex tests${watch}` : uiRow[1]]);
   if (uat) {
     const u = merged ? { state: "success" } : st.uat;
     const open = u.url ? `**[open UAT](${u.url})** (⌘/Ctrl-click: a new tab; GitHub links cannot open one themselves)` : "open UAT";

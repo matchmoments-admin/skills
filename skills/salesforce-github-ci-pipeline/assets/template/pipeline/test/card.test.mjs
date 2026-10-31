@@ -233,6 +233,12 @@ test("release card: what ships, each stage, what to do next, and only the boxes 
   assert.match(inUat, /\*\*Next:\*\* Test it in UAT, then tick \*\*UAT passed\*\*/);
   assert.match(inUat, /- \[ \] ✅ UAT passed.*<!-- act:uat-pass -->/);
   assert.doesNotMatch(inUat, /act:gate/, "not approved yet: nothing to re-check");
+  // a staging run in progress: both rows link it (#472: two ⏳ rows with nothing to open)
+  const running = [green[0], green[1], { name: "staging regression", conclusion: null, status: "in_progress", started_at: "2026-10-05T10:30:00Z", html_url: "https://github.com/o/r/actions/runs/9/job/1" }];
+  const live = releaseCard({ ...base, facts: { checkRuns: running, statuses: [], reviews: [] } });
+  assert.match(live, /⏳ \| Staging regression \| running on the staging org · \*\*\[watch it live\]\(https:\/\/github\.com\/o\/r\/actions\/runs\/9\/job\/1\)\*\*/);
+  assert.match(live, /UI regression \(every UI spec\) \| runs in the staging run, after its Apex tests · \*\*\[watch it live\]/);
+  assert.doesNotMatch(inUat, /watch it live/, "a finished run: no live link");
   const approved = { checkRuns: green, statuses: [st("success")], reviews: [{ user: { type: "User", login: "lead" }, state: "APPROVED", commit_id: "h", submitted_at: "2026-10-05T12:00:00Z" }] };
   const ready = releaseCard({ ...base, facts: approved, decision: { mergeable: true } });
   assert.match(ready, /Nothing to do: the gate is validating/);
