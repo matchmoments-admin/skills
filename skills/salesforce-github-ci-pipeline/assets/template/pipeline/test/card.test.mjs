@@ -58,6 +58,39 @@ test("story card: before the PR it says how to build; with a PR it tracks each s
   assert.doesNotMatch(shipped, /⬜/);
 });
 
+test("story card: a build in progress says wait, and a plan or answer newer than the PR's build asks for a rebuild (#460)", () => {
+  const base = { key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/2026-w41", ai: { implement: true, plan: true } };
+  const building = { state: "running", what: "Claude is building the story in its scratch org", wait: true };
+  const before = storyCard({ ...base, activity: building });
+  assert.match(before, /\*\*Next:\*\* Wait: Claude is building the story/, "not \"Build it\" while it is being built");
+  assert.doesNotMatch(before, /act:build|act:plan/);
+
+  const f = { ...open(fixture(23)), ai: {}, statuses: [], reviews: [] };
+  const pr = { ...f.pr, title: "Kickoff task" };
+  const card = (extra) => storyCard({ ...base, pr, facts: f, decision: gate.evaluate(f), ...extra });
+  assert.match(card({}), /Approve here\]\([^)]*\)\*\*: everything else is green/, "a current build: approve");
+  const answered = card({ replan: "plan" });
+  assert.match(answered, /\*\*Next:\*\* A comment on this story came after this build\. Tick \*\*Plan it with Claude\*\*/);
+  assert.match(answered, /act:plan[\s\S]*act:build/, "re-plan and rebuild are offered on a story with a PR");
+  assert.doesNotMatch(answered, /act:ship/, "no sign-off of the old build");
+  assert.match(card({ replan: "build" }), /\*\*Next:\*\* The build plan changed after this build\. Tick \*\*Build it with Claude\*\*/);
+  const rebuilding = card({ replan: "build", activity: building });
+  assert.match(rebuilding, /\*\*Next:\*\* Wait: Claude is building/);
+  assert.doesNotMatch(rebuilding, /act:(build|ship|fix)/, "nothing that would race the build");
+  assert.match(card({ activity: { state: "running", what: "the UI test" } }), /Approve here/, "a running job that does not wait keeps Next");
+
+  // replanOf: when the plan and its answers were written, against the PR's head commit
+  const built = "2026-10-31T04:31:00Z";
+  assert.equal(plans.replanOf({ planAt: "2026-10-31T00:58:00Z", answeredAt: "2026-10-31T04:48:00Z" }, built), "plan", "an answer after the build and the plan");
+  assert.equal(plans.replanOf({ planAt: "2026-10-31T05:58:00Z", answeredAt: "2026-10-31T04:48:00Z" }, built), "build", "re-planned after the build");
+  assert.equal(plans.replanOf({ planAt: "2026-10-31T05:58:00Z", answeredAt: "2026-10-31T04:48:00Z" }, "2026-10-31T06:19:00Z"), null, "rebuilt since");
+  assert.equal(plans.replanOf({ planAt: "2026-10-31T05:58:00.000+0000" }, "2026-10-31T06:19:00Z"), null, "Jira's time format compares as a time");
+  assert.equal(plans.replanOf({ planAt: "2026-10-31T05:58:00Z" }, null), null, "no PR commit: nothing to compare");
+  const ctx = plans.planContext([{ author: "app/pipeline", body: `${plans.PLAN_MARK}\n### Build plan\n\nthe plan`, created: "2026-10-31T00:58:00Z", updated: "2026-10-31T05:58:00Z" },
+    { author: "dana", body: "/build", created: "2026-10-31T06:02:00Z" }, { author: "dana", body: "Apex, please", created: "2026-10-31T06:00:00Z" }]);
+  assert.deepEqual([ctx.planAt, ctx.answeredAt], ["2026-10-31T05:58:00Z", "2026-10-31T06:00:00Z"], "a re-plan edits the comment in place; a bare command is no answer");
+});
+
 test("story card draws the stages as a coloured flow; trackers without Mermaid get the table only", () => {
   const card = storyCard({ key: "2", repoUrl: "https://github.com/o/r", branch: "issue-2", base: "release/w", ai: {} });
   assert.match(card, /```mermaid\nflowchart LR\n  s0\["✅ Branch \+ org"\]:::done\n  s1\["⬜ Build"\]:::waiting\n  s0 --> s1/);

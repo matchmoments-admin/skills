@@ -26,8 +26,9 @@ export function personal(c) {
 }
 
 /**
- * comments: [{ author, body, created }] oldest first (GitHub issue comments or Jira comments as text).
- * Returns { plan, answers[] }: the latest build plan, and what people wrote after it (no /commands, no pipeline posts).
+ * comments: [{ author, body, created, updated }] oldest first (GitHub issue comments or Jira comments as text).
+ * Returns { plan, answers[], planAt, answeredAt }: the latest build plan, and what people wrote after it (no /commands,
+ * no pipeline posts); when the plan was last written (a re-plan edits it in place) and when the last answer came.
  */
 export function planContext(comments, { mark = PLAN_MARK, title = PLAN_TITLE } = {}) {
   const sorted = [...comments].sort((a, b) => String(a.created).localeCompare(String(b.created)));
@@ -35,8 +36,24 @@ export function planContext(comments, { mark = PLAN_MARK, title = PLAN_TITLE } =
   if (at < 0) return { plan: null, answers: [] };
   const plan = sorted[at].body.replace(mark, "").replace(/^(⏳ \*\*Now:\*\*|❌ \*\*Failed:\*\*).*\n*/m, "").replace(/<!-- story:\d+ -->\n?/, "")
     .replace(/\n\*\*(Do it from here|Story):\*\*[\s\S]*$/, "").trim();   // a status line or the story link is not the spec
-  const answers = sorted.slice(at + 1).map(personal).filter(Boolean);
-  return { plan, answers };
+  const said = sorted.slice(at + 1).filter((c) => personal(c));
+  const answers = said.map(personal);
+  return { plan, answers, planAt: sorted[at].updated || sorted[at].created || null, answeredAt: said.length ? said[said.length - 1].created || null : null };
+}
+
+/**
+ * Is the PR's build older than what the story now asks? ({ planAt, answeredAt }: planContext; built: when the PR's
+ * head commit was made.) "plan": a person answered after the plan and after the build (re-plan with it, or rebuild:
+ * answers win); "build": the plan was rewritten after the build; null: the build is current. PR #460 was built as a
+ * Flow, then re-planned in Apex, and the card still said "Approve here". Pure.
+ */
+export function replanOf({ planAt, answeredAt } = {}, built) {
+  const t = (x) => (x ? Date.parse(x) || 0 : 0);   // Jira's "+0000" and GitHub's "Z" compare as times, not text
+  const b = t(built), plan = t(planAt), answer = t(answeredAt);
+  if (!b) return null;
+  if (answer > b && answer > plan) return "plan";
+  if (plan > b) return "build";
+  return null;
 }
 
 /** The story file every agent reads: the story, then (when there is one) the agreed plan and the answers to it. */

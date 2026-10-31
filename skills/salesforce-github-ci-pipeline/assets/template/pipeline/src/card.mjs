@@ -4,7 +4,7 @@
 // storyCards() puts it on the story and its PR (and moves the board), through the code host and the tracker.
 import { CHECKS, storyBranch, aiFeatures, context, setting, sprintOf, storyOf } from "./conventions.mjs";
 import { latestCheck, approval, requiredVerdicts, evaluate, route, standing, checkState, STATUS } from "./gate.mjs";
-import { planContext, planState } from "./plan.mjs";
+import { planContext, planState, replanOf } from "./plan.mjs";
 import { stageOf, moveCard } from "./board.mjs";
 import { checklist, allowed } from "./actions.mjs";
 import { notice, slackNotifier } from "./notify.mjs";
@@ -20,9 +20,12 @@ const stateOf = (c) => ({ passed: "done", failed: "failed", missing: "waiting", 
 /**
  * input: { key, repoUrl, branch, base, ai, pr?, facts?, decision? }
  *   pr/facts/decision are absent before the PR exists. facts = facts.gather(), decision = gate.evaluate(facts).
+ *   replan: "plan" | "build" | null (plan.replanOf): the story asks for more than the PR's build has.
+ *   activity.wait: a job is changing the story (Claude planning or building it): Next says wait, and nothing is offered
+ *   that the job would undo.
  * returns markdown.
  */
-export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null, planned = false, releasePr = null }) {
+export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null, planned = false, releasePr = null, replan = null }) {
   const now = activityLine(activity);
   const rows = [];
   const prUrl = pr ? `${repoUrl}/pull/${pr.number}` : null;
@@ -30,12 +33,13 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
   if (planned) rows.push(["done", "Plan agreed", "the **Build plan** comment on this story, with the answers to it, is part of the spec"]);
   rows.push(["done", "Branch and scratch org", `${branchLink} from \`${base}\`; org \`${branch}\` (production's shape, its customisations and test data)`]);
 
+  const wait = activity?.state === "running" && activity.wait ? `Wait: ${activity.what}. This card updates when it is done.` : null;
   let next;
   if (!pr) {
     rows.push(["waiting", "Build", ai.implement ? `build on ${branchLink} and open a PR into \`${base}\`, or comment **/build** on this story` : `build on ${branchLink} and open a PR into \`${base}\``]);
-    next = ai.implement ? "Build it, or tick **Build it with Claude** below." : `Build it on ${branchLink} and open a pull request.`;
+    next = wait || (ai.implement ? "Build it, or tick **Build it with Claude** below." : `Build it on ${branchLink} and open a pull request.`);
     // an admin can build it by clicking in the story's org, then bring the changes in (story-retrieve)
-    return render(key, next, rows, now, allowed([...(planned ? [] : ["plan"]), "build", "org-login-admin", "retrieve", "org-login"], ai));
+    return render(key, next, rows, now, allowed(wait ? ["org-login-admin", "org-login"] : [...(planned ? [] : ["plan"]), "build", "org-login-admin", "retrieve", "org-login"], ai));
   }
 
   const merged = pr.state === "MERGED";
@@ -81,12 +85,16 @@ export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, fact
     else if (waiting && waiting[1] === "Approval") next = `**[Approve here](${prUrl}/files)**: everything else is green.`;
     else next = waiting ? `${waiting[1]}: ${waiting[2]}` : "Waiting.";
   }
+  const open = !merged && !shipped && pr.state !== "CLOSED";
+  if (open && wait) next = wait;
+  else if (open && replan === "plan") next = `A comment on this story came after this build. Tick **Plan it with Claude** to re-plan with it (or **Build it with Claude** to rebuild now: answers win over the plan). Do not approve this build yet.`;
+  else if (open && replan === "build") next = "The build plan changed after this build. Tick **Build it with Claude** to rebuild it. Do not approve this build yet.";
   const mergedActions = merged && !shipped && base !== "main" && !releasePr ? ["release-cut"] : [];   // nobody has cut the release yet
   if (mergedActions.length) next = `${next} When the sprint's stories are merged, tick **Cut the sprint's release** below.`;
   // who the story needs now (journey.needs, from Standing): its approver once everything else passed (notifyNeeds
   // mentions them once)
   const needs = st && !merged ? whoIsNeeded(st, facts, { decision, prUrl, key }) : null;
-  return render(key, next, rows, now, merged ? mergedActions : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision }), { needs, head: pr });
+  return render(key, next, rows, now, merged ? mergedActions : pr.state === "CLOSED" ? ["start"] : storyActions(rows, { ai, base, ci: ciState, decision, replan, wait: Boolean(wait) }), { needs: replan || wait ? null : needs, head: pr });
 }
 
 /** The Approval row: who approved, or who should and how; a refused approval says why (approval() in gate.mjs). */
@@ -98,15 +106,18 @@ function approvalText(a, { merged, prUrl, how, approver, team = [] }) {
 }
 
 /** The boxes a story PR's card offers, from where it stands (pure). */
-function storyActions(rows, { ai, base, ci }) {
+function storyActions(rows, { ai, base, ci, replan = null, wait = false }) {
+  if (wait) return allowed(["org-login", "org-login-admin"], ai);   // a fix, a sign-off or a rebuild now would race the job
   const at = (stage) => rows.find((r) => r[1] === stage)?.[0];
   const ids = [];
+  if (replan === "plan") ids.push("plan", "build");
+  if (replan === "build") ids.push("build");
   if (ci === "failed") ids.push("fix", "ci");
   if (at("AI review") === "failed") ids.push("fix", "review", "review-ok");
   else if (["waiting", "running"].includes(at("AI review"))) ids.push("review");
   if (["failed", "waiting"].includes(at("UI test"))) ids.push(ai.uiTest ? "ai-test" : "test");
   if (at("UI test") === "failed") ids.push("fix");   // the fixer reads the Playwright error
-  if (at("Approval") === "waiting" && base !== "main") ids.push("ship");
+  if (at("Approval") === "waiting" && base !== "main" && !replan) ids.push("ship");
   if (at("Approval") === "waiting") ids.push("org-login");   // the approver can see the feature in the story's org
   ids.push("org-login-admin", "retrieve");   // a change made by clicking in the story's org comes in as a commit
   return allowed([...new Set(ids)], ai);
@@ -383,9 +394,13 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
     const ai = aiFeatures();
     const openRel = host.openRelease();
     const f = pr ? host.prFacts(pr.number) : null;
-    const planned = Boolean(planContext(await tracker.comments(key).catch(() => [])).plan);
+    const pc = planContext(await tracker.comments(key).catch(() => []));
+    const planned = Boolean(pc.plan);
+    // when the PR's head commit was made: a plan or an answer after it asks for a rebuild (replanOf)
+    const built = (f?.pr?.commits || []).map((c) => c.committedDate).filter(Boolean).sort().pop() || null;
+    const replan = pr?.state === "OPEN" ? replanOf(pc, built) : null;
     const releasePr = pr?.state === "MERGED" && openRel ? host.releasePrOf(openRel) : null;   // memoized per process
-    return { branch, pr, ai, facts: f, planned, releasePr, sprintOpen: Boolean(openRel), base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
+    return { branch, pr, ai, facts: f, planned, replan, releasePr, sprintOpen: Boolean(openRel), base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
   }
   // A Now update in a process that read no facts (#427): the card already on the story with its Now line replaced, on
   // the story and its PR, without the facts read (~16 requests). Only while the card describes the PR as it is now
@@ -393,7 +408,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
   // Now line changed. A new push, a merged or closed PR, a failure (its rows, Next and retry boxes), no card yet or a
   // tracker that cannot read its card back (Jira): false, and the caller does the full refresh.
   async function nowOnly(key, activity) {
-    if (activity?.state !== "running" || !tracker.prior) return false;
+    if (activity?.state !== "running" || activity.wait || !tracker.prior) return false;   // a wait changes Next and the boxes
     const pr = host.storyPr(storyBranch(key));
     const before = await tracker.prior(key, CARD_MARK).catch(() => "");
     const on = headOf(before);
@@ -420,7 +435,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
           else if (!(s?.labels || []).includes("spec")) await write(tracker, key, newStoryCard({ key, ai: aiFeatures(), plan, sprintOpen: c.sprintOpen }), { name });
           return;
         }
-        const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, base: c.base, releasePr: c.releasePr,
+        const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, replan: c.replan, base: c.base, releasePr: c.releasePr,
           shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null, activity });
         await write(tracker, key, body, { kinds: ["you", "failed"] });
         if (c.pr) {

@@ -125,6 +125,27 @@ test("start decisions: a job that has nothing to do is decided before a runner s
   const over = start.decide("fix", { ai: on, branch: "issue-1", rounds: { n: 2, limit: 2 } });
   assert.deepEqual([over.run, over.stop], [false, true]);
   assert.equal(start.decide("fix", { ai: on, branch: "issue-1", rounds: { n: 1, limit: 2 } }).run, true);
+  assert.match(start.decide("fix", { ai: on, branch: "issue-1", fixing: true }).why, /already fixing/, "one fix at a time per PR (#460)");
+  const inFlight = [{ display_title: "ai-fix PR #9", status: "completed" }, { display_title: "ai-fix PR #8", status: "queued" }];
+  assert.equal(verdict.fixInFlight(inFlight, 9), false, "a finished fix does not count");
+  assert.equal(verdict.fixInFlight(inFlight, 8), true, "a queued one does");
+  assert.equal(verdict.fixInFlight([{ display_title: "ai-fix PR #8", status: "in_progress" }], 8), true);
+  // the build pushes the sprint merge with its own commit: pushed alone, it ran CI on the old code and queued a fix
+  const impl = readFileSync(new URL("../../.github/workflows/ai-implement.yml", import.meta.url), "utf8");
+  const merge = impl.slice(impl.indexOf("name: Bring the story branch up to date"), impl.indexOf("uses: ./.pipeline/.github/actions/sf-auth"));
+  assert.doesNotMatch(merge, /git push/, "no push before the build");
+  assert.match(impl, /git merge-base --is-ancestor "origin\/\$BRANCH" HEAD; then git push -q origin "HEAD:\$BRANCH"/, "unpushed commits go up after it, never forced");
+  // a started story is re-planned on its own branch, and its plan says /build, not /start
+  const pl = readFileSync(new URL("../../.github/workflows/ai-plan.yml", import.meta.url), "utf8");
+  assert.match(pl, /git fetch -q origin "\$BRANCH" 2>\/dev\/null; then\n\s+git checkout -q "origin\/\$BRANCH"; echo "base=\$BRANCH" >> "\$GITHUB_OUTPUT"; echo "started=true"/);
+  // Code Analyzer skips a custom ruleset it cannot find, silently (exit 0): the assert rule must stay wired to its file
+  const ca = readFileSync(new URL("../../code-analyzer.yml", import.meta.url), "utf8");
+  const ruleset = ca.match(/custom_rulesets: \["([^"]+)"\]/)?.[1];
+  assert.ok(ruleset && existsSync(new URL(`../../${ruleset}`, import.meta.url)), "the custom ruleset code-analyzer.yml names exists");
+  assert.match(readFileSync(new URL(`../../${ruleset}`, import.meta.url), "utf8"), /name="ApexUnitTestMethodShouldAssertOrVerify"/);
+  assert.match(ca, /ApexUnitTestClassShouldHaveAsserts: \{ tags: \[\] \}\n\s+ApexUnitTestMethodShouldAssertOrVerify: \{ severity: 2, tags: \["Recommended"/, "the built-in rule is off only while ours is on");
+  const fix = readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8");
+  for (const [wf, text] of [["ai-implement", impl], ["ai-plan", pl], ["ai-fix", fix]]) assert.match(text, /story card "\$KEY" --now "[^"]+" --hold/, `${wf}: the card says wait while it works`);
   // ui-test
   assert.equal(start.decide("ui-test", { ai: {}, branch: "issue-1", mode: "ai" }).off, "AI_UI_TEST");
   const none = start.decide("ui-test", { ai: on, branch: "issue-12", mode: "run", hasSpec: false });

@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<!-- Code Analyzer (code-analyzer.yml): PMD's "a test method must assert", where an fflib mock verify counts as one.
+     mocks.verify(uow, 0)).registerNew(...) proves "nothing was registered" as surely as an Assert (#460). -->
+<ruleset name="__project__" xmlns="http://pmd.sourceforge.net/ruleset/2.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+  <description>Test methods assert or verify a mock.</description>
+  <rule ref="category/apex/bestpractices.xml/ApexUnitTestClassShouldHaveAsserts" name="ApexUnitTestMethodShouldAssertOrVerify">
+    <properties><property name="additionalAssertMethodPattern" value="\w*[Mm]ocks\.verify"/></properties>
+  </rule>
+</ruleset>

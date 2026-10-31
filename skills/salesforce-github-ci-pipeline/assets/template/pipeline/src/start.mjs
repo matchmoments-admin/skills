@@ -5,7 +5,7 @@
 import { storyOf, storyBranch, sprintOf, uiNeeded } from "./conventions.mjs";
 import { STATUS, REVIEW, standing, carriedFrom, RESULTS } from "./gate.mjs";
 import { CHECKS, LIVE_TESTS_CHECK } from "./conventions.mjs";
-import { fixRoundsUsed, MAX_FIX_ROUNDS, REVIEW_LINE, reviewComments } from "./verdict.mjs";
+import { fixRoundsUsed, fixInFlight, MAX_FIX_ROUNDS, REVIEW_LINE, reviewComments } from "./verdict.mjs";
 import { triageFix, fixSkippedMessage } from "./jev.mjs";
 
 /** What kind of branch this is: story | release | backmerge | maintenance. One rule for every workflow. Pure. */
@@ -111,7 +111,7 @@ export function stagingPlanFor({ git, host: h, branch, policy }) {
 /**
  * May this job start? kind: review | fix | ui-test. facts: { ai, branch, labels: [name], rounds: { n, limit } | null,
  * changed: [file] | null (against the base; null if unknown), pushed: [file] | null (this push only, for a review on
- * a push), mode: ai | run, hasSpec, review / ui: the verdict that stands on the head (gate.standing), explicit: a
+ * a push), fixing: an AI fix of this PR is already queued or running, mode: ai | run, hasSpec, review / ui: the verdict that stands on the head (gate.standing), explicit: a
  * person asked (a label or ticked box), which runs again whatever stands, budget: the story's AI budget
  * (roles.storyBudget) or null }. Returns { run: true } or { run: false, why, off?, status?, stop?, budget? }:
  * off: the AI flag is off (say so on the PR); status: a verdict to post on the head instead; stop: the fix rounds
@@ -144,6 +144,7 @@ function decideRun(kind, f) {
     if (!ai.fix) return { run: false, off: "AI_FIX", why: "AI fix is off" };
     if (bk !== "story") return { run: false, why: "only story PRs get AI fixes" };
     if (labels.includes("blocked")) return { run: false, why: "blocked: a person is on it" };
+    if (f.fixing) return { run: false, why: "Claude is already fixing this PR: its push runs CI and the review again" };
     if (f.rounds && f.rounds.n >= f.rounds.limit) return { run: false, stop: true, why: `${f.rounds.n} of ${f.rounds.limit} fix rounds used since a person last pushed` };
     return { run: true };
   }
@@ -211,6 +212,7 @@ export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, budg
     changed: kind === "review" ? files(p.baseRefName, p.headRefOid) : null,
     pushed: kind === "review" && before ? files(before, after || p.headRefOid) : null,
     rounds: kind === "fix" ? { n: fixRoundsUsed(pr, { host, gh }), limit: MAX_FIX_ROUNDS } : null,
+    fixing: kind === "fix" && fixInFlight(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), pr),
     hasSpec: kind === "ui-test" && mode !== "ai" ? Boolean(key && host.api("GET", `repos/${host.repo}/contents/e2e/story-${key}.spec.ts?ref=${p.headRefOid}`)?.sha) : false,
     budget: key && (kind !== "ui-test" || mode === "ai") ? budgetOf(key) : null,
   });

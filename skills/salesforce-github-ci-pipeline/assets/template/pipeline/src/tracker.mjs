@@ -22,9 +22,9 @@ export function githubTracker({ gh, ghPages, repo = process.env.GH_REPO || proce
       return { key: String(i.number), title: i.title, body: i.body, state: i.state, labels: i.labels.map((l) => l.name), url: i.url, sprint: i.milestone?.title || null };
     },
     async comment(key, text) { wrote(key); gh(["issue", "comment", String(key), "--body", text]); },
-    /** Comments oldest first: { author, body, created }. */
+    /** Comments oldest first: { author, body, created, updated }. */
     async comments(key) {
-      return raw(key).map((c) => ({ author: c.user?.login || "", body: c.body || "", created: c.created_at }));
+      return raw(key).map((c) => ({ author: c.user?.login || "", body: c.body || "", created: c.created_at, updated: c.updated_at }));
     },
     /** The body of the comment with this marker now, or "" (the card before an update: who it asked for). */
     async prior(key, mark) {
@@ -106,7 +106,7 @@ export function jiraTracker({ fetch = globalThis.fetch, base = setting("JIRA_BAS
     /** Comments oldest first; the pipeline's own (posted as the API user) read as "app/pipeline". */
     async comments(key) {
       const all = (await call("GET", `/rest/api/3/issue/${key}/comment?maxResults=100&orderBy=created`))?.comments || [];
-      return all.map((c) => ({ author: c.author?.emailAddress === email ? "app/pipeline" : (c.author?.displayName || ""), body: adfToText(c.body), created: c.created }));
+      return all.map((c) => ({ author: c.author?.emailAddress === email ? "app/pipeline" : (c.author?.displayName || ""), body: adfToText(c.body), created: c.created, updated: c.updated }));
     },
     async card(key, body, mark, title) {
       const text = body.replace(mark, "").replace(/```mermaid[\s\S]*?```\n*/g, "").trim();   // Jira draws no Mermaid and shows HTML comments as text

@@ -19,7 +19,7 @@
 //   agent     budget <role> [--key K] [--changed F]     the role's provider, model and turns (config/ai-models.json)
 //   harness   overlay implement|fix|ui-test|staging [--from DIR]   main's rules and harness over the checkout, hidden
 //   tracker   story <key> [--out file] [--pack [--base B]] · comment <key> <text> · open-sprint <sprint> · assign <key> --sprint S
-//   story     card <key> | --branch B [--base B] [--tag T] [--now "what" [--failed] [--retry "how"]] [--starting]
+//   story     card <key> | --branch B [--base B] [--tag T] [--now "what" [--failed | --hold] [--retry "how"]] [--starting]
 //             plan-pending <key> [--failed] · plan-post <key> --file F [--started] · readiness <key>
 //   tests     run <alias> --base B [--sha S] [--all] [--min 75] [--out dir]   relevant (or all) tests, live check run
 //             flow-gaps --base B                        every changed record-triggered Flow has a Flow test
@@ -329,7 +329,8 @@ const commands = {
   "story card": async () => {
     const key = arg(0) || names.storyOf(flag("branch") || "");
     if (!key) return say(`not a story branch (${flag("branch") || "none"}): no card`);
-    const activity = flag("now") ? { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl, retry: flag("retry") } : null;
+    // --hold: the job changes the story (a plan, a build): Next says wait and the card offers nothing it would undo
+    const activity = flag("now") ? { state: has("failed") ? "failed" : "running", what: flag("now"), url: host.runUrl, retry: flag("retry"), wait: has("hold") } : null;
     if (activity) record("stage", { story: key, what: activity.what, state: activity.state });
     if (has("starting")) { await cards.starting(key, activity); return say(`starting card for ${key}`); }
     await cards.refresh(key, { base: flag("base"), tag: flag("tag"), activity, light: Boolean(activity) });   // --now: the Now line alone while the card describes the PR's head (#427); --failed: always the full card
