@@ -1,7 +1,7 @@
 .sf/
 .sfdx/
 secrets/
-node_modules/
+node_modules
 test-results/
 playwright-report/
 *.key
