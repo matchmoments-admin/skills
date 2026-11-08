@@ -803,7 +803,8 @@ test("tree seed: a plan read into records in plan order, @references as parents,
   const files = Object.fromEntries(real.map((f) => [f, readFileSync(new URL(`../../data/seed/${f}`, import.meta.url), "utf8")]));
   const seed = treeSeedRecords(expandSeed(files, { today: TODAY }));
   assert.ok(seed.length > 150 && !seed.some((r) => JSON.stringify(r).includes("${")), "the real core seed reads whole: every token filled, no marker");
-  assert.deepEqual(foldedStories(files), ["293", "444"], "the stories folded into it (their seed scopes are superseded)");
+  // which stories a seed has folded in, from its file names (not this repo's seed: a new repo's template has none)
+  assert.deepEqual(foldedStories({ "Account.json": "{}", "story-293-Account.json": "{}", "story-444-Visit__c.json": "{}", "story-444-Account.json": "{}" }), ["293", "444"], "the stories folded into it (their seed scopes are superseded)");
   assert.throws(() => treeSeedRecords({ "plan.json": JSON.stringify([{ sobject: "Contact", files: ["C.json", "Gone.json"] }]), "C.json": JSON.stringify({ records: [{ attributes: { type: "Contact", referenceId: "C1" }, AccountId: "@Nope", Account: { records: [] } }, { attributes: { type: "Contact", referenceId: "C1" } }] }) }),
     (e) => e instanceof DataRequestError && e.problems.length === 4 && /@Nope is not a record earlier/.test(e.problems.join()) && /nested records/.test(e.problems.join()) && /C1 is used twice/.test(e.problems.join()) && /Gone\.json, which is not there/.test(e.problems.join()));
 });
