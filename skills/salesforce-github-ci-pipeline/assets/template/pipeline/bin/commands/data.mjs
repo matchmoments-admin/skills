@@ -40,7 +40,11 @@ export function dataCommands({ flag, has = () => false, output, say, orgs }) {
   };
   // a typed request without --scope is the "by hand" set: the next one typed replaces it
   const scopeFor = (file) => flag("scope") || scopeOf(file) || (flag("data") ? "by hand" : required("scope", '"sandbox demo"'));
-  /** A request that does not fit says every problem as a list, and the step output carries them too. */
+  /**
+   * A request that does not fit says every problem as a list, and the step output carries them too. Contract: each
+   * problem is a line starting "- " on stderr; story-data.yml replies with those lines, and fails the run on an error
+   * without them (not the request's fault).
+   */
   const explained = (command) => () => {
     try { return command(); } catch (e) {
       if (e instanceof DataRequestError) { output({ ok: false, problems: e.problems.join(" | ") }); throw new Error(`The test data request cannot be loaded:\n${bullets(e.problems)}`); }

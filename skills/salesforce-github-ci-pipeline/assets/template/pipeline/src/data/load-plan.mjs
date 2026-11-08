@@ -49,6 +49,11 @@ function checkSetValues(objectSchema, entry, problems) {
       if (!recordTypes.includes(entry.set.RecordType)) problems.push(`${entry.object} has no available record type "${entry.set.RecordType}"${didYouMean(entry.set.RecordType, recordTypes)}`);
     } else if (!objectSchema.fields[field]) {
       problems.push(`${entry.object}.${field} is not a field the API can set${didYouMean(field, Object.keys(objectSchema.fields))}`);
+    } else {
+      const f = objectSchema.fields[field], value = String(entry.set[field]);
+      if (f.kind === "picklist" && !f.anyValue && !String(value).startsWith("${") && !f.values.includes(value)) {
+        problems.push(`${entry.object}.${field} has no active value "${value}"${didYouMean(value, f.values) || ` (its values: ${f.values.slice(0, 8).join(", ")}${f.values.length > 8 ? ", ..." : ""})`}`);
+      }
     }
   }
 }

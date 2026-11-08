@@ -70,7 +70,11 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
     const r = foldSeeds({ plan: JSON.parse(readFileSync(`${dir}/plan.json`, "utf8")), files: read(dir) }, keys.map((k) => ({ key: k, plan: JSON.parse(readFileSync(`${root}/${k}/plan.json`, "utf8")), files: read(`${root}/${k}`) })));
     for (const [f, t] of Object.entries(r.files)) writeFileSync(`${dir}/${f}`, t);
     writeFileSync(`${dir}/plan.json`, JSON.stringify(r.plan, null, 2) + "\n");
-    for (const k of keys) rmSync(`${root}/${k}`, { recursive: true });
+    // the tree seed is folded; a Data request stays with its story (staging still loads it for the story's UI test)
+    for (const k of keys) {
+      for (const f of readdirSync(`${root}/${k}`).filter((x) => x !== "request.json")) rmSync(`${root}/${k}/${f}`, { recursive: true });
+      if (!readdirSync(`${root}/${k}`).length) rmSync(`${root}/${k}`, { recursive: true });
+    }
     output({ folded: keys.length, stories: keys.join(",") }); return say(`folded the seeds of ${keys.map((k) => `#${k}`).join(", ")} into data/seed`);
   },
   // after the masked production sample went into UAT: fail if any production email domain survived (uat-sample.yml)

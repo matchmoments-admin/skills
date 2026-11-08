@@ -34,7 +34,7 @@ export function profileQueries(schema, objects, { exclude = [] } = {}) {
 function objectQueries(o, excluded) {
   const fields = Object.values(o.fields).filter((f) => !excluded.has(`${o.name}.${f.name}`));
   const countable = fields.filter((f) => !["longtext", "multipicklist", "boolean"].includes(f.kind));   // COUNT(checkbox) is invalid SOQL, and a checkbox is never empty
-  const grouped = fields.filter((f) => (f.kind === "picklist" || f.kind === "boolean") && f.groupable !== false);
+  const grouped = fields.filter((f) => (f.kind === "picklist" || f.kind === "boolean") && f.groupable !== false && !f.anyValue);   // a combobox holds typed text
   const numbers = fields.filter((f) => f.kind === "number" && f.aggregatable !== false);
   const dates = fields.filter((f) => (f.kind === "date" || f.kind === "datetime") && f.groupable !== false);
   return [

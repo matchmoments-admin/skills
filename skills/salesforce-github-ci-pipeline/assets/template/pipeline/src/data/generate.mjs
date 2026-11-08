@@ -113,10 +113,15 @@ const isNameLike = (f, c) => f.name === c.objectSchema.nameField || ["LastName",
 const pad = (n) => String(n).padStart(3, "0");
 const truncate = (text, length) => (length ? text.slice(0, length) : text);
 
-/** The values the field may take here: active, not excluded by the rules, and valid for its controlling field's value. */
+/**
+ * The values the field may take here: active, not excluded by the rules, valid for its controlling field's value, and
+ * (for a controlling field) a value every required dependent has a valid value for, so a dependent is never left unfillable.
+ */
 function allowedValues(field, context) {
   const excluded = context.never[`${context.objectSchema.name}.${field.name}`] || [];
-  const allowed = field.values.filter((v) => !excluded.includes(v));
+  const dependents = Object.values(context.objectSchema.fields).filter((d) => d.controller === field.name && d.required);
+  const followable = (v) => dependents.every((d) => Object.values(d.validFor).some((controllers) => controllers.includes(String(v))));
+  const allowed = field.values.filter((v) => !excluded.includes(v) && followable(v));
   if (!field.controller) return allowed;
   const controlling = context.record.fields[field.controller];
   if (controlling === undefined) return [];

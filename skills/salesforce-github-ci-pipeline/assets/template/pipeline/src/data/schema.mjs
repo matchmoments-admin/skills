@@ -51,6 +51,7 @@ function fieldSchema(f, allFields) {
     length: f.length || null,
     scale: f.scale ?? null,
     values: kind === "picklist" || kind === "multipicklist" ? (f.picklistValues || []).filter((v) => v.active !== false).map((v) => v.value) : null,
+    anyValue: f.type === "combobox",   // a combobox takes free text: its values are suggestions
     controller: controller ? controller.name : null,
     validFor: controller ? validForOf(f, controller) : null,
     referenceTo: kind === "reference" ? f.referenceTo || [] : null,

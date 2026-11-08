@@ -4,11 +4,10 @@
 // storyCards() puts it on the story and its PR (and moves the board), through the code host and the tracker.
 import { CHECKS, storyBranch, aiFeatures, context, setting, sprintOf, storyOf } from "./conventions.mjs";
 import { latestCheck, approval, requiredVerdicts, evaluate, route, standing, checkState, STATUS } from "./gate.mjs";
-import { planContext, planState, replanOf } from "./plan.mjs";
+import { planContext, planState, replanOf, storyTestData } from "./plan.mjs";
 import { stageOf, moveCard } from "./board.mjs";
 import { checklist, allowed } from "./actions.mjs";
 import { notice, slackNotifier } from "./notify.mjs";
-import { storyTestData } from "./data/request.mjs";
 import { needs as whoIsNeeded } from "./journey.mjs";
 
 export const CARD_TITLE = "Pipeline status";

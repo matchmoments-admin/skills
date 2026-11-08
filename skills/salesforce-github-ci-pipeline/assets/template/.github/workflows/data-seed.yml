@@ -22,6 +22,9 @@ concurrency:
   cancel-in-progress: false
 env:
   PIPELINE_VARS: ${{ toJSON(vars) }}
+defaults:
+  run:
+    shell: bash   # with pipefail: `pipe ... | tee` fails when pipe does
 jobs:
   data:
     runs-on: ubuntu-latest
@@ -59,9 +62,14 @@ jobs:
           ORG="sandbox-$SANDBOX"
           case "$ACTION" in
             seed)
-              if [ -n "$DATA" ]; then node pipeline/bin/pipe.mjs data seed --org "$ORG" --data "$DATA" --scope "$SCOPE" | tee "$RUNNER_TEMP/out.txt"
-              else node pipeline/bin/pipe.mjs data seed --org "$ORG" --request "$REQUEST" --scope "$SCOPE" | tee "$RUNNER_TEMP/out.txt"; fi ;;
-            status) node pipeline/bin/pipe.mjs data status --org "$ORG" --scope "$SCOPE" | tee "$RUNNER_TEMP/out.txt" ;;
-            remove) node pipeline/bin/pipe.mjs data remove --org "$ORG" --scope "$SCOPE" | tee "$RUNNER_TEMP/out.txt" ;;
+          set +e   # the summary says what happened either way; the step then fails if pipe did
+          case "$ACTION" in
+            seed)
+              if [ -n "$DATA" ]; then node pipeline/bin/pipe.mjs data seed --org "$ORG" --data "$DATA" --scope "$SCOPE" 2>&1 | tee "$RUNNER_TEMP/out.txt"
+              else node pipeline/bin/pipe.mjs data seed --org "$ORG" --request "$REQUEST" --scope "$SCOPE" 2>&1 | tee "$RUNNER_TEMP/out.txt"; fi ;;
+            status) node pipeline/bin/pipe.mjs data status --org "$ORG" --scope "$SCOPE" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
+            remove) node pipeline/bin/pipe.mjs data remove --org "$ORG" --scope "$SCOPE" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
           esac
-          { echo "### Test data in sandbox \`$SANDBOX\` ($ACTION, set \"$SCOPE\")"; echo; sed 's/^/> /' "$RUNNER_TEMP/out.txt"; } >> "$GITHUB_STEP_SUMMARY"
+          status=$?
+          { echo "### Test data in sandbox \`$SANDBOX\` ($ACTION, set \"$SCOPE\"): $([ $status = 0 ] && echo done || echo "**failed**")"; echo; sed 's/^::error:://; s/^/> /' "$RUNNER_TEMP/out.txt"; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status

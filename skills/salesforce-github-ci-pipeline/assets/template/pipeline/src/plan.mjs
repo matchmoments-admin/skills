@@ -3,6 +3,7 @@
 // post the comments; this module decides what they say and what the agents read.
 
 import { isPipelineAuthor } from "./conventions.mjs";
+import { parseDataCommand, describeEntry } from "./data/request.mjs";
 
 export const PLAN_MARK = "<!-- pipeline:build-plan -->";
 export const PLAN_TITLE = "Build plan";
@@ -135,3 +136,23 @@ export function readinessComment(r) {
   const lines = readinessLines(r);
   return lines.length ? [READINESS_MARK, `### ${READINESS_TITLE} (checked by Jev)`, "", ...lines, "", "Comment **/plan** to have Claude propose the build and ask its questions first."].join("\n") : null;
 }
+
+/** The marker that ends the pipeline's /data success reply: the card reads the story's test data from it. */
+export const DATA_MARK = "<!-- pipeline:test-data -->";
+
+/**
+ * A story's test data in people's words, or null: the latest /data success reply (the pipeline's own, its first line
+ * "**Test data:** ...", ending with DATA_MARK), else the agreed plan's "### Test data" /data line. A refusal (which
+ * echoes typed text) and a person typing the marker never count. Pure: the comments and the plan are read already.
+ */
+export function storyTestData({ plan = null, comments = [] }) {
+  const reply = [...comments].filter(isDataReply).sort((a, b) => String(a.created).localeCompare(String(b.created))).pop();
+  const line = reply && String(reply.body).split("\n")[0].match(/\*\*Test data:\*\* (.+)$/)?.[1];
+  if (line) return line.trim();
+  const section = String(plan || "").match(/###\s*Test data\s*\n([\s\S]*?)(?=\n###\s|\n*PLAN-SIZE:|$)/i)?.[1] || "";
+  const typed = section.match(/\/data\b[^\n`]*/)?.[0];
+  if (!typed) return null;
+  const { request } = parseDataCommand(typed);
+  return request ? request.objects.map(describeEntry).join("; ") : null;
+}
+const isDataReply = (c) => String(c.body || "").trimEnd().endsWith(DATA_MARK) && (isPipelineAuthor(c.author) || c.author === "app/pipeline");

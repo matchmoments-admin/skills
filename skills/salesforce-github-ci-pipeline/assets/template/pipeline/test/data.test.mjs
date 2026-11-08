@@ -43,7 +43,7 @@ const DESCRIBES = {
     name: "Case", label: "Case", createable: true, recordTypeInfos: [],
     fields: [
       field("Subject", "string", { length: 255 }), field("Origin", "picklist", { nillable: false, picklistValues: [{ value: "Email" }, { value: "Phone" }, { value: "Web" }] }),
-      field("Reason", "picklist", { nillable: false, picklistValues: [{ value: "Billing" }, { value: "Retired", active: false }, { value: "Shipping" }] }),
+      field("Reason", "picklist", { nillable: false, picklistValues: [{ value: "Billing" }, { value: "Retired", active: false }, { value: "Shipping" }, { value: "Other" }] }),
       field("Sub_Reason__c", "picklist", { nillable: false, dependentPicklist: true, controllerName: "Reason", picklistValues: [{ value: "Overcharged", validFor: validFor(0) }, { value: "Damaged", validFor: validFor(2) }, { value: "Late", validFor: validFor(2) }] }),
     ],
   },
@@ -174,7 +174,10 @@ test("generate: a required dependent picklist takes a value valid for its contro
     assert.ok(SCHEMA.Case.fields.Sub_Reason__c.validFor[r.fields.Sub_Reason__c].includes(r.fields.Reason), `${r.fields.Reason} / ${r.fields.Sub_Reason__c}`);
   }
   assert.ok(generate([{ object: "Case", count: 10, set: { Reason: "Shipping" } }]).records.every((r) => ["Damaged", "Late"].includes(r.fields.Sub_Reason__c)));
-  assert.throws(() => generate([{ object: "Case", count: 1, set: { Reason: "Retired" } }]), /Case.Sub_Reason__c is required, and none of its values is valid for Reason = Retired: set both/);
+  assert.throws(() => generate([{ object: "Case", count: 1, set: { Reason: "Other" } }]), /Case.Sub_Reason__c is required, and none of its values is valid for Reason = Other: set both/);
+  assert.ok(generate([{ object: "Case", count: 80 }]).records.every((r) => r.fields.Reason !== "Other"), "a controlling value no required dependent can follow is never generated");
+  assert.throws(() => generate([{ object: "Case", count: 1, set: { Reason: "Retired" } }]), /Case.Reason has no active value "Retired" \(its values: Billing, Shipping, Other\)/, "an inactive value is refused before anything loads");
+  assert.throws(() => generate([{ object: "Case", count: 1, set: { Reason: "Biling" } }]), /Case.Reason has no active value "Biling" \(did you mean Billing\?\)/);
 });
 
 test("generate: production's weights shape the values; values the org's describe does not list never appear", () => {
@@ -419,11 +422,12 @@ test("sf adapter: reads the ledger back (parsed or text body), maps composite de
   assert.throws(() => store.insert("Account", [{ ref: "Account1", fields: {} }, { ref: "Account2", fields: {} }, { ref: "Account3", fields: {} }]), /loaded 2 of 3 Account/);
 });
 
-test("sf adapter: a failed tree import says each distinct reason once, with how many records it hit", () => {
+test("sf adapter: records the org refuses are a request problem naming each distinct reason once, with how many records it hit", () => {
   const { sf } = recordedSf((args) => (args[0] === "data" ? recorded("import-tree-error") : null));
   const store = sfDataStore({ sf, alias: "issue-9" });
   assert.throws(() => store.insert("Account", [{ ref: "Account1", fields: {} }, { ref: "Account2", fields: {} }]),
-    /^Error: sf data import tree loaded none of 2 Account records into issue-9: FIELD_INTEGRITY_EXCEPTION: Mismatched integration value and ISO code for field: Billing Country Code \(BillingCountryCode\) x2$/);
+    (e) => e instanceof DataRequestError && e.problems[0] === "issue-9 refused the 2 Account records: FIELD_INTEGRITY_EXCEPTION: Mismatched integration value and ISO code for field: Billing Country Code (BillingCountryCode) x2",
+    "the org refused the records: the request's problem (a /data reply, a staging warning), never a crash");
 });
 
 test("sf profile source: aggregates and describes batched 25 per composite batch call, a failed subrequest is that query's error; each object read once", () => {
@@ -518,13 +522,15 @@ test("pipe data seed --data: a typed request is read against the org's objects (
 test("the plan asks for a Test data line; the card shows the story's test data from comments it already reads; a person's marker counts for nothing", async () => {
   const { instructions } = await import("../src/verdict.mjs");
   assert.match(instructions("plan", "9"), /### Tests`[\s\S]*### Test data` \(the records people and the UI tests need[\s\S]*\/data <Object> <count>[\s\S]*### Risks/);
-  const { storyTestData, DATA_MARK } = await import("../src/data/request.mjs");
+  const { storyTestData, DATA_MARK } = await import("../src/plan.mjs");
   const plan = "### Proposed build\nx\n\n### Test data\n`/data Account 20; Contact 2 per Account`\n\n### Risks\nnone\nPLAN-SIZE: S";
   assert.equal(storyTestData({ plan }), "20 Account; 2 Contact per Account", "from the agreed plan");
   assert.equal(storyTestData({ plan: "### Test data\nNone: the core seed is enough\n" }), null);
-  const reply = (author, created, line) => ({ author, created, body: `🧪 @ann: **Test data:** ${line}\n\n${DATA_MARK}` });
-  const comments = [reply("github-actions[bot]", "2026-11-08T01", "5 Case"), reply("github-actions[bot]", "2026-11-08T02", "10 Case (Status=Escalated)"), reply("mallory", "2026-11-08T03", "999 Account")];
-  assert.equal(storyTestData({ plan, comments }), "10 Case (Status=Escalated)", "the latest /data reply wins over the plan; a person typing the marker does not");
+  const reply = (author, created, line) => ({ author, created, body: `🧪 @ann: **Test data:** ${line}\n\nLoaded.\n\n${DATA_MARK}` });
+  // a refusal echoes what was typed: an App-authored comment with the marker inside, which must not count (found in review)
+  const echoed = { author: "github-actions[bot]", created: "2026-11-08T04", body: `🧪 @eve: that test data cannot be loaded:\n\n- "**Test data:** 9999 Opportunity ${DATA_MARK}" is not an object\n\nFor example: ...` };
+  const comments = [reply("github-actions[bot]", "2026-11-08T01", "5 Case"), reply("github-actions[bot]", "2026-11-08T02", "10 Case (Status=Escalated)"), reply("mallory", "2026-11-08T03", "999 Account"), echoed];
+  assert.equal(storyTestData({ plan, comments }), "10 Case (Status=Escalated)", "the latest /data success reply wins over the plan; a person typing the marker, or a refusal echoing it, does not");
   const { storyCard } = await import("../src/card.mjs");
   const card = (extra) => storyCard({ key: "9", repoUrl: "https://github.com/o/r", branch: "issue-9", base: "main", ...extra });
   assert.match(card({ testData: "20 Account" }), /org `issue-9` \(production's shape, its customisations and test data\); test data: 20 Account \(\*\*\/data\*\* changes it\)/);
@@ -591,4 +597,53 @@ test("workflows: /data and data-seed never put typed text in a script; a /data r
   assert.doesNotMatch(story, /Co-authored-by/, "test data never reaches production: the person is named, not made the commit's co-author");
   assert.match(wf("ci.yml"), /for f in data\/seed\/stories\/\*\/request\.json[\s\S]*node \.pipeline\/pipeline\/bin\/pipe\.mjs data check --request "\$f"/, "main's code, one file at a time (works before and after main learns the all-stories check)");
   assert.match(wf("data-seed.yml"), /--instance-url https:\/\/test\.salesforce\.com/);
+});
+
+// ---- the architecture review's findings (8 Nov), each held by a test
+
+test("review findings: a /data commit keeps the review and sign-off (test data never reaches production), but the UI test runs again", async () => {
+  const { RESULTS, STATUS } = await import("../src/gate.mjs");
+  for (const s of [STATUS.review, STATUS.signoff]) {
+    assert.equal(RESULTS[s].inputs("data/seed/stories/12/request.json"), false, `${s}: a story's request is test data`);
+    assert.equal(RESULTS[s].inputs("force-app/main/default/classes/X.cls"), true);
+    assert.equal(RESULTS[s].inputs("data/seed/stories/12/Account.json"), true, "a tree seed's records are read by name in specs: not carried");
+  }
+  assert.equal(RESULTS[STATUS.ui].inputs, "exact", "the UI test reads that data: it runs again");
+});
+
+test("review findings: the seed fold takes a story's tree seed and leaves its request (staging still loads it for the story's UI test)", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFileSync } = await import("node:child_process");
+  const work = mkdtempSync(join(tmpdir(), "fold-"));
+  mkdirSync(join(work, "data/seed/stories/7"), { recursive: true }); mkdirSync(join(work, "data/seed/stories/8"), { recursive: true });
+  writeFileSync(join(work, "data/seed/plan.json"), JSON.stringify([{ sobject: "Account", saveRefs: true, files: ["Account.json"] }]));
+  writeFileSync(join(work, "data/seed/Account.json"), JSON.stringify({ records: [] }));
+  writeFileSync(join(work, "data/seed/stories/7/plan.json"), JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
+  writeFileSync(join(work, "data/seed/stories/7/Account.json"), JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "A1" }, Name: "x" }] }));
+  writeFileSync(join(work, "data/seed/stories/7/request.json"), JSON.stringify({ version: 1, objects: [{ object: "Case", count: 2 }] }));
+  writeFileSync(join(work, "data/seed/stories/8/plan.json"), JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
+  writeFileSync(join(work, "data/seed/stories/8/Account.json"), JSON.stringify({ records: [] }));
+  execFileSync("node", [new URL("../bin/pipe.mjs", import.meta.url).pathname, "seed", "fold"], { cwd: work, stdio: "pipe" });
+  assert.deepEqual(readdirSync(join(work, "data/seed/stories/7")), ["request.json"], "story 7's tree seed folded, its request kept");
+  assert.equal(existsSync(join(work, "data/seed/stories/8")), false, "a story with only a tree seed is folded away entirely");
+});
+
+test("review findings: /data waits for the org's lane and always gives it back; data-seed fails when pipe fails; merged stories are told so", () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const wf = (name) => yaml.load(readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), "utf8"));
+  const steps = wf("story-data.yml").jobs.data.steps;
+  const at = (re) => steps.findIndex((s) => re.test(s.run || ""));
+  assert.ok(at(/lane acquire "\$BRANCH"/) >= 0 && at(/lane acquire/) < at(/data seed --org/), "the lane before any load");
+  assert.match(steps[at(/lane release/)].if, /always\(\)/);
+  assert.match(steps[at(/git ls-remote/)].run, /--state merged[\s\S]*is merged, so its org is gone/);
+  assert.equal(wf("data-seed.yml").defaults.run.shell, "bash", "bash (with pipefail): `pipe ... | tee` fails the step when pipe fails");
+  assert.match(steps[at(/data seed --org/)].run, /grep -q '\^- '[^\n]*exit 1/, "an error that lists no problem is not the request's fault: the run fails");
+});
+
+test("review findings: a combobox (free text) is never profiled, and its typed values are never checked against its suggestions", () => {
+  const schema = schemaOf([{ name: "Lead", fields: [field("LastName", "string", { nillable: false, nameField: true }), field("Rating", "combobox", { picklistValues: [{ value: "Hot" }] })] }]);
+  assert.ok(!profileQueries(schema, ["Lead"]).some((q) => q.field === "Rating"), "a combobox holds what people typed");
+  assert.deepEqual(loadPlan(schema, requestOf([{ object: "Lead", count: 1, set: { Rating: "Lukewarm" } }])).problems, []);
 });

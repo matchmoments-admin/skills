@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { DEVHUB } from "./fleet.mjs";
 import { ledgerTitle, encodeLedger, decodeLedger, chunk } from "../data/ledger.mjs";
 import { isAggregate } from "../data/profile.mjs";
+import { DataRequestError } from "../data/request.mjs";
 
 export const BATCH_SIZE = 200;   // sf data import tree and the composite delete both take up to 200 records
 export const BATCH_QUERIES = 25;   // subrequests in one REST composite batch call (plain /composite runs only 5 queries)
@@ -95,7 +96,7 @@ export function sfProfileSource({ sf, alias = DEVHUB, apiVersion = "67.0" }) {
 /** A failed tree import's record errors, each distinct one once with how many records it hit: "FIELD_INTEGRITY_EXCEPTION ... (BillingCountryCode) x5". */
 function importErrors(reply) {
   const errors = Object.values(reply).filter((e) => e && typeof e === "object" && e.StatusCode).map((e) => `${e.StatusCode}: ${e.Message}${e.fields ? ` (${e.fields})` : ""}`);
-  if (!errors.length) return "no reason given";
+  if (!errors.length) return null;
   const counts = errors.reduce((acc, e) => acc.set(e, (acc.get(e) || 0) + 1), new Map());
   return [...counts].map(([e, n]) => `${e}${n > 1 ? ` x${n}` : ""}`).join("; ");
 }
@@ -143,7 +144,12 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
       writeFileSync(file, JSON.stringify({ records: records.map((r) => ({ attributes: { type: object, referenceId: r.ref }, ...r.fields })) }));
       // a failed import exits 1 with each record's error in its data: keep them (allowFail "json"), so the error says why
       const reply = sf(["data", "import", "tree", "--files", file, "-o", alias], { allowFail: "json" });
-      if (reply?.failed) throw new Error(`sf data import tree loaded none of ${records.length} ${object} records into ${alias}: ${importErrors(reply)}`);
+      if (reply?.failed) {
+        const refused = importErrors(reply);
+        // the org refused the records (a validation rule, a restricted value): the request's to change, so say it as one
+        if (refused) throw new DataRequestError([`${alias} refused the ${records.length} ${object} records: ${refused}`]);
+        throw new Error(`sf data import tree loaded none of ${records.length} ${object} records into ${alias} (no reason given)`);
+      }
       const rows = Array.isArray(reply) ? reply : reply?.records || [];
       const loaded = rows.filter((r) => r?.refId && r?.id).map((r) => ({ ref: r.refId, id: r.id }));
       if (loaded.length !== records.length) throw new Error(`sf data import tree loaded ${loaded.length} of ${records.length} ${object} records into ${alias}`);
