@@ -74,15 +74,17 @@ export const SF_FAILURES = [
 ];
 export const sfFailure = (message) => SF_FAILURES.find(([, re]) => re.test(String(message || "")))?.[0] || "real";
 
-export const sf = (args, opts) => {
+/** `sf` over a given runner: tests pass one that replays recorded CLI output, so the reply's unwrapping is the real one. */
+export const sfFrom = (runner) => (args, opts) => {
   let out;
-  try { out = run("sf", [...args, "--json"], { quiet: true, ...opts }); } catch (e) { e.kind = sfFailure(e.message); throw e; }
+  try { out = runner("sf", [...args, "--json"], { quiet: true, ...opts }); } catch (e) { e.kind = sfFailure(e.message); throw e; }
   if (out === null) return null;
   let j;
   try { j = parseJson(out); } catch (e) { if (opts?.allowFail) return null; throw e; }
   if (j.status && j.status !== 0 && !opts?.allowFail) throw Object.assign(new Error(j.message || `sf ${args[0]} failed`), { kind: sfFailure(j.message) });
   return opts?.allowFail === "json" && j.status ? { ...(j.result || j.data || {}), success: false, failed: true } : j.result;
 };
+export const sf = sfFrom(run);
 
 /** git output trimmed; null when the command fails and allowFail is set (so "not an ancestor" is not "") */
 export const git = (args, opts) => {

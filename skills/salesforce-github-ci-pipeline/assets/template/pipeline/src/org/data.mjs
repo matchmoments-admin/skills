@@ -1,10 +1,15 @@
-// Test data in an org: the synthetic seed (data/seed) and the staging volume records.
-// Part of Org provisioning (pipeline/src/org.mjs): orgRegistry composes these methods with the provisioning core.
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+// Test data in an org: the synthetic seed (data/seed), a story's Data request (generated from the org's own schema and
+// production's Data profile, tracked by a Data ledger), and the staging volume records. Part of Org provisioning
+// (pipeline/src/org.mjs): orgRegistry composes these methods with the provisioning core. Wiring only: loading a request
+// is the use case in pipeline/src/data/load.mjs, over the Org data store's sf adapter (./data-store.mjs).
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { baselineId as idOf } from "../baseline.mjs";
-import { DEVHUB } from "./fleet.mjs";
+import { PIPELINE_ROOT } from "../io.mjs";
+import { parseRequest, requestId, DataRequestError } from "../data/request.mjs";
+import { loadTestData, removeTestData, testDataStatus, guardAgainstProduction } from "../data/load.mjs";
+import { sfDataStore } from "./data-store.mjs";
 /** The seed's files with their date tokens filled in (data/seed/README.md). Pure: { name: text } -> { name: text }. */
 export function expandSeed(files, { today = new Date(), marker }) {
   const y = today.getUTCFullYear();
@@ -80,54 +85,113 @@ export function foldSeeds(core, stories) {
   return { plan, files };
 }
 
-/** The registry's data methods. ctx: orgRegistry's shared context (sf, log, env, ...). */
-export function dataMethods({ sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, active, deleteRecord }) {
-  return {
+
+const STORIES_DIR = "data/seed/stories";
+
+/** The registry's data methods. ctx: orgRegistry's shared context (sf, log, env, ...); dataRoot: main's trusted checkout. */
+export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active = () => [], dataRoot = PIPELINE_ROOT, makeStore = null }) {
+  const apiVersion = () => { try { return JSON.parse(readFileSync(join(dataRoot, "sfdx-project.json"), "utf8")).sourceApiVersion || "67.0"; } catch { return "67.0"; } };
+  const readJson = (path) => (existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null);
+  const stores = {};
+  // the Org data store for an org: the sf adapter, or the one a test passes (makeStore: alias -> store)
+  const storeFor = (alias) => (stores[alias] ||= makeStore ? makeStore(alias) : sfDataStore({ sf, alias, apiVersion: apiVersion(), active }));
+  const testDataOn = () => String(env.SEED || "on").toLowerCase() !== "off";
+  const loadDefaults = () => ({ profile: readJson(join(dataRoot, "baseline-facts/data-profile.json")), rules: readJson(join(dataRoot, "config/data-rules.json")) || {} });
+
+  /** The legacy seeds (data/seed by marker, then stories' plan.json) and the stories' Data requests, for this org kind. */
+  function seedSources({ story, stories }) {
+    if (!testDataOn()) return { seeds: [], requests: [] };
+    const id = seedId();
+    const root = join(process.cwd(), STORIES_DIR);
+    const has = (key, file) => existsSync(join(root, key, file));
+    const keys = stories === "all" ? (existsSync(root) ? readdirSync(root).filter((k) => has(k, "plan.json") || has(k, "request.json")).sort() : []) : story ? [String(story)] : [];
+    const seeds = id ? [{ dir: seedDir, marker: `[seed ${id}]`, stale: "Name LIKE '[seed %' AND (NOT Name LIKE '[seed story%')" }] : [];
+    for (const k of keys.filter((key) => has(key, "plan.json"))) seeds.push({ dir: join(root, k), marker: `[seed story ${k} ${idOf(join(root, k))}]`, stale: `Name LIKE '[seed story ${k} %'` });
+    const requests = keys.filter((key) => has(key, "request.json")).map((k) => ({ key: k, scope: `story ${k}`, file: join(root, k, "request.json") }));
+    return { seeds, requests };
+  }
+
+  /** One legacy seed (a tree plan with a marker Account), loaded once; an earlier version of it is removed by name first. */
+  function loadSeed(alias, { dir, marker, stale: staleWhere }) {
+    const have = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${marker}'`], { allowFail: true })?.records?.length;
+    if (have) { log(`${alias} already has ${marker}`); return false; }
+    const files = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => [f, readFileSync(join(dir, f), "utf8")]));
+    removeEarlierSeed(alias, files, staleWhere, marker);
+    withOwnMarker(files);
+    const out = mkdtempSync(join(tmpdir(), "seed-"));
+    for (const [n, t] of Object.entries(expandSeed(files, { marker }))) writeFileSync(join(out, n), t);
+    sf(["data", "import", "tree", "--plan", join(out, "plan.json"), "-o", alias]);
+    log(`loaded test data ${marker} into ${alias}`);
+    return true;
+  }
+
+  function removeEarlierSeed(alias, files, staleWhere, marker) {
+    const stale = (sf(["data", "query", "-o", alias, "-q", `SELECT Name FROM Account WHERE ${staleWhere}`], { allowFail: true })?.records || []).map((r) => r.Name);
+    if (!stale.length) return;
+    const apex = join(mkdtempSync(join(tmpdir(), "seed-replace-")), "replace.apex");
+    writeFileSync(apex, seedReplaceApex(files, stale));
+    if (sf(["apex", "run", "--file", apex, "-o", alias], { allowFail: true })) log(`${alias}: removed the earlier seed (${stale.join(", ")}) before loading ${marker}`);
+    else log(`::warning::${alias}: could not remove the earlier seed (${stale.join(", ")}); loading ${marker} beside it`);
+  }
+
+  /** A story's plan without its own marker gets one, so it too loads once. */
+  function withOwnMarker(files) {
+    if (files["plan.json"].includes("SEED_MARKER") || Object.values(files).some((t) => t.includes("${SEED_MARKER}"))) return;
+    files["SeedMarker.json"] = JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "SeedMarker" }, Name: "${SEED_MARKER}" }] });
+    files["plan.json"] = JSON.stringify([...JSON.parse(files["plan.json"]), { sobject: "Account", files: ["SeedMarker.json"] }]);
+  }
+
+  /**
+   * One story's request. In the story's own org a request that does not fit fails the build, loudly, where its author
+   * looks; in staging and UAT (every story's) it is a warning naming the story, and the other stories still load.
+   */
+  function loadStoryRequest(alias, { key, scope, file }, { isolate }) {
+    try {
+      const request = parseRequest(readFileSync(file, "utf8"));
+      const result = self.loadTestData(alias, { request, scope });
+      return result.loaded ? `[data ${scope} ${requestId(request)}]` : null;
+    } catch (e) {
+      if (!isolate || !(e instanceof DataRequestError)) throw e;
+      log(`::warning::${alias}: story ${key}'s test data was not loaded:\n${e.problems.map((p) => `  - ${p}`).join("\n")}`);
+      return null;
+    }
+  }
+
+  const self = {
     /**
      * Load the test data once per org: the core seed (data/seed, from main) unless its marker Account is already there
-     * (a snapshot holds it), then stories' own seeds (data/seed/stories/<key>/plan.json in the working directory), each
-     * once: a story org gets its story's (story), staging and UAT every story's in the release (stories: "all"). A
-     * changed seed replaces its earlier version (by its marker). sf data import tree only inserts, so the markers are what
-     * make it safe to repeat; a call that finds every marker costs a few queries. Scratch orgs only.
+     * (a snapshot holds it), then stories' own data (data/seed/stories/<key>/ in the working directory), each once: a
+     * story org gets its story's (story), staging and UAT every story's in the release (stories: "all"). A story's data
+     * is a tree plan (plan.json, by marker) or a Data request (request.json, by ledger), or both. SEED=off: none.
+     * Returns what was loaded: markers, and "[data <scope> <request id>]" for requests.
      */
     seed(alias, { story = null, stories = null } = {}) {
-      const loads = [];
-      const id = seedId();
-      if (id) loads.push({ dir: seedDir, marker: `[seed ${id}]`, stale: "Name LIKE '[seed %' AND (NOT Name LIKE '[seed story%')" });
-      const root = join(process.cwd(), "data/seed/stories");
-      const keys = stories === "all" ? (existsSync(root) ? readdirSync(root).filter((k) => existsSync(join(root, k, "plan.json"))).sort() : []) : story ? [String(story)] : [];
-      for (const k of keys) if (id && existsSync(join(root, k, "plan.json"))) loads.push({ dir: join(root, k), marker: `[seed story ${k} ${idOf(join(root, k))}]`, stale: `Name LIKE '[seed story ${k} %'` });
-      if (!loads.length) return [];
-      // never production: the Dev Hub is production here (and a production org is never a target of org ready anyway)
-      const [target, prod] = [sf(["org", "display", "-o", alias], { allowFail: true })?.id, sf(["org", "display", "-o", DEVHUB], { allowFail: true })?.id];
-      if (!target || (prod && String(target).slice(0, 15) === String(prod).slice(0, 15))) throw new Error(`refusing to load test data into ${alias}: it is production (or unknown)`);
-      const loaded = [];
-      for (const { dir, marker, stale: staleWhere } of loads) {
-        const have = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${marker}'`], { allowFail: true })?.records?.length;
-        if (have) { log(`${alias} already has ${marker}`); continue; }
-        const files = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => [f, readFileSync(join(dir, f), "utf8")]));
-        // an earlier version of this seed (the core, or the same story's) in this org: replaced, never loaded beside it
-        const stale = (sf(["data", "query", "-o", alias, "-q", `SELECT Name FROM Account WHERE ${staleWhere}`], { allowFail: true })?.records || []).map((r) => r.Name);
-        if (stale.length) {
-          const apex = join(tmpdir(), `seed-replace-${process.pid}.apex`);
-          writeFileSync(apex, seedReplaceApex(files, stale));
-          if (sf(["apex", "run", "--file", apex, "-o", alias], { allowFail: true })) log(`${alias}: removed the earlier seed (${stale.join(", ")}) before loading ${marker}`);
-          else log(`::warning::${alias}: could not remove the earlier seed (${stale.join(", ")}); loading ${marker} beside it`);
-        }
-        if (!files["plan.json"].includes("SEED_MARKER") && !Object.values(files).some((t) => t.includes("${SEED_MARKER}"))) {
-          // a story's plan without its own marker: add one, so it too loads once
-          files["SeedMarker.json"] = JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "SeedMarker" }, Name: "${SEED_MARKER}" }] });
-          files["plan.json"] = JSON.stringify([...JSON.parse(files["plan.json"]), { sobject: "Account", files: ["SeedMarker.json"] }]);
-        }
-        const out = join(tmpdir(), `seed-${process.pid}-${loaded.length}`);
-        mkdirSync(out, { recursive: true });
-        for (const [n, t] of Object.entries(expandSeed(files, { marker }))) writeFileSync(join(out, n), t);
-        sf(["data", "import", "tree", "--plan", join(out, "plan.json"), "-o", alias]);
-        log(`loaded test data ${marker} into ${alias}`);
-        loaded.push(marker);
+      const { seeds, requests } = seedSources({ story, stories });
+      if (!seeds.length && !requests.length) return [];
+      guardAgainstProduction(storeFor(alias).identity(), alias);
+      const loaded = seeds.filter((s) => loadSeed(alias, s)).map((s) => s.marker);
+      for (const request of requests) {
+        const marker = loadStoryRequest(alias, request, { isolate: stories === "all" });
+        if (marker) loaded.push(marker);
       }
       return loaded;
     },
+
+    /** Load a Data request into any non-production org (data/load.mjs loadTestData), with main's profile and rules. Logs its warnings. */
+    loadTestData(alias, { request, scope, ...overrides }) {
+      const result = loadTestData(storeFor(alias), { ...loadDefaults(), ...overrides, request, scope });
+      for (const w of result.warnings) log(`::warning::${alias} test data (${scope}): ${w}`);
+      log(result.loaded ? `loaded test data for ${scope} into ${alias}: ${result.summary}` : `${alias} already holds the test data for ${scope} (${result.summary})`);
+      if (result.loaded) record("seed", { action: "data", org: alias, scope });
+      return result;
+    },
+
+    /** Remove what a scope's ledger tracks (the undo). */
+    removeTestData: (alias, scope) => removeTestData(storeFor(alias), scope),
+
+    /** What an org holds for a scope. */
+    dataStatus: (alias, scope) => testDataStatus(storeFor(alias), scope),
+
     /** Load the staging volume once (volumeApex; its marker account says it is there). Best effort: a failure warns. */
     volume(alias, n) {
       if (!n || n < 1) return false;
@@ -143,4 +207,5 @@ export function dataMethods({ sf, sleep, log, keyFile, packages, env, baselineDi
       return true;
     },
   };
+  return self;
 }

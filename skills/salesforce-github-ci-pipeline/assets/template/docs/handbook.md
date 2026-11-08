@@ -115,6 +115,7 @@ The one test against production itself is the check-only **production validation
 | --- | --- | --- |
 | Every scratch org (story, CI, staging, UAT, the snapshot) | the core seed: synthetic Accounts, Contacts, Opportunities, Cases, Leads, dated at load time | `data/seed` (main's copy), once per org by a marker |
 | A story's org | plus the story's own records, when the story adds an object (Claude writes them with the build) | `data/seed/stories/<key>/plan.json` (the branch) |
+| A story's org, or any scratch org or Developer sandbox by hand | plus records generated from a **Data request** (objects and counts) to fit that org's own fields, picklists and lookups | `data/seed/stories/<key>/request.json`, or `pipe data seed --org <alias> --request <file>`; `pipe data status` / `pipe data remove` show or undo it. Refused for production and the Dev Hub |
 | Staging and UAT | plus every story's own records in the release | the release branch |
 | Staging | plus `VOLUME_RECORDS` (5000) accounts with opportunities, for production-like numbers | generated (anonymous Apex) |
 | UAT, when `UAT_SAMPLE=on` | plus a **masked** subset of production: names, emails and phones replaced, no free text | `uat-sample.yml`: SFDMU org to org, in the protected `production-read` environment, then a guard that fails on any production email domain (`UAT_SAMPLE_DOMAINS`) |

@@ -1,0 +1,124 @@
+// The Org data store's sf adapter (see data/load.mjs for the port): the one place that knows how test data reaches an
+// org through the `sf` seam: describe, `sf data import tree --files`, the REST composite delete, and the Data ledger as a
+// ContentVersion. Facts only; the use case decides. pipeline/test/data.test.mjs runs it on recorded CLI output.
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DEVHUB } from "./fleet.mjs";
+import { ledgerTitle, encodeLedger, decodeLedger } from "../data/ledger.mjs";
+
+export const BATCH_SIZE = 200;   // sf data import tree and the composite delete both take up to 200 records
+const LEDGER_FILE = "data-ledger.json";
+const ALREADY_GONE = /ENTITY_IS_DELETED|INVALID_CROSS_REFERENCE_KEY/;
+
+const scratchFile = (name) => join(mkdtempSync(join(tmpdir(), "data-")), name);
+const soqlString = (text) => `'${String(text).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+
+/** The Org data store for one org. sf: the io seam; active: the Dev Hub's active scratch orgs (ScratchOrgInfo rows). */
+export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] }) {
+  const documents = {};   // scope -> ContentDocumentId of its ledger, once known
+  let identityOnce = null;
+
+  /**
+   * One REST call; the reply's `body` is unwrapped and a 4xx or 5xx throws. A body goes as a file (`-b @file`: without
+   * the @ the CLI sends the path itself). A call without one goes as a request definition with an empty raw body:
+   * `sf api request rest -X DELETE` alone fails with "No 'mode' found in 'body' entry" (sf 2.151.7, checked 8 Nov).
+   */
+  function rest(method, path, body) {
+    const url = `/services/data/v${apiVersion}${path}`;
+    const args = ["api", "request", "rest", "-o", alias];
+    if (body !== undefined) {
+      const file = scratchFile("body.json");
+      writeFileSync(file, JSON.stringify(body));
+      args.push(url, "-X", method, "-H", "Content-Type:application/json", "-b", `@${file}`);
+    } else {
+      const definition = scratchFile("request.json");
+      writeFileSync(definition, JSON.stringify({ url, method, body: { mode: "raw", raw: "" } }));
+      args.push("-f", definition);
+    }
+    // a failed call exits 1 with the HTTP reply still in its result: keep it (allowFail "json"), so the error says why
+    const reply = sf(args, { allowFail: "json" });
+    if (reply?.failed && reply.statusCode === undefined) throw new Error(`sf api request rest ${method} ${path} failed in ${alias} (no HTTP reply: is the org logged in?)`);
+    const status = Number(reply?.statusCode ?? 200);
+    if (status >= 400) throw new Error(`${method} ${path} in ${alias} answered ${status}: ${JSON.stringify(reply?.body ?? "").slice(0, 300)}`);
+    return reply?.body;
+  }
+
+  const query = (soql, opts) => sf(["data", "query", "-o", alias, "-q", soql], opts)?.records || [];
+
+  function ledgerRow(scope) {
+    return query(`SELECT Id, ContentDocumentId FROM ContentVersion WHERE Title = ${soqlString(ledgerTitle(scope))} AND IsLatest = true ORDER BY CreatedDate DESC LIMIT 1`, { allowFail: true })[0] || null;
+  }
+
+  return {
+    alias,
+    batchSize: BATCH_SIZE,
+
+    /** Read once per store: who the org is. isOurScratchOrg is asked only when the org is not a sandbox. */
+    identity() {
+      if (identityOnce) return identityOnce;
+      const me = sf(["org", "display", "-o", alias], { allowFail: true });
+      const hub = sf(["org", "display", "-o", DEVHUB], { allowFail: true });
+      const sameOrg = Boolean(me?.id && hub?.id && String(me.id).slice(0, 15) === String(hub.id).slice(0, 15));
+      const isSandbox = query("SELECT IsSandbox FROM Organization", { allowFail: true })[0]?.IsSandbox === true;
+      identityOnce = {
+        orgId: me?.id || null, username: me?.username || null, isSandbox, isDevHub: sameOrg,
+        get isOurScratchOrg() { return active().some((o) => o.SignupUsername === me?.username); },
+      };
+      return identityOnce;
+    },
+
+    describe(names) {
+      return Object.fromEntries(names.map((name) => [name, sf(["sobject", "describe", "-s", name, "-o", alias], { allowFail: true }) || null]));
+    },
+
+    objectNames() {
+      const names = sf(["sobject", "list", "-s", "all", "-o", alias], { allowFail: true });
+      return Array.isArray(names) ? names : [];
+    },
+
+    /** One tree file; all or nothing. Throws when the reply does not account for every record. */
+    insert(object, records) {
+      const file = scratchFile(`${object}.json`);
+      writeFileSync(file, JSON.stringify({ records: records.map((r) => ({ attributes: { type: object, referenceId: r.ref }, ...r.fields })) }));
+      const reply = sf(["data", "import", "tree", "--files", file, "-o", alias]);
+      const rows = Array.isArray(reply) ? reply : reply?.records || [];
+      const loaded = rows.filter((r) => r?.refId && r?.id).map((r) => ({ ref: r.refId, id: r.id }));
+      if (loaded.length !== records.length) throw new Error(`sf data import tree loaded ${loaded.length} of ${records.length} ${object} records into ${alias}`);
+      return loaded;
+    },
+
+    remove(ids) {
+      const results = rest("DELETE", `/composite/sobjects?ids=${ids.join(",")}&allOrNone=false`);
+      const failed = (Array.isArray(results) ? results : []).map((r, i) => ({ id: r.id || ids[i], ok: r.success || ALREADY_GONE.test(JSON.stringify(r.errors || [])), message: r.errors?.[0]?.message || "unknown" }))
+        .filter((r) => !r.ok).map(({ id, message }) => ({ id, message }));
+      return { failed };
+    },
+
+    readLedger(scope) {
+      const row = ledgerRow(scope);
+      if (!row) return { state: "none" };
+      documents[scope] = row.ContentDocumentId;
+      let content;
+      try { content = rest("GET", `/sobjects/ContentVersion/${row.Id}/VersionData`); } catch (e) { return { state: "unreadable", detail: e.message }; }
+      const ledger = decodeLedger(content);
+      return ledger ? { state: "found", ledger } : { state: "unreadable", detail: `${LEDGER_FILE} is not a ledger` };
+    },
+
+    saveLedger(scope, ledger) {
+      const documentId = documents[scope] ?? ledgerRow(scope)?.ContentDocumentId ?? null;
+      const created = rest("POST", "/sobjects/ContentVersion", {
+        Title: ledgerTitle(scope), PathOnClient: LEDGER_FILE, VersionData: Buffer.from(encodeLedger(ledger)).toString("base64"),
+        ...(documentId ? { ContentDocumentId: documentId } : {}),
+      });
+      if (!created?.id) throw new Error(`the org did not return an id for ${ledgerTitle(scope)}`);
+      documents[scope] = documentId || query(`SELECT ContentDocumentId FROM ContentVersion WHERE Id = '${created.id}'`)[0]?.ContentDocumentId;
+    },
+
+    dropLedger(scope) {
+      const documentId = documents[scope] ?? ledgerRow(scope)?.ContentDocumentId;
+      if (documentId) rest("DELETE", `/sobjects/ContentDocument/${documentId}`);
+      delete documents[scope];
+    },
+  };
+}
