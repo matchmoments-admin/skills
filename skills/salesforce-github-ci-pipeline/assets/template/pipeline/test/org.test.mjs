@@ -374,6 +374,7 @@ test("seed: dates never go stale; loaded once per org (markers); a story's own d
     const sf = (args) => {
       calls.push(args.join(" "));
       if (args[0] === "org" && args[1] === "display") return { id: args.includes("devhub") ? prodId : "00D000000000002", username: "a@b" };
+      if (args[0] === "data" && args[1] === "query" && args.some((a) => a.includes("FROM Organization"))) return { records: [{ IsSandbox: true }] };
       if (args[0] === "data" && args[1] === "query") return { records: have ? [{ Id: "001" }] : [] };
       return {};
     };
@@ -635,6 +636,7 @@ test("orgs know what they hold: the seed loads on every ready() (even when the c
     const sf = (args, opts) => {
       const c = args.join(" ");
       if (/FROM Account WHERE Name = '\[seed/.test(c) || /FROM Account WHERE Name LIKE '\[seed/.test(c)) { p.calls.push(c); return { records: [] }; }
+      if (/SELECT IsSandbox FROM Organization/.test(c)) return { records: [{ IsSandbox: true }] };   // a scratch org says it is a sandbox
       if (args[0] === "org" && args[1] === "list" && args[2] === "snapshot") return snapshots;
       if (args[0] === "org" && args[1] === "display") return { clientId: "CID", username: "u@x", id: args.includes("devhub") ? "00Dprod000000001" : "00Dscratch000001" };
       return p.sf(args, opts);

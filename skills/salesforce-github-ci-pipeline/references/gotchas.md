@@ -71,6 +71,12 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Snapshots** → enable in the Dev Hub (Setup → Dev Hub → Scratch Org Snapshots; allocation then shows as `ActiveOrgSnapshots`). Org records: `SnapshotName`, `Status` (`InProgress` → `Active`), `CreatedDate`. Don't keep the snapshot name in a repo variable (writing variables needs more token scope): pick the newest Active `LCB…` from `sf org list snapshot` at create time. Never delete the source org while its snapshot is InProgress.
 
 - **Test data: two mechanisms, never mixed** → Apex tests make their own (a builder/persona factory; they cannot see org data). Org data for people and UI tests is a committed synthetic seed (`data/seed`, `sf data import tree`: native, fails loudly on a missing field; SFDMU silently skips one and needs a plugin). Tree import only inserts, so a marker Account (`[seed <hash>]`) makes it load once; date tokens (`${THIS_YEAR}`) keep "this year" true. The template ships the seed with standard fields only.
+- **`sf api request rest` (sf 2.151.7), three ways to lose a write silently** → `-b` takes `@file` (without the `@` it
+  sends the path as the body); `--json` wraps the reply as `{ statusCode, headers, body }`, so unwrap `body`; a call
+  without a body (DELETE) fails with "No 'mode' found in 'body' entry" unless sent as a request definition (`-f` with
+  `{ url, method, body: { mode: "raw", raw: "" } }`); a 4xx exits 1 with the HTTP reply still in `result`. Test the
+  adapter on recorded CLI output, not a fake you wrote: the first fake got both of the first two wrong in the code's
+  favour. Scratch orgs report `Organization.IsSandbox = true`.
 - **Shape orgs' roles cannot be assigned** ("invalid cross reference id", even from Apex; deploying the Role metadata over them does not help) → delete them leaves-first and recreate them as metadata, before the deploy (folder shares and sharing rules attach to roles at deploy time).
 - **Logging in as a persona without a password** → turn on `SecuritySettings.enableAdminLoginAsAnyUser` in scratch orgs and use `/servlet/servlet.su?oid=..&suorgadminid=..` on the classic (instance URL) domain after the admin's front-door login; the Lightning domain aborts. Users as records (`sf org create user` refuses JWT on Hyperforce); licences are few: deactivate other persona users when `LICENSE_LIMIT_EXCEEDED`.
 

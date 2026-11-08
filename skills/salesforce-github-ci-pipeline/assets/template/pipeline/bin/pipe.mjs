@@ -5,6 +5,7 @@
 //   labels    sync                                       create or update every label the pipeline uses
 //   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits · capacity [--devs N] [--in-use N (active orgs other projects hold; not this pipeline's staging, UAT or story orgs)] [--uat-sandbox] (load and cost)
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
+//   data      seed --org A --request F [--scope S] · status|remove --org A --scope S · check --request F   a Data request in any non-production org
 //   next      --after review|ci|staging|release-pr|org-freed|any [--pr N]   what the journey owes next, started (journey.mjs)
 //   finish    review|ui-test|ci|staging|uat --pr N|--branch B --sha S --outcome O [--detail D]   end a stage (finish.mjs)
 //   reconcile [--pr N]                                    re-run runs GitHub never started; start what is owed on every idle open PR
@@ -57,7 +58,7 @@ import * as tests from "../src/tests.mjs";
 import * as capacity from "../src/capacity.mjs";
 import * as production from "../src/production.mjs";
 import { orgRegistry, personaOf as orgPersona, packageList, sameSourceVia, snapshotDescription } from "../src/org.mjs";
-import { orgCommands } from "./commands/org.mjs";
+import { orgCommands } from "./commands/org.mjs"; import { dataCommands } from "./commands/data.mjs";   // orgs and lanes; test data on request
 import { evalCommands } from "./commands/eval.mjs";
 import { checkCommands } from "./commands/checks.mjs";
 import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
@@ -76,7 +77,7 @@ import { finish, reconcile, rerunNotStarted, STAGE } from "../src/finish.mjs";
 import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
-const VALUE_FLAGS = new Set(["key", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "floor", "level",
+const VALUE_FLAGS = new Set(["key", "request", "scope", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "floor", "level",
   "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind", "changed", "provider", "arm", "cases", "wait", "prune"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
@@ -129,6 +130,7 @@ const commands = {
 
   // ---- orgs and lanes (commands/org.mjs)
   ...orgCommands({ io, host, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record: (...a) => record(...a), freed }),
+  ...dataCommands({ flag, output, say, orgs }),   // test data on request (commands/data.mjs)
   ...evalCommands({ flag, say, record: (...a) => record(...a) }),   // the reviewer eval set (commands/eval.mjs)
   ...checkCommands({ io, flag, has, say, log, summary, root: PIPELINE_ROOT }),   // access and automation checks (commands/checks.mjs)
   // ---- the gate

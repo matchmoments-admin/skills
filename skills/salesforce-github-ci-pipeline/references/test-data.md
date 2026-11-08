@@ -9,6 +9,7 @@ when the team turns it on. The handbook's "Test data" table is the operator view
 |---|---|---|
 | **Core seed** | `data/seed/` (`sf data import tree` plan + one file per object, standard fields only) | Every scratch org (story, CI, staging, UAT, the snapshot), once per org through a marker Account. Date tokens (`${TODAY}`, `${THIS_YEAR}`…) are filled at load time. A changed seed replaces the old one in long-lived orgs |
 | **Story seed** | `data/seed/stories/<key>/plan.json` (same format) | Claude writes it with the build when a story adds an object (or a field people test): about 20 synthetic records, with a few synthetic parent Accounts made in the same plan (tree `@references` reach only their own plan). It loads into the story's org, then staging and UAT. After the release, `seed-fold` opens a PR folding it into the core seed |
+| **Data request** | `data/seed/stories/<key>/request.json` (version 1: objects, counts, per-parent counts, set values) or `pipe data seed --org A --request F` | Generated at load time from the target org's describe, so it fits however the org is set up: required fields, picklist values (dependent picklists through `validFor`), lookups to parents it also makes. Loads into the story's org, then staging and UAT, whenever `SEED` is not `off`; one bad request in staging is a warning naming the story. Tracked by a **Data ledger** in the org (a file titled `[data ledger <scope>]`): the same request loads once, a changed one replaces only the ledger's records, `pipe data remove` undoes it. Production, the Dev Hub and any org that is not a sandbox or this Dev Hub's scratch org are refused |
 | **Volume** | generated (`VOLUME_RECORDS`, default 5000) | Staging only: accounts with opportunities by anonymous Apex, so lists, reports and Flows meet production-like numbers |
 | **Masked UAT sample** | `config/uat-sample/export.json` | Only with `UAT_SAMPLE=on`: SFDMU copies a production subset into UAT org to org, replacing names, emails and phones (`mockFields`). Then `pipe sample guard` fails if a production email domain (`UAT_SAMPLE_DOMAINS`) survived |
 
@@ -21,6 +22,29 @@ Apex tests never see any of this. They build their own data (a `TestDataFactory`
   baseline files.
 - **Picklist codes, not labels** (`BillingCountryCode`); keep the core seed to hundreds of records.
 - **Seed records are read by name** in UI tests; a test creates only what its criterion changes.
+
+## Data requests
+
+```json
+{ "version": 1, "objects": [
+  { "object": "Account", "count": 3 },
+  { "object": "Contact", "perParent": { "Account": 2 } },
+  { "object": "Case", "count": 2, "scenario": "escalated", "set": { "Status": "Escalated" } } ] }
+```
+
+- `pipe data check --request F` validates a file offline; `pipe data seed --org A --request F [--scope S]` loads it;
+  `pipe data status|remove --org A --scope S` shows or undoes it. Up to 2,000 records per load.
+- Values a request sets win; generated values never replace them (date tokens work: `${TODAY-30}`). Required lookups
+  the generator cannot fill (polymorphic, User/RecordType/Profile..., or a lookup to the same object) are reported:
+  set them in the request.
+- `config/data-rules.json` `never` lists values no generated record may take (`"Case.Origin": ["Email"]`: the async
+  automation rule above).
+- **Data profile** (aggregates of production's shape, every count under 5 suppressed, never a single record's value)
+  weights the choices when one exists. Nothing captures it yet: until then every load warns and fills required
+  fields only, spread evenly.
+- Code: the use case `pipeline/src/data/load.mjs` talks to an org only through the **Org data store** port; the sf
+  adapter is `pipeline/src/org/data-store.mjs`, the in-memory one `pipeline/test/data-store-memory.mjs`. Contract
+  tests replay recorded CLI output (`pipeline/test/fixtures/sf/`).
 
 ## Turning on the masked UAT sample
 
