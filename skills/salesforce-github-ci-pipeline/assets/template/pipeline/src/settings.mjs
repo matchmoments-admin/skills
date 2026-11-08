@@ -53,6 +53,7 @@ export const SETTINGS = [
   ["BASELINE", "soft", "the production baseline in every scratch org: soft, strict or off"],
   ["BASELINE_NIGHTLY", "false", "prod-baseline also runs nightly (drift from Setup changes in production)"],
   ["SEED", "on", "synthetic test data in every scratch org: on or off"],
+  ["DATA_PROFILE", "on", "a Data request's values follow production's mix: its objects are read from production (aggregate queries only, never saved) when it loads; off: no production reads, values spread evenly"],
   ["VOLUME_RECORDS", "5000", "volume records in the staging org"],
   ["ORG_RESERVE", "0", "scratch-org slots a new story org leaves free"],
   ["ORG_POOL", "0", "warm scratch orgs kept ready from the snapshot for the next stories (each holds a slot)"],
@@ -78,7 +79,7 @@ export function setting(name, env = process.env) {
 }
 
 /** The settings org provisioning reads (orgRegistry's env): resolved here, so a repository variable reaches it. */
-export const ORG_SETTINGS = ["SCRATCH_SNAPSHOT", "BASELINE", "SEED", "VOLUME_RECORDS", "ORG_RESERVE", "ORG_POOL"];
+export const ORG_SETTINGS = ["SCRATCH_SNAPSHOT", "BASELINE", "SEED", "DATA_PROFILE", "VOLUME_RECORDS", "ORG_RESERVE", "ORG_POOL"];
 export const orgSettings = (env = process.env) => Object.fromEntries(ORG_SETTINGS.map((n) => [n, setting(n, env)]));
 
 /** Every setting with its value now, for `pipe settings`. */

@@ -40,8 +40,12 @@ Apex tests never see any of this. They build their own data (a `TestDataFactory`
 - `config/data-rules.json` `never` lists values no generated record may take (`"Case.Origin": ["Email"]`: the async
   automation rule above).
 - **Data profile** (aggregates of production's shape, every count under 5 suppressed, never a single record's value)
-  weights the choices when one exists. Nothing captures it yet: until then every load warns and fills required
-  fields only, spread evenly.
+  weights the choices. It is read **on demand**: when a request loads, and only then, its objects and their parents are
+  read from production (the Dev Hub) with aggregate queries only, 25 per REST composite batch call (about 40 queries,
+  2 calls, a few seconds). It lives in memory for that load and is never saved; a request already loaded reads nothing.
+  `DATA_PROFILE=off` (or `pipe data seed --no-profile`) reads nothing and spreads values evenly, as does a run with no
+  Dev Hub login (it warns). `profileExclude` in `config/data-rules.json` leaves sensitive fields (an average Amount) out.
+  An object new in the story (not yet in production) has no profile: required fields only.
 - Code: the use case `pipeline/src/data/load.mjs` talks to an org only through the **Org data store** port; the sf
   adapter is `pipeline/src/org/data-store.mjs`, the in-memory one `pipeline/test/data-store-memory.mjs`. Contract
   tests replay recorded CLI output (`pipeline/test/fixtures/sf/`).
@@ -63,7 +67,7 @@ Apex tests never see any of this. They build their own data (a `TestDataFactory`
 SFDMU is pinned (`sfdmu@5.8.0`). Its `--anonymise` flag only hashes values in its logs; the masking is
 `updateWithMockData` with `mockFields` in `export.json`. Masking is per record, not format-preserving.
 
-## Why these tools (researched October 2026)
+## Why these tools (researched October 2026, rechecked November 2026)
 
 | Option | Verdict |
 |---|---|
@@ -71,4 +75,7 @@ SFDMU is pinned (`sfdmu@5.8.0`). Its `--anonymise` flag only hashes values in it
 | **SFDMU** (free, Apache-2.0, maintained) | Used for the masked UAT sample: org to org with relationships, `mockFields` masking. For upsert-based seeding everywhere it needs an external-ID field on every object, which isn't worth it while markers work |
 | Snowfakery | Good recipes, but its repository was archived in April 2026. Not adopted |
 | Salesforce Data Mask & Seed | Paid, quote only, aimed at sandboxes. Consider it when UAT is a full-copy sandbox |
+| `sf data-seeding generate` (Data Seed CLI, `@salesforce/plugin-data-seeding`) | The nearest standard to the generator plus profile: AI makes look-alike data from a source org. Paid (fails without the org's data seed permission), sends both orgs' tokens and the source data to a Salesforce service in us-east-1, not reproducible, scratch-org targets undocumented. Trial it only with the licence |
+| `sf data upsert bulk` (Bulk API 2.0, CSV, external IDs) | Worth it above about 2,000 records. Needs an external-ID field on every seeded object (breaks "any org as it is"); each object is an async job, slower than tree for hundreds. The Data ledger already makes reruns safe |
+| Partial / Full sandbox templates | Copy real production data, unmasked; Developer sandboxes get none. Not test data |
 | Gearset seeding, Own (Salesforce), Prodly, Copado Data Deploy | Paid. Gearset's add-on is about 40% of its plan price, Own $1.85–2.50 per Salesforce user per month. Worth it only for teams already on those platforms, or that need format-preserving masking at scale |

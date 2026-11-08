@@ -7,13 +7,13 @@ import { parseRequest, requestId, parseDataCommand, DataRequestError, MAX_COUNT 
 import { schemaOf, requiredParents, validForOf } from "../src/data/schema.mjs";
 import { objectsNeeded, loadPlan } from "../src/data/load-plan.mjs";
 import { generateRecords, resolveTokens } from "../src/data/generate.mjs";
-import { profileQueries, profileFrom, SUPPRESSED } from "../src/data/profile.mjs";
+import { profileQueries, profileFrom, profileFor, isAggregate, SUPPRESSED } from "../src/data/profile.mjs";
 import { begin, record, finish, deletions, decide } from "../src/data/ledger.mjs";
 import { loadTestData, removeTestData, testDataStatus } from "../src/data/load.mjs";
-import { sfDataStore } from "../src/org/data-store.mjs";
+import { sfDataStore, sfProfileSource } from "../src/org/data-store.mjs";
 import { sfFrom } from "../src/io.mjs";
 import { scopeOf } from "../bin/commands/data.mjs";
-import { memoryDataStore } from "./data-store-memory.mjs";
+import { memoryDataStore, memoryProfileSource } from "./data-store-memory.mjs";
 
 const field = (name, type, extra = {}) => ({ name, type, label: name, createable: true, nillable: true, defaultedOnCreate: false, calculated: false, autoNumber: false, ...extra });
 /** A validFor bitmap valid for the controller values at these indexes. */
@@ -93,6 +93,11 @@ test("org schema: only what the API can create; system, formula and inactive val
   assert.equal(SCHEMA.Visit__c.fields.Done__c.required, false, "a checkbox always has a value");
   assert.deepEqual(SCHEMA.Account.recordTypes.map((r) => r.developerName), ["Business", "Partner"]);
   assert.deepEqual(requiredParents(SCHEMA.Visit__c), [{ field: "Account__c", object: "Account" }]);
+});
+
+test("org schema: with state and country picklists, only the Code picklist is generated, never its text twin", () => {
+  const schema = schemaOf([{ name: "Account", fields: [field("Name", "string", { nameField: true }), field("BillingCountry", "string"), field("BillingCountryCode", "picklist", { picklistValues: [{ value: "AU" }] }), field("ShippingCountry", "string")] }]);
+  assert.deepEqual(Object.keys(schema.Account.fields), ["Name", "BillingCountryCode", "ShippingCountry"], "BillingCountry has a Code twin; ShippingCountry (no twin) stays");
 });
 
 test("dependent picklists: validFor decoded against the controller's describe order (inactive values count); a checkbox controller is false/true", () => {
@@ -189,14 +194,14 @@ test("data profile: aggregates only, never a text value, MIN or MAX; small bucke
     assert.doesNotMatch(q.soql.replace(/COUNT\(\w+\)|AVG\(\w+\)|CALENDAR_YEAR\(\w+\)/g, ""), /\b(Name|Description|LastName|Email)\b/, q.soql);
     assert.doesNotMatch(q.soql, /\bMIN\(|\bMAX\(/, "one record's own value");
   }
-  assert.ok(queries.some((q) => q.kind === "perParent" && /GROUP BY AccountId/.test(q.soql)), "children per parent");
+  assert.ok(queries.every((q) => isAggregate(q.soql)), "every query is an aggregate: no record is ever read");
+  assert.ok(!queries.some((q) => /GROUP BY AccountId|GROUP BY ParentId/.test(q.soql)), "no query groups by a record id");
   const result = (kind, records, extra = {}) => ({ query: { object: "Account", kind, ...extra }, records });
   const profile = profileFrom([
     result("count", [{ n: 100 }]),
     result("fill", [{ f0: 100, f1: 80 }], { fields: ["Name", "Industry"] }),
     result("values", [{ v: "Finance", n: 96 }, { v: "Retail", n: 4 }], { field: "Industry" }),
     result("numbers", [{ a0: 41.234, n0: 60, a1: 4750000, n1: 1 }], { fields: ["NumberOfEmployees", "AnnualRevenue"] }),
-    result("perParent", [{ p: "001A", n: 1 }, { p: "001B", n: 2 }, { p: "001C", n: 2 }, { p: "001D", n: 3 }, { p: "001E", n: 9 }], { field: "ParentId" }),
     { query: { object: "Account", kind: "dates", field: "CreatedDate" }, error: "QUERY_TIMEOUT" },
     { query: { object: "Lead", kind: "count" }, records: [{ n: 3 }] },
     { query: { object: "Lead", kind: "values", field: "Status" }, records: [{ v: "Open", n: 3 }] },
@@ -204,10 +209,20 @@ test("data profile: aggregates only, never a text value, MIN or MAX; small bucke
   assert.deepEqual(profile.objects.Account.values.Industry, { Finance: 96, Retail: SUPPRESSED });
   assert.deepEqual(profile.objects.Account.fill, { Name: 1, Industry: 0.8 });
   assert.deepEqual(profile.objects.Account.numbers, { NumberOfEmployees: { avg: 41.23, filled: 60 } }, "one record's revenue is never kept");
-  assert.deepEqual(profile.objects.Account.perParent.ParentId, { p50: 2, p90: 9 });
-  assert.equal(JSON.stringify(profile).includes("001A"), false, "parent ids are read and discarded");
   assert.equal(profile.objects.Account.partial, true, "a timed-out query marks the object partial, the profile still builds");
   assert.deepEqual(profile.objects.Lead.values, {}, "an object under the floor keeps only its count");
+});
+
+test("data profile: fields describe cannot group or average are left out, and so are profileExclude's; only aggregates pass", () => {
+  const describes = { ...DESCRIBES, Account: { ...DESCRIBES.Account, fields: DESCRIBES.Account.fields.map((f) => (f.name === "Industry" ? { ...f, groupable: false } : f.name === "NumberOfEmployees" ? { ...f, aggregatable: false } : f)) } };
+  const queries = profileQueries(schemaOf(Object.values(describes)), ["Account"]);
+  assert.ok(!queries.some((q) => q.field === "Industry"), "a non-groupable picklist is not grouped (it would fail the object)");
+  assert.ok(!queries.some((q) => q.kind === "numbers"), "a non-aggregatable number is not averaged");
+  const excluded = profileQueries(SCHEMA, ["Account"], { exclude: ["Account.NumberOfEmployees", "Account.Industry"] });
+  assert.ok(!excluded.some((q) => /NumberOfEmployees|Industry/.test(q.soql)), "profileExclude: never read");
+  assert.ok(!profileQueries(SCHEMA, ["Visit__c"]).some((q) => /COUNT\(Done__c\)/.test(q.soql)), "COUNT(checkbox) is invalid SOQL and failed a whole fill query (found live)");
+  assert.equal(isAggregate("SELECT Name FROM Account"), false);
+  assert.equal(isAggregate("SELECT Industry v, COUNT(Id) n FROM Account GROUP BY Industry"), true);
 });
 
 // ---- the ledger's rules
@@ -312,6 +327,28 @@ test("remove: the undo takes only the ledger's records; status says what the org
   assert.equal(scopeOf("data/seed/stories/512/request.json"), "story 512");
 });
 
+test("profile on demand: read only when a request loads, only its objects; never again once loaded; a failure warns and loads", () => {
+  const industry = (q) => (q.kind === "count" ? [{ n: 900 }] : q.kind === "fill" ? [Object.fromEntries(q.fields.map((f, i) => [`f${i}`, f === "Industry" ? 900 : 0]))] : q.field === "Industry" ? [{ v: "Finance", n: 810 }, { v: "Retail", n: 90 }] : []);
+  const production = memoryProfileSource({ describes: DESCRIBES, answer: industry });
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const request = requestOf([{ object: "Contact", count: 4 }, { object: "Account", count: 200 }]);
+  const first = loadTestData(store, { request, scope: "story 9", profileSource: production, today: TODAY });
+  assert.deepEqual(production.calls.filter((c) => c.startsWith("describe")).map((c) => c.split(" ")[1].split(",").sort().join()), ["Account,Contact"], "the plan's objects only: the request's and their parents");
+  assert.match(first.profiled, /^production profile of (Account, Contact|Contact, Account) \(\d+ aggregate queries\)$/, "what was read, never a value");
+  const finance = store.count("Account", (r) => r.Industry === "Finance");
+  assert.ok(finance > 150, `production's 90% Finance shapes the mix (${finance} of 200)`);
+  const before = production.calls.length;
+  assert.equal(loadTestData(store, { request, scope: "story 9", profileSource: production, today: TODAY }).loaded, false);
+  assert.equal(production.calls.length, before, "the same request again: production is not read");
+  const down = memoryProfileSource({ describes: DESCRIBES, fail: "no Dev Hub login" });
+  const fallback = loadTestData(memoryDataStore({ describes: DESCRIBES }), { request, scope: "story 9", profileSource: down, today: TODAY });
+  assert.equal(fallback.loaded, true, "a profile is never a reason not to load");
+  assert.deepEqual(fallback.warnings.filter((w) => /production/.test(w)), ["could not read production's profile (no Dev Hub login)", "no production profile for Contact, Account: values are spread evenly and only required fields are filled"]);
+  const flaky = memoryProfileSource({ describes: DESCRIBES, answer: (q) => { if (q.kind === "values") throw new Error("QUERY_TIMEOUT"); return industry(q); } });
+  const partial = loadTestData(memoryDataStore({ describes: DESCRIBES }), { request, scope: "story 9", profileSource: flaky, today: TODAY });
+  assert.ok(partial.warnings.some((w) => /partial for Account/.test(w)), "one failed query: that object is partial, the load goes on");
+});
+
 // ---- the sf adapter, on recorded sf CLI output (fixtures/sf)
 
 const recorded = (name) => readFileSync(new URL(`./fixtures/sf/${name}.json`, import.meta.url), "utf8");
@@ -369,6 +406,40 @@ test("sf adapter: reads the ledger back (parsed or text body), maps composite de
   assert.deepEqual(sfDataStore({ sf: blocked.sf, alias: "issue-9" }).remove(["003A"]).failed, [{ id: "003A", message: "associated with a case" }]);
   assert.deepEqual(store.insert("Account", [{ ref: "Account1", fields: {} }, { ref: "Account2", fields: {} }]).map((l) => l.id), ["001000000000001AAA", "001000000000002AAA"]);
   assert.throws(() => store.insert("Account", [{ ref: "Account1", fields: {} }, { ref: "Account2", fields: {} }, { ref: "Account3", fields: {} }]), /loaded 2 of 3 Account/);
+});
+
+test("sf adapter: a failed tree import says each distinct reason once, with how many records it hit", () => {
+  const { sf } = recordedSf((args) => (args[0] === "data" ? recorded("import-tree-error") : null));
+  const store = sfDataStore({ sf, alias: "issue-9" });
+  assert.throws(() => store.insert("Account", [{ ref: "Account1", fields: {} }, { ref: "Account2", fields: {} }]),
+    /^Error: sf data import tree loaded none of 2 Account records into issue-9: FIELD_INTEGRITY_EXCEPTION: Mismatched integration value and ISO code for field: Billing Country Code \(BillingCountryCode\) x2$/);
+});
+
+test("sf profile source: aggregates only, 25 per composite batch call, a failed subrequest is that query's error; each object read once", () => {
+  const sent = [];
+  // the recorded reply (a scratch org, 8 Nov): one count, and one query that failed (INVALID_FIELD); answered per subrequest
+  const [counted, failed] = JSON.parse(recorded("rest-composite-batch-query")).result.body.results;
+  const batchReply = (request) => JSON.stringify({ status: 0, result: { statusCode: 200, body: { hasErrors: true, results: request.batchRequests.map((r) => (/Industry/.test(decodeURIComponent(r.url)) ? failed : counted)) } } });
+  const { sf, calls } = recordedSf((args, body) => {
+    if (args[0] === "api") { const request = JSON.parse(body); sent.push(request); return batchReply(request); }
+    if (args[0] === "sobject") return DESCRIBES[args[args.indexOf("-s") + 1]] || null;
+    return null;
+  });
+  const production = sfProfileSource({ sf, alias: "devhub" });
+  const queries = Array.from({ length: 30 }, (_, i) => ({ object: "Account", kind: "count", soql: `SELECT COUNT(Id) n FROM Account WHERE NumberOfEmployees > ${i}` }));
+  const results = production.aggregate([...queries, { object: "Account", kind: "values", field: "Industry", soql: "SELECT Industry v, COUNT(Id) n FROM Account GROUP BY Industry" }]);
+  assert.deepEqual(sent.map((r) => r.batchRequests.length), [25, 6], "25 subrequests per call (plain /composite would halt after 5 queries)");
+  assert.equal(sent[0].haltOnError, false);
+  assert.ok(calls.filter((a) => a[0] === "api").every((a) => a.includes("/services/data/v67.0/composite/batch")));
+  assert.match(sent[0].batchRequests[0].url, /^v67\.0\/query\?q=SELECT%20COUNT/);
+  assert.ok(results.slice(0, 30).every((r) => Array.isArray(r.records) && r.records.length), "counts read from the recorded reply");
+  assert.match(results[30].error, /INVALID_FIELD/, "that query alone failed");
+  production.aggregate(queries.slice(0, 3));
+  assert.equal(sent.length, 2, "already read this run: no new call");
+  assert.throws(() => production.aggregate([{ soql: "SELECT Name, Email FROM Contact" }]), /refusing to read production \(devhub\) with a query that is not an aggregate/);
+  assert.equal(sent.length, 2, "refused before anything was sent");
+  production.describe(["Account"]); production.describe(["Account"]);
+  assert.equal(calls.filter((a) => a[0] === "sobject").length, 1, "each describe once per run");
 });
 
 test("sf adapter: who the org is, read once; the Dev Hub's scratch-org list is asked only for a non-sandbox", () => {

@@ -7,6 +7,7 @@ import { requestId, describeEntry, didYouMean, DataRequestError } from "./reques
 import { schemaOf } from "./schema.mjs";
 import { objectsNeeded, loadPlan } from "./load-plan.mjs";
 import { generateRecords } from "./generate.mjs";
+import { profileFor } from "./profile.mjs";
 import { decide, begin, record, finish, deletions, leftoversOf, summary, ledgerTitle, chunk } from "./ledger.mjs";
 
 /**
@@ -31,21 +32,24 @@ export function guardAgainstProduction(identity, alias) {
 }
 
 /**
- * Load a Data request into the store's org, once. The same request already loaded: nothing happens. A changed request:
- * the earlier records are removed by id (children first; any that fail are carried into the new ledger), then the new
- * ones are inserted batch by batch, the ledger saved after each. A request that does not fit the org throws
- * DataRequestError before anything is deleted. Returns { loaded, summary, warnings }.
+ * Load a Data request into the store's org, once. The same request already loaded: nothing happens (and production is
+ * not read). Otherwise production's profile of the plan's objects is read through `profileSource` (a ProfileSource, see
+ * profile.mjs; null: none), unless a `profile` is given. A changed request: the earlier records are removed by id
+ * (children first; any that fail are carried into the new ledger), then the new ones are inserted batch by batch, the
+ * ledger saved after each. A request that does not fit the org throws DataRequestError before anything is deleted.
+ * Returns { loaded, summary, warnings, profiled } (profiled: what was read from production, in words, or null).
  */
-export function loadTestData(store, { request, scope, profile = null, rules = {}, today = new Date() }) {
+export function loadTestData(store, { request, scope, profile = null, profileSource = null, rules = {}, today = new Date() }) {
   guardAgainstProduction(store.identity(), store.alias);
   const id = requestId(request);
   const decision = decide({ ...store.readLedger(scope), scope }, id);
-  if (decision.action === "skip") return { loaded: false, summary: summary(decision.ledger), warnings: [] };
+  if (decision.action === "skip") return { loaded: false, summary: summary(decision.ledger), warnings: [], profiled: null };
   if (decision.action === "refuse") throw new Error(decision.reason);
   const schema = describeAll(store, request);
   const plan = loadPlan(schema, request);
   if (plan.problems.length) throw new DataRequestError(plan.problems);
-  const { records, warnings } = generateRecords({ schema, plan, profile, rules, seed: `${scope} ${id}`, today });
+  const shape = profile ? { profile, warnings: [], profiled: null } : productionProfile(profileSource, plan.order, { rules, today });
+  const { records, warnings } = generateRecords({ schema, plan, profile: shape.profile, rules, seed: `${scope} ${id}`, today });
   const leftovers = decision.previous ? removeTracked(store, decision.previous) : {};
   let ledger = begin({ scope, requestId: id, loadedAt: today.toISOString(), order: plan.order, leftovers });
   const ids = {};
@@ -57,7 +61,26 @@ export function loadTestData(store, { request, scope, profile = null, rules = {}
   }
   ledger = finish(ledger);
   saveOrExplain(store, scope, ledger, { object: null, ids: [] });
-  return { loaded: true, summary: `${summary(ledger)} from ${request.objects.map(describeEntry).join("; ")}`, warnings };
+  return { loaded: true, summary: `${summary(ledger)} from ${request.objects.map(describeEntry).join("; ")}`, warnings: [...shape.warnings, ...warnings], profiled: shape.profiled };
+}
+
+/**
+ * Production's profile of the plan's objects, best effort: a source that cannot be read is one warning, and the load
+ * goes on with values spread evenly (the generator names the objects). Never logs a value: only what was read.
+ */
+function productionProfile(source, objects, { rules, today }) {
+  if (!source || !objects.length) return { profile: null, warnings: [], profiled: null };
+  try {
+    const { profile, queries } = profileFor(source, objects, { capturedAt: today.toISOString(), exclude: rules.profileExclude || [] });
+    const partial = Object.entries(profile.objects).filter(([, o]) => o.partial).map(([name]) => name);
+    return {
+      profile,
+      warnings: partial.length ? [`production's profile is partial for ${partial.join(", ")} (a query failed): those fields are spread evenly`] : [],
+      profiled: `production profile of ${Object.keys(profile.objects).join(", ") || "nothing"} (${queries} aggregate queries)`,
+    };
+  } catch (e) {
+    return { profile: null, warnings: [`could not read production's profile (${e.message})`], profiled: null };
+  }
 }
 
 /** Remove everything a scope's ledger tracks (the undo). Ids that fail stay in the ledger; the ledger goes once it is empty. */

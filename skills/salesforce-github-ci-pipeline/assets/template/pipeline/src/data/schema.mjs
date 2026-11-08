@@ -20,7 +20,7 @@ export function schemaOf(describes) {
 
 function objectSchema(describe) {
   const all = describe.fields || [];
-  const fields = Object.fromEntries(all.filter(isGeneratable).map((f) => [f.name, fieldSchema(f, all)]));
+  const fields = Object.fromEntries(all.filter(isGeneratable).filter((f) => !hasCodeTwin(f, all)).map((f) => [f.name, fieldSchema(f, all)]));
   return {
     name: describe.name,
     label: describe.label || describe.name,
@@ -30,6 +30,13 @@ function objectSchema(describe) {
     recordTypes: (describe.recordTypeInfos || []).filter((r) => r.available !== false && !r.master && r.active !== false).map((r) => ({ id: r.recordTypeId, developerName: r.developerName, isDefault: Boolean(r.defaultRecordTypeMapping) })),
   };
 }
+
+/**
+ * With state and country picklists on, an address's country and state are the picklists BillingCountryCode and
+ * BillingStateCode; the text twins (BillingCountry) are written by the platform from them, and a value set in both
+ * fails ("Mismatched integration value and ISO code"). So only the Code picklist is generated.
+ */
+const hasCodeTwin = (f, all) => f.type === "string" && all.some((c) => c.name === `${f.name}Code` && c.type === "picklist");
 
 const isGeneratable = (f) => f.createable && !f.calculated && !f.autoNumber && !SYSTEM_FIELDS.has(f.name) && Boolean(KINDS[f.type]);
 
@@ -47,6 +54,8 @@ function fieldSchema(f, allFields) {
     controller: controller ? controller.name : null,
     validFor: controller ? validForOf(f, controller) : null,
     referenceTo: kind === "reference" ? f.referenceTo || [] : null,
+    groupable: f.groupable !== false,
+    aggregatable: f.aggregatable !== false,
   };
 }
 

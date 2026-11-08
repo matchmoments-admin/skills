@@ -12,7 +12,7 @@ export function scopeOf(path) {
 
 const bullets = (lines) => lines.map((l) => `- ${l}`).join("\n");
 
-export function dataCommands({ flag, output, say, orgs }) {
+export function dataCommands({ flag, has = () => false, output, say, orgs }) {
   const required = (name, example) => flag(name) || (() => { throw new Error(`--${name} is required (for example --${name} ${example})`); })();
   const readRequest = () => {
     const file = required("request", "data/seed/stories/512/request.json");
@@ -33,14 +33,15 @@ export function dataCommands({ flag, output, say, orgs }) {
       output({ ok: true, objects: request.objects.length });
       return say(`the request is valid: ${request.objects.map(describeEntry).join("; ")}`);
     }),
-    "data seed": explained(() => {   // load a request into any non-production org (scratch org or sandbox), once
+    "data seed": explained(() => {   // load a request into any non-production org (scratch org or sandbox), once; --no-profile: no production reads
       const org = required("org", "issue-512");
       const { file, request } = readRequest();
       const scope = scopeFor(file);
-      const result = orgs().loadTestData(org, { request, scope });
-      output({ loaded: result.loaded, scope, summary: result.summary, warnings: result.warnings.join(" | ") });
+      const result = orgs().loadTestData(org, { request, scope, ...(has("no-profile") ? { profileSource: null } : {}) });
+      output({ loaded: result.loaded, scope, summary: result.summary, profiled: result.profiled || "", warnings: result.warnings.join(" | ") });
+      const profiled = result.profiled ? `\n${result.profiled}` : "";
       const warnings = result.warnings.length ? `\nwarnings:\n${bullets(result.warnings)}` : "";
-      return say(`${result.loaded ? `loaded ${scope} into ${org}` : `${org} already holds ${scope}`}: ${result.summary}${warnings}`);
+      return say(`${result.loaded ? `loaded ${scope} into ${org}` : `${org} already holds ${scope}`}: ${result.summary}${profiled}${warnings}`);
     }),
     "data status": () => {   // what an org holds for a scope
       const org = required("org", "issue-512"), scope = required("scope", '"story 512"');
