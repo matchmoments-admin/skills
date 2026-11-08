@@ -1,0 +1,112 @@
+name: story-data
+# COMMAND: `/data Account 20; Contact 2 per Account; Case 5 Status=Escalated` on a story or its PR. The typed request is
+# read against the story's scratch org (its objects, any case, with a did-you-mean), written as the story's Data
+# request (data/seed/stories/<key>/request.json), committed to the story branch as the pipeline App, and loaded into the
+# story's org at once, shaped like production (the Data profile, read on demand); only a request that loaded is
+# committed. Staging and UAT load it from the branch later. Test data never reaches production, so the commit names the person but does not make them its
+# co-author (the approval rule is about code). A request that does not fit is answered with every problem; nothing is
+# committed. Agent-free: main's pipeline code, no AI. The typed text reaches the shell only as an environment variable.
+run-name: "test data for story ${{ inputs.story }} (@${{ inputs.who }})"
+on:
+  workflow_dispatch:
+    inputs:
+      story: { description: Story key (issue number or Jira key), required: true }
+      who: { description: GitHub login of the person who asked, required: true }
+      request: { description: "The /data line, e.g. Account 20; Contact 2 per Account", required: true }
+concurrency:
+  group: story-data-${{ inputs.story }}
+  cancel-in-progress: false
+permissions:
+  contents: write         # the event log; the branch is pushed as the pipeline App
+  pull-requests: write
+  issues: write
+  checks: read            # the story card is built from the gate's facts
+  statuses: read
+env:
+  PIPELINE_VARS: ${{ toJSON(vars) }}
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}   # optional: card turns to one Slack channel (pipeline/src/notify.mjs)
+jobs:
+  data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KEY: ${{ inputs.story }}
+      WHO: ${{ inputs.who }}
+      REQUEST: ${{ inputs.request }}
+    steps:
+      - name: Check the inputs
+        run: '[[ "$KEY" =~ ^([0-9]+|[A-Z][A-Z0-9]+-[0-9]+)$ && "$WHO" =~ ^[A-Za-z0-9-]+$ ]] || { echo "::error::bad input"; exit 1; }'
+      - uses: actions/checkout@v4
+        with: { ref: main, fetch-depth: 0 }
+      - name: Trusted pipeline code (main)
+        uses: actions/checkout@v4
+        with: { ref: main, path: .pipeline, sparse-checkout: "pipeline\nscripts\nconfig\n.github/actions\nbaseline\nbaseline-facts\ndata/seed\ndocs/agents\nREVIEW.md\nCLAUDE.md", persist-credentials: false }
+      - run: echo ".pipeline/" >> .git/info/exclude
+      - name: Names for this story
+        id: ctx
+        run: node .pipeline/pipeline/bin/pipe.mjs context --key "$KEY" --labels "$(gh issue view "$KEY" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || true)"
+      - name: The story has started (its branch and org exist)
+        id: started
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe commands use the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+        run: |
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then echo "yes=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "🧪 @$WHO: story $KEY has not started yet, so it has no org to load test data into. Put the line in the plan's **Test data** section (the build writes it), or comment \`/data ...\` again after **Start**."
+      - id: id
+        if: steps.started.outputs.yes == 'true'
+        uses: ./.pipeline/.github/actions/pipeline-identity   # re-checks out the story branch as the App
+        with:
+          app-id: ${{ secrets.PIPELINE_APP_ID }}
+          private-key: ${{ secrets.PIPELINE_APP_PRIVATE_KEY }}
+          ref: ${{ steps.ctx.outputs.STORY_BRANCH }}
+      - uses: ./.pipeline/.github/actions/sf-auth
+        if: steps.started.outputs.yes == 'true'
+        with:
+          consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
+          username: ${{ secrets.SF_CI_USERNAME }}
+          private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: Read the request against the story's org, commit it, load it
+        if: steps.started.outputs.yes == 'true'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe commands use the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+        run: |
+          node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "loading the test data @$WHO asked for" || true
+          ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH")
+          FILE="data/seed/stories/$KEY/request.json"
+          refuse() {   # every problem, nothing committed; the request file goes back to what the branch has
+            { echo "🧪 @$WHO: that test data cannot be loaded into \`$BRANCH\`, so nothing changed:"; echo; { grep '^- ' "$1" | grep -v '^- For example' || sed -n '1,5p' "$1"; }; echo; echo "For example: \`/data Account 20; Contact 2 per Account; Case 5 Status=Escalated\`"; } > "$RUNNER_TEMP/said.md"
+            git checkout -q -- "$FILE" 2>/dev/null || rm -f "$FILE"
+            node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "$(cat "$RUNNER_TEMP/said.md")"
+            node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" || true
+          }
+          if ! node .pipeline/pipeline/bin/pipe.mjs data request --story "$KEY" --org "$ALIAS" --data "$REQUEST" > "$RUNNER_TEMP/wrote.txt" 2> "$RUNNER_TEMP/problems.txt"; then refuse "$RUNNER_TEMP/problems.txt"; exit 0; fi
+          # load before committing: a request that parses but does not fit the org (a lookup test data cannot fill) is refused here
+          if ! node .pipeline/pipeline/bin/pipe.mjs data seed --org "$ALIAS" --request "$FILE" > "$RUNNER_TEMP/loaded.txt" 2> "$RUNNER_TEMP/problems.txt"; then
+            grep -q '^- ' "$RUNNER_TEMP/problems.txt" || { cat "$RUNNER_TEMP/problems.txt"; exit 1; }   # not the request's fault: fail the run
+            refuse "$RUNNER_TEMP/problems.txt"; exit 0
+          fi
+          SUMMARY=$(sed -n 's/^[^:]*: //p' "$RUNNER_TEMP/wrote.txt" | head -1)
+          git add "$FILE"
+          if ! git diff --cached --quiet; then
+            git config user.name "__owner__-pipeline[bot]"; git config user.email "pipeline@users.noreply.github.com"
+            printf 'test(data): story %s test data: %s\n\nAsked for by @%s with /data. Test data only: it never reaches production.\n' "$KEY" "$SUMMARY" "$WHO" > "$RUNNER_TEMP/msg.txt"
+            git commit -q -F "$RUNNER_TEMP/msg.txt"
+            git push -q origin "HEAD:$BRANCH"
+          fi
+          { echo "🧪 @$WHO: **Test data:** $SUMMARY"; echo; echo "Loaded into \`$BRANCH\`:"; echo; sed 's/^/> /' "$RUNNER_TEMP/loaded.txt"; echo;
+            echo "Committed to the story ($(git rev-parse --short HEAD)), so staging and UAT get it too. Another \`/data\` replaces this set; records made by hand stay.";
+            echo; echo "<!-- pipeline:test-data -->"; } > "$RUNNER_TEMP/said.md"
+          node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "$(cat "$RUNNER_TEMP/said.md")"
+          node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" || true
+      - name: The card says it failed, and where to look
+        if: failure()
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe commands use the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "loading the test data" --failed --retry "comment /data again" || true

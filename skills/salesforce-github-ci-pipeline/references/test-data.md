@@ -32,8 +32,16 @@ Apex tests never see any of this. They build their own data (a `TestDataFactory`
   { "object": "Case", "count": 2, "scenario": "escalated", "set": { "Status": "Escalated" } } ] }
 ```
 
-- `pipe data check --request F` validates a file offline; `pipe data seed --org A --request F [--scope S]` loads it;
-  `pipe data status|remove --org A --scope S` shows or undoes it. Up to 2,000 records per load.
+- **Where requests come from:** the AI plan's `### Test data` line (`/data Account 20; Contact 2 per Account`), which
+  the build writes as the story's `request.json`; a `/data ...` comment on a started story (`story-data.yml`: read
+  against the story's org with a did-you-mean, loaded, and only then committed to the branch as the App, never as the
+  person's code; the card's org row shows the story's test data); and **Actions › data-seed** for a Developer sandbox
+  (sandbox name, `seed`/`status`/`remove`, typed request or file; it logs in as `<SF_CI_USERNAME>.<sandbox>` with the
+  CI certificate, which needs the sandbox created or refreshed after the connected app existed).
+- `pipe data check` (no file: every story's request, offline; CI's static job runs it) and `--request F` for one file;
+  `pipe data seed --org A --request F | --data "Account 20; ..." [--scope S]` loads (typed requests default to the
+  "by hand" set, which the next typed one replaces); `pipe data status|remove --org A --scope S` shows or undoes it.
+  Up to 2,000 records per load.
 - Values a request sets win; generated values never replace them (date tokens work: `${TODAY-30}`). Required lookups
   the generator cannot fill (polymorphic, User/RecordType/Profile..., or a lookup to the same object) are reported:
   set them in the request.

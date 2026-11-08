@@ -8,6 +8,7 @@ import { planContext, planState, replanOf } from "./plan.mjs";
 import { stageOf, moveCard } from "./board.mjs";
 import { checklist, allowed } from "./actions.mjs";
 import { notice, slackNotifier } from "./notify.mjs";
+import { storyTestData } from "./data/request.mjs";
 import { needs as whoIsNeeded } from "./journey.mjs";
 
 export const CARD_TITLE = "Pipeline status";
@@ -25,13 +26,15 @@ const stateOf = (c) => ({ passed: "done", failed: "failed", missing: "waiting", 
  *   that the job would undo.
  * returns markdown.
  */
-export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null, planned = false, releasePr = null, replan = null }) {
+export function storyCard({ key, repoUrl, branch, base, ai = {}, pr = null, facts = null, decision = null, shipped = null, activity = null, planned = false, releasePr = null, replan = null, testData = null }) {
   const now = activityLine(activity);
   const rows = [];
   const prUrl = pr ? `${repoUrl}/pull/${pr.number}` : null;
   const branchLink = pr?.state === "MERGED" ? `\`${branch}\`` : `[\`${branch}\`](${repoUrl}/tree/${encodeURIComponent(branch)})`;   // merged branches are deleted
   if (planned) rows.push(["done", "Plan agreed", "the **Build plan** comment on this story, with the answers to it, is part of the spec"]);
-  rows.push(["done", "Branch and scratch org", `${branchLink} from \`${base}\`; org \`${branch}\` (production's shape, its customisations and test data)`]);
+  // the org's test data sits on the org's row (it is the org's): what the story asked for, and how to change it
+  const data = testData ? `; test data: ${testData} (**/data** changes it)` : "; comment **/data Account 20** for more test data";
+  rows.push(["done", "Branch and scratch org", `${branchLink} from \`${base}\`; org \`${branch}\` (production's shape, its customisations and test data)${pr?.state === "MERGED" ? "" : data}`]);
 
   const wait = activity?.state === "running" && activity.wait ? `Wait: ${activity.what}. This card updates when it is done.` : null;
   let next;
@@ -400,13 +403,14 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
     const ai = aiFeatures();
     const openRel = host.openRelease();
     const f = pr ? host.prFacts(pr.number) : null;
-    const pc = planContext(await tracker.comments(key).catch(() => []));
+    const comments = await tracker.comments(key).catch(() => []);
+    const pc = planContext(comments);
     const planned = Boolean(pc.plan);
     // when the PR's head commit was made: a plan or an answer after it asks for a rebuild (replanOf)
     const built = (f?.pr?.commits || []).map((c) => c.committedDate).filter(Boolean).sort().pop() || null;
     const replan = pr?.state === "OPEN" ? replanOf(pc, built) : null;
     const releasePr = pr?.state === "MERGED" && openRel ? host.releasePrOf(openRel) : null;   // memoized per process
-    return { branch, pr, ai, facts: f, planned, replan, releasePr, sprintOpen: Boolean(openRel), base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
+    return { branch, pr, ai, facts: f, planned, replan, releasePr, testData: storyTestData({ plan: pc.plan, comments }), sprintOpen: Boolean(openRel), base: pr?.baseRefName || base || context({ key, openReleaseBranch: openRel }).BASE_BRANCH || "main" };
   }
   // A Now update in a process that read no facts (#427): the card already on the story with its Now line replaced, on
   // the story and its PR, without the facts read (~16 requests). Only while the card describes the PR as it is now
@@ -441,7 +445,7 @@ export function storyCards({ host, tracker, prTracker, log = () => {}, slack = s
           else if (!(s?.labels || []).includes("spec")) await write(tracker, key, newStoryCard({ key, ai: aiFeatures(), plan, sprintOpen: c.sprintOpen }), { name });
           return;
         }
-        const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, replan: c.replan, base: c.base, releasePr: c.releasePr,
+        const body = storyCard({ key, repoUrl: host.repoUrl, branch: c.branch, ai: c.ai, pr: c.pr, facts: c.facts, decision: c.facts ? evaluate(c.facts) : null, planned: c.planned, replan: c.replan, base: c.base, releasePr: c.releasePr, testData: c.testData,
           shipped: tag ? { tag, url: `${host.repoUrl}/releases/tag/${tag}` } : null, activity });
         await write(tracker, key, body, { kinds: ["you", "failed"] });
         if (c.pr) {

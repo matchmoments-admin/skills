@@ -2,6 +2,7 @@
 // named scenarios. Written by Claude from the build plan's "Test data" section, or by a person with /data; kept in git
 // at data/seed/stories/<key>/request.json. Pure: parse, validate, hash, and read the /data command.
 import { createHash } from "node:crypto";
+import { isPipelineAuthor } from "../conventions.mjs";
 
 export const REQUEST_VERSION = 1;
 export const MAX_COUNT = 2000;
@@ -152,3 +153,39 @@ function distance(a, b) {
   }
   return row[b.length];
 }
+
+/**
+ * A request as its file holds it (the input format parseRequest reads): no empty keys, perParent as { Parent: n }.
+ * parseRequest(requestFile(r)) gives r back, so a request written by /data loads and keeps its id.
+ */
+export function requestFile(request) {
+  return {
+    version: request.version,
+    objects: request.objects.map((e) => ({
+      object: e.object,
+      ...(e.perParent ? { perParent: { [e.perParent.parent]: e.perParent.count } } : { count: e.count }),
+      ...(e.scenario ? { scenario: e.scenario } : {}),
+      ...(Object.keys(e.set || {}).length ? { set: e.set } : {}),
+    })),
+  };
+}
+
+/** The marker on the pipeline's /data reply: the card reads the story's test data from it, among comments it already has. */
+export const DATA_MARK = "<!-- pipeline:test-data -->";
+
+/**
+ * A story's test data in people's words, or null: the latest /data reply (it carries DATA_MARK and a "**Test data:**"
+ * line), else the agreed plan's "### Test data" /data line. Pure: the comments and the plan are read already.
+ */
+export function storyTestData({ plan = null, comments = [] }) {
+  const reply = [...comments].filter((c) => isPipelineReply(c)).sort((a, b) => String(a.created).localeCompare(String(b.created))).pop();
+  const line = reply?.body.match(/\*\*Test data:\*\* (.+)/)?.[1];
+  if (line) return line.trim();
+  const section = String(plan || "").match(/###\s*Test data\s*\n([\s\S]*?)(?=\n###\s|\n*PLAN-SIZE:|$)/i)?.[1] || "";
+  const typed = section.match(/\/data\b[^\n`]*/)?.[0];
+  if (!typed) return null;
+  const { request } = parseDataCommand(typed);
+  return request ? request.objects.map(describeEntry).join("; ") : null;
+}
+// only the pipeline's own reply counts: a person typing the marker does not change what the card says
+const isPipelineReply = (c) => String(c.body || "").includes(DATA_MARK) && (isPipelineAuthor(c.author) || c.author === "app/pipeline");

@@ -18,7 +18,25 @@ const ALREADY_GONE = /ENTITY_IS_DELETED|INVALID_CROSS_REFERENCE_KEY/;
 const scratchFile = (name) => join(mkdtempSync(join(tmpdir(), "data-")), name);
 const soqlString = (text) => `'${String(text).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 
-const describeIn = (sf, alias, names) => Object.fromEntries(names.map((name) => [name, sf(["sobject", "describe", "-s", name, "-o", alias], { allowFail: true }) || null]));
+/**
+ * GET requests sent 25 to a REST composite batch call (haltOnError false: each answers alone; plain /composite stops
+ * after 5 queries with PROCESSING_HALTED, found live 8 Nov). paths: relative to /services/data ("v67.0/query?q=...").
+ * Returns one { ok, result } per path, in order.
+ */
+function batchGet(rest, paths) {
+  const answers = [];
+  for (const part of chunk(paths, BATCH_QUERIES)) {
+    const reply = rest("POST", "/composite/batch", { haltOnError: false, batchRequests: part.map((url) => ({ method: "GET", url })) });
+    part.forEach((_, i) => { const a = reply?.results?.[i]; answers.push({ ok: Boolean(a) && Number(a.statusCode) < 300, result: a?.result ?? "no reply" }); });
+  }
+  return answers;
+}
+
+/** sobject describes, batched (one call per 25 objects instead of one sf process each); null for an object the org lacks. */
+function describeIn(rest, apiVersion, names) {
+  const answers = names.length ? batchGet(rest, names.map((name) => `v${apiVersion}/sobjects/${name}/describe`)) : [];
+  return Object.fromEntries(names.map((name, i) => [name, answers[i].ok ? answers[i].result : null]));
+}
 
 /**
  * One REST call in an org; the reply's `body` is unwrapped and a 4xx or 5xx throws. A body goes as a file (`-b @file`:
@@ -48,10 +66,9 @@ function restIn({ sf, alias, apiVersion }) {
 }
 
 /**
- * Production as the Profile source (data/profile.mjs): describes, and aggregate queries sent 25 to a REST composite batch
- * call (haltOnError false, so one query that fails is an error for that query alone; plain /composite stops after 5
- * queries with PROCESSING_HALTED, found live 8 Nov). A query that is not an aggregate is refused before anything is
- * sent: the profile never reads a record. Results are kept for the run, so staging, which loads every story's request,
+ * Production as the Profile source (data/profile.mjs): describes and aggregate queries, each sent 25 to a REST composite
+ * batch call (batchGet: one query that fails is an error for that query alone). A query that is not an aggregate is
+ * refused before anything is sent: the profile never reads a record. Results are kept for the run, so staging, which loads every story's request,
  * reads each object once.
  */
 export function sfProfileSource({ sf, alias = DEVHUB, apiVersion = "67.0" }) {
@@ -60,21 +77,16 @@ export function sfProfileSource({ sf, alias = DEVHUB, apiVersion = "67.0" }) {
   return {
     describe(names) {
       const missing = names.filter((n) => !describes.has(n));
-      for (const [name, d] of Object.entries(describeIn(sf, alias, missing))) describes.set(name, d);
+      for (const [name, d] of Object.entries(describeIn(rest, apiVersion, missing))) describes.set(name, d);
       return Object.fromEntries(names.map((n) => [n, describes.get(n)]));
     },
     aggregate(queries) {
       const refused = queries.find((q) => !isAggregate(q.soql));
       if (refused) throw new Error(`refusing to read production (${alias}) with a query that is not an aggregate: ${refused.soql}`);
-      const todo = [...new Map(queries.filter((q) => !results.has(q.soql)).map((q) => [q.soql, q])).values()];
-      for (const part of chunk(todo, BATCH_QUERIES)) {
-        const reply = rest("POST", "/composite/batch", { haltOnError: false, batchRequests: part.map((q) => ({ method: "GET", url: `v${apiVersion}/query?q=${encodeURIComponent(q.soql)}` })) });
-        const answers = reply?.results || [];
-        part.forEach((q, i) => {
-          const a = answers[i];
-          results.set(q.soql, a && Number(a.statusCode) < 300 ? { records: a.result?.records || [] } : { error: JSON.stringify(a?.result ?? "no reply").slice(0, 200) });
-        });
-      }
+      const todo = [...new Set(queries.map((q) => q.soql).filter((soql) => !results.has(soql)))];
+      batchGet(rest, todo.map((soql) => `v${apiVersion}/query?q=${encodeURIComponent(soql)}`)).forEach(({ ok, result }, i) => {
+        results.set(todo[i], ok ? { records: result?.records || [] } : { error: JSON.stringify(result).slice(0, 200) });
+      });
       return queries.map((query) => ({ query, ...results.get(query.soql) }));
     },
   };
@@ -118,7 +130,7 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
       return identityOnce;
     },
 
-    describe: (names) => describeIn(sf, alias, names),
+    describe: (names) => describeIn(rest, apiVersion, names),
 
     objectNames() {
       const names = sf(["sobject", "list", "-s", "all", "-o", alias], { allowFail: true });

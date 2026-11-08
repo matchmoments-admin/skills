@@ -136,13 +136,20 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   resource does not exist".
 - **Test data:** Apex tests make their own (they cannot see org data). The org's seed (`data/seed`, synthetic) is for
   UI tests, Flow checks and people: read seed records by name, create only what a test changes.
-- **A story that adds an object, or a field people test, ships its own seed:** `data/seed/stories/<story key>/plan.json`
-  plus one JSON file per object (`sf data import tree` format, as `data/seed`). Up to about 20 synthetic records that
-  show the feature working. A tree plan's `@ref` references reach only records in the same plan, so when the records
-  need a parent (an Account), the story's plan makes its own few synthetic parents first and references them
-  (`@SomeAcc01`). Use picklist codes, never real people or emails. The story's org, then
-  staging and UAT load it (once, by its marker), so testers and the UI tests find records to look at. A shipped story's
-  seed is folded into the core seed by a bot PR after the release.
+- **Test data on request:** a story that adds an object, or a field people test, says what records it needs as a
+  Data request: `data/seed/stories/<story key>/request.json`, the plan's **Test data** line in JSON
+  (`{ "version": 1, "objects": [{ "object": "Account", "count": 20 }, { "object": "Contact", "perParent": { "Account": 2 } },
+  { "object": "Case", "count": 5, "set": { "Status": "Escalated" } }] }`). Objects and counts only, plus the field values a
+  criterion depends on (`set`, date tokens such as `${TODAY-30}` work); never names, emails or real data. The pipeline
+  generates the records to fit each org's own fields, picklists and lookups (and makes any required parents), shaped
+  like production, and loads them into the story's org, staging and UAT, once each. Check it with
+  `pipe data check --request <file>`. People change it with a `/data Account 20; Contact 2 per Account` comment.
+- **A tree seed only for records a UI test finds by an exact name:** `data/seed/stories/<story key>/plan.json`
+  plus one JSON file per object (`sf data import tree` format, as `data/seed`). A tree plan's `@ref` references reach
+  only records in the same plan, so when the records need a parent (an Account), the story's plan makes its own few
+  synthetic parents first and references them (`@SomeAcc01`). Use picklist codes, never real people or emails. The
+  story's org, then staging and UAT load it (once, by its marker). A shipped story's seed is folded into the core seed by
+  a bot PR after the release.
 - **Every Apex test class declares what it tests:** `@IsTest(testFor='ApexClass:CaseHandler,ApexTrigger:CaseTrigger')`
   at class level (not on methods), and sharing or access tests add `critical=true` (they always run). CI and the
   production validation use `RunRelevantTests` (Salesforce beta, API 66+): the platform picks the tests a change

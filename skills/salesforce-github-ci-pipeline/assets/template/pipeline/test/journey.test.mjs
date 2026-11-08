@@ -147,7 +147,7 @@ test("start decisions: a job that has nothing to do is decided before a runner s
   // #417's minute cuts: the build and the fix run CI's static checks themselves before pushing (a fix round is ~25
   // billed minutes), and the UI writer starts from a spec that passed first time
   for (const [wf, text] of [["ai-implement", impl], ["ai-fix", readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8")]]) {
-    assert.match(text, /allowed-tools: "[^"]*Bash\(node \.pipeline\/pipeline\/bin\/pipe\.mjs access check:\*\),Bash\(node \.pipeline\/pipeline\/bin\/pipe\.mjs automation check:\*\)"/, `${wf}: may run the checks`);
+    assert.match(text, /allowed-tools: "[^"]*Bash\(node \.pipeline\/pipeline\/bin\/pipe\.mjs access check:\*\),Bash\(node \.pipeline\/pipeline\/bin\/pipe\.mjs automation check:\*\),Bash\(node \.pipeline\/pipeline\/bin\/pipe\.mjs data check:\*\)"/, `${wf}: may run the checks`);
     assert.match(text, /Before you commit, run what CI's static checks run[^\n]*access check --base origin\/[^\n]*automation check --base origin\/[^\n]*sf code-analyzer run --workspace force-app --severity-threshold 2[^\n]*REVIEW\.md's Blocker and Major/, `${wf}: told to`);
   }
   const ui = readFileSync(new URL("../../.github/workflows/ui-test.yml", import.meta.url), "utf8");

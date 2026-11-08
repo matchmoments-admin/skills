@@ -5,7 +5,7 @@
 //   labels    sync                                       create or update every label the pipeline uses
 //   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits · capacity [--devs N] [--in-use N (active orgs other projects hold; not this pipeline's staging, UAT or story orgs)] [--uat-sandbox] (load and cost)
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
-//   data      seed --org A --request F [--scope S] [--no-profile] · status|remove --org A --scope S · check --request F   a Data request in any non-production org
+//   data      seed --org A --request F|--data "Account 20; Contact 2 per Account" [--scope S] [--no-profile] · status|remove --org A --scope S · check [--request F] · request --story K --org A --data D   a Data request in any non-production org (request: /data's, into the story)
 //   next      --after review|ci|staging|release-pr|org-freed|any [--pr N]   what the journey owes next, started (journey.mjs)
 //   finish    review|ui-test|ci|staging|uat --pr N|--branch B --sha S --outcome O [--detail D]   end a stage (finish.mjs)
 //   reconcile [--pr N]                                    re-run runs GitHub never started; start what is owed on every idle open PR
@@ -77,7 +77,7 @@ import { finish, reconcile, rerunNotStarted, STAGE } from "../src/finish.mjs";
 import * as roles from "../src/roles.mjs";
 import * as improve from "../src/improve.mjs";
 
-const VALUE_FLAGS = new Set(["key", "request", "scope", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "floor", "level",
+const VALUE_FLAGS = new Set(["key", "request", "data", "scope", "branch", "labels", "manifest", "base", "tag", "out", "since", "sprint", "head", "days", "log", "story", "sha", "min", "floor", "level",
   "deletions-from", "now", "retry", "file", "pr", "dir", "validated-job", "validated-tree", "previous", "except", "minutes", "role", "model", "release", "number", "by", "by-type", "command", "before", "after", "comment", "for", "url", "login", "email", "alias", "org-url", "if-older-than", "mode", "ref", "from", "job", "tree", "ci", "run", "park", "devs", "stories", "sprint-days", "in-flight", "test-seconds", "in-use", "org", "result", "outcome", "detail", "weak", "kind", "changed", "provider", "arm", "cases", "wait", "prune"]);
 const [cmd, ...argv] = process.argv.slice(2);
 const flags = {}, positional = [];
