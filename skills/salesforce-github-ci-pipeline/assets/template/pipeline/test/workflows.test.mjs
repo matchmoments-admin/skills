@@ -636,3 +636,23 @@ test("#430: the snapshot is rebuilt when the baseline or seed changed, after a r
   assert.match(pipe, /snapshotPlan\(\{ ifChanged: has\("if-changed"\)/, "pipe snapshot refresh asks the registry once");
   assert.match(pipe, /snapshotDescription\(\{ \.\.\.plan\.ids/, "a new snapshot names the ids the decision hashed (one hash)");
 });
+
+test("workflows: every run block of every workflow and action is valid bash (bash -n), so no dispatch dies before pipe runs", async () => {
+  // data-seed.yml's Test data step once had a stray, unclosed `case` (#478): every dispatch failed, and regex tests passed
+  const { execFileSync } = await import("node:child_process");
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const root = new URL("../../.github/", import.meta.url);
+  const sources = [
+    ...readdirSync(new URL("workflows/", root)).filter((f) => /\.ya?ml$/.test(f)).map((f) => [`workflows/${f}`, yaml.load(readFileSync(new URL(`workflows/${f}`, root), "utf8"))]),
+    ...readdirSync(new URL("actions/", root)).filter((d) => existsSync(new URL(`actions/${d}/action.yml`, root))).map((d) => [`actions/${d}`, yaml.load(readFileSync(new URL(`actions/${d}/action.yml`, root), "utf8"))]),
+  ];
+  const steps = ([name, doc]) => [...Object.entries(doc.jobs || {}).flatMap(([job, j]) => (j.steps || []).map((s, i) => [`${name} ${job} step ${i + 1} (${s.name || s.id || "run"})`, s])),
+    ...(doc.runs?.steps || []).map((s, i) => [`${name} step ${i + 1} (${s.name || s.id || "run"})`, s])];
+  const runs = sources.flatMap(steps).filter(([, s]) => typeof s.run === "string" && !/^(pwsh|python|node|sh)\b/.test(s.shell || ""));
+  assert.ok(runs.length > 100, `every run block is checked (${runs.length})`);
+  const bad = runs.flatMap(([where, s]) => {
+    try { execFileSync("bash", ["-n"], { input: s.run.replace(/\$\{\{[\s\S]*?\}\}/g, "EXPR"), stdio: ["pipe", "pipe", "pipe"] }); return []; }
+    catch (e) { return [`${where}: ${String(e.stderr).trim()}`]; }
+  });
+  assert.deepEqual(bad, [], "each run block parses as bash");
+});

@@ -11,7 +11,7 @@ import { objectsNeeded, loadPlan } from "../src/data/load-plan.mjs";
 import { generateRecords, resolveTokens } from "../src/data/generate.mjs";
 import { profileQueries, profileFrom, profileFor, isAggregate, SUPPRESSED } from "../src/data/profile.mjs";
 import { begin, record, finish, deletions, decide } from "../src/data/ledger.mjs";
-import { loadTestData, removeTestData, testDataStatus } from "../src/data/load.mjs";
+import { loadTestData, removeTestData, testDataStatus, applyDataRequest } from "../src/data/load.mjs";
 import { sfDataStore, sfProfileSource } from "../src/org/data-store.mjs";
 import { sfFrom } from "../src/io.mjs";
 import { scopeOf, dataCommands } from "../bin/commands/data.mjs";
@@ -392,15 +392,15 @@ test("sf adapter: REST bodies go as @file, replies are unwrapped from { statusCo
   assert.match(post[post.indexOf("-b") + 1], /^@\/.*body\.json$/, "the CLI reads a file only with @");
   assert.equal(posted.Title, "[data ledger story 9]");
   assert.equal(JSON.parse(Buffer.from(posted.VersionData, "base64").toString()).requestId, "abc");
-  const failing = recordedSf((args) => (args[0] === "api" ? recorded("rest-error") : { records: [{ Id: "068A", ContentDocumentId: "069A" }] }));
+  const failing = recordedSf((args) => (args[0] === "api" ? recorded("rest-error") : { records: [{ Id: "068A", ContentDocumentId: "069A", Title: "[data ledger story 9]" }] }));
   assert.throws(() => sfDataStore({ sf: failing.sf, alias: "issue-9" }).dropLedger("story 9"), /DELETE .*ContentDocument\/069A in issue-9 answered 404: .*INVALID_CROSS_REFERENCE_KEY/, "sf exits 1; the reason is still said");
-  const loggedOut = recordedSf((args) => (args[0] === "api" ? JSON.stringify({ status: 1, message: "No authorization information found" }) : { records: [{ Id: "068A", ContentDocumentId: "069A" }] }));
+  const loggedOut = recordedSf((args) => (args[0] === "api" ? JSON.stringify({ status: 1, message: "No authorization information found" }) : { records: [{ Id: "068A", ContentDocumentId: "069A", Title: "[data ledger story 9]" }] }));
   assert.throws(() => sfDataStore({ sf: loggedOut.sf, alias: "issue-9" }).dropLedger("story 9"), /failed in issue-9 \(no HTTP reply: is the org logged in\?\)/);
 });
 
 test("sf adapter: reads the ledger back (parsed or text body), maps composite deletes, and imports a tree file all or nothing", () => {
   const replies = (args, body, rest) => {
-    if (args[0] === "data" && args[1] === "query") return { records: [{ Id: "068A", ContentDocumentId: "069A" }] };
+    if (args[0] === "data" && args[1] === "query") return { records: [{ Id: "068A", ContentDocumentId: "069A", Title: "[data ledger story 9]" }] };
     if (rest?.url.endsWith("/VersionData")) return recorded("rest-get-versiondata");
     if (rest?.method === "DELETE") {
       assert.deepEqual(rest.body, { mode: "raw", raw: "" }, "a bodyless call goes as a definition: -X DELETE alone fails in sf");
@@ -501,20 +501,99 @@ test("seed: a story's request loads with SEED on even without a core seed; in st
   } finally { process.chdir(cwd); }
 });
 
-test("pipe data seed --data: a typed request is read against the org's objects (any case) into the \"by hand\" set; problems listed", () => {
-  const loads = [];
-  const orgs = () => ({ dataObjects: () => ["Account", "Contact", "Case"], loadTestData: (org, args) => { loads.push({ org, ...args }); return { loaded: true, summary: "ok", warnings: [], profiled: null }; } });
+/** The registry's data methods over one memory Org data store, with no production profile and no core seed. */
+async function memoryOrgs(store, { work = null, logs = [] } = {}) {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { dataMethods } = await import("../src/org/data.mjs");
+  const root = work || mkdtempSync(join(tmpdir(), "orgs-"));
+  const methods = dataMethods({ sf: () => null, log: (l) => logs.push(l), env: { DATA_PROFILE: "off" }, seedDir: join(root, "none"), record: () => {}, seedId: () => null, dataRoot: root, makeStore: () => store });
+  return () => methods;
+}
+
+test("pipe data seed --data: a typed request is read against the org's objects (any case) into the \"by hand\" set; problems listed", async () => {
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const orgs = await memoryOrgs(store);
   const run = (flags) => {
     const said = [];
     const commands = dataCommands({ flag: (n) => flags[n] ?? null, has: (n) => flags[n] === true, output: () => {}, say: (t) => said.push(t), orgs });
     commands["data seed"]();
     return said.join("\n");
   };
-  run({ org: "dev-sandbox", data: "account 20; contact 2 per account" });
-  assert.deepEqual(loads[0].request.objects.map(describeEntry), ["20 Account", "2 Contact per Account"]);
-  assert.equal(loads[0].scope, "by hand", "the next typed request replaces this one");
+  assert.match(run({ org: "dev-sandbox", data: "account 2; contact 2 per account" }), /^loaded by hand into dev-sandbox: 6 records \(Account 2, Contact 4\) from 2 Account; 2 Contact per Account/);
+  assert.equal(store.ledger("by hand").requestId.length, 12, "the next typed request replaces this one");
   assert.throws(() => run({ org: "dev-sandbox", data: "Acount 5" }), /The test data request cannot be loaded:\n- "Acount" is not an object in this org \(did you mean Account\?\)/);
   assert.throws(() => run({ org: "dev-sandbox", data: "  " }), /--data is empty/);
+  const status = [];
+  dataCommands({ flag: (n) => ({ org: "dev-sandbox", scope: "by hand" })[n] ?? null, output: () => {}, say: (t) => status.push(t), orgs })["data status"]();
+  assert.match(status[0], /^dev-sandbox holds 6 records \(Account 2, Contact 4\) for by hand, loaded /, "status and remove reach the use case through the org's store");
+  dataCommands({ flag: (n) => ({ org: "dev-sandbox", scope: "by hand" })[n] ?? null, output: () => {}, say: (t) => status.push(t), orgs })["data remove"]();
+  assert.equal(store.count("Account"), 0);
+});
+
+// ---- /data on a story: one use case, one typed outcome (data/load.mjs applyDataRequest)
+
+/** A story's request file in memory (the storyFile port of applyDataRequest). */
+const fileAt = (path, text = null) => ({ path, text, writes: 0, read() { return this.text; }, write(t) { this.text = t; this.writes++; } });
+
+test("data apply: a request that does not fit is refused with every problem, and nothing is loaded or written", () => {
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const file = fileAt("data/seed/stories/9/request.json");
+  const typo = applyDataRequest(store, { typed: "Acount 5; Contact 2 per Account", scope: "story 9", storyFile: file, today: TODAY });
+  assert.deepEqual(typo, { outcome: "refused", problems: ['"Acount" is not an object in this org (did you mean Account?)'] }, "the reply adds its own example");
+  const unfillable = applyDataRequest(store, { typed: "Mandatory__c 2", scope: "story 9", storyFile: file, today: TODAY });
+  assert.equal(unfillable.outcome, "refused", "parses, but does not fit the org (a lookup test data cannot fill): refused at load, before any write");
+  assert.ok(unfillable.problems.length >= 1);
+  assert.deepEqual([file.writes, store.count("Account"), store.ledger("story 9")], [0, 0, null]);
+  assert.deepEqual(applyDataRequest(store, { typed: "  ", scope: "story 9", storyFile: file }).outcome, "refused");
+});
+
+test("data apply: a request that loads is written in its file format; the same line again loads nothing and changes nothing", () => {
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const file = fileAt("data/seed/stories/9/request.json");
+  const first = applyDataRequest(store, { typed: "account 3; case 2 Subject=Broken", scope: "story 9", storyFile: file, today: TODAY });
+  assert.deepEqual({ ...first, records: undefined, warnings: undefined }, { outcome: "loaded", summary: "3 Account; 2 Case (Subject=Broken)", records: undefined, fresh: true, profiled: null, warnings: undefined, changed: true, file: "data/seed/stories/9/request.json" });
+  assert.match(first.records, /^5 records \(Account 3, Case 2\) from 3 Account; 2 Case/);
+  const written = parseRequest(file.text);   // what org provisioning reads back (found live: the normalized form did not parse)
+  assert.deepEqual(written.objects.map(describeEntry), ["3 Account", "2 Case (Subject=Broken)"]);
+  assert.equal(requestId(written), store.ledger("story 9").requestId, "the file's request is the one the org holds");
+  assert.doesNotMatch(file.text, /null/, "the file a person reads has no empty keys");
+  const again = applyDataRequest(store, { typed: "Account 3; Case 2 Subject=Broken", scope: "story 9", storyFile: file, today: TODAY });
+  assert.deepEqual([again.outcome, again.fresh, again.changed, file.writes], ["loaded", false, false, 1], "unchanged: no write, no commit");
+  const committedElsewhere = fileAt("data/seed/stories/9/request.json", "{}\n");
+  assert.equal(applyDataRequest(store, { typed: "Account 3; Case 2 Subject=Broken", scope: "story 9", storyFile: committedElsewhere }).changed, true, "the org held it, the file did not: written");
+});
+
+test("data apply: an error that is not the request's (an sf or login failure, production) throws, so the run fails and nothing is written (bug B)", () => {
+  const file = fileAt("data/seed/stories/9/request.json");
+  const loggedOut = { ...memoryDataStore({ describes: DESCRIBES }), objectNames: () => { throw new Error("could not list the objects in issue-9 (is the org logged in?)"); } };
+  assert.throws(() => applyDataRequest(loggedOut, { typed: "Account 3", scope: "story 9", storyFile: file }), /could not list the objects in issue-9/, "never 'cannot be loaded'");
+  const failing = memoryDataStore({ describes: DESCRIBES, failInsert: 1 });
+  assert.throws(() => applyDataRequest(failing, { typed: "Account 3", scope: "story 9", storyFile: file }), /insert 1 failed on purpose/);
+  const production = memoryDataStore({ describes: DESCRIBES, identity: { isDevHub: true } });
+  assert.throws(() => applyDataRequest(production, { typed: "Account 3", scope: "story 9", storyFile: file }), /it is production \(the Dev Hub\)/);
+  assert.equal(file.writes, 0);
+});
+
+test("pipe data apply prints the outcome as one JSON object and writes the story's request file in the working directory", async () => {
+  const { mkdtempSync, readFileSync: read, existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const work = mkdtempSync(join(tmpdir(), "story-apply-"));
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const orgs = await memoryOrgs(store, { work });
+  const cwd = process.cwd();
+  process.chdir(work);
+  try {
+    const run = (data, story = "9") => { const said = []; dataCommands({ flag: (n) => ({ story, org: "issue-9", data })[n] ?? null, output: () => {}, say: (t) => said.push(t), orgs })["data apply"](); return JSON.parse(said.join("")); };
+    assert.equal(run("Acount 2").outcome, "refused");
+    assert.equal(existsSync(join(work, "data/seed/stories/9/request.json")), false, "refused: no file");
+    const loaded = run("account 2");
+    assert.deepEqual([loaded.outcome, loaded.changed, loaded.file], ["loaded", true, "data/seed/stories/9/request.json"]);
+    assert.deepEqual(parseRequest(read(join(work, loaded.file), "utf8")).objects.map(describeEntry), ["2 Account"]);
+    assert.throws(() => run("Account 2", "../x"), /not a story key/);
+  } finally { process.chdir(cwd); }
 });
 
 // ---- Phase 2 and 4: test data in the story flow (the plan, /data, the card, CI) and for Developer sandboxes
@@ -552,8 +631,8 @@ test("/data on a story or its PR dispatches story-data with the typed line; empt
   assert.match(help(false), /\/data Account 20/); assert.match(help(true), /\/data Account 20/);
 });
 
-test("pipe data check with no file checks every story's request offline (CI); pipe data request writes the story's file", async () => {
-  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync: read } = await import("node:fs");
+test("pipe data check with no file checks every story's request offline (CI)", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const { checkStoryRequests } = await import("../bin/commands/data.mjs");
@@ -565,24 +644,6 @@ test("pipe data check with no file checks every story's request offline (CI); pi
   const checked = checkStoryRequests(root);
   assert.deepEqual(checked.map((c) => [c.file.split("/").slice(-2).join("/"), c.problems.length > 0]), [["7/request.json", false], ["8/request.json", true]]);
   assert.match(checked[1].problems[0], /give either "count" or "perParent"/);
-  const work = mkdtempSync(join(tmpdir(), "story-req-"));
-  const cwd = process.cwd();
-  process.chdir(work);
-  try {
-    const said = [], outputs = [];
-    const flags = { story: "9", org: "issue-9", data: "account 3; case 2 Status=Escalated" };
-    const commands = dataCommands({ flag: (n) => flags[n] ?? null, output: (o) => outputs.push(o), say: (t) => said.push(t), orgs: () => ({ dataObjects: () => ["Account", "Case"] }) });
-    commands["data request"]();
-    const text = read(join(work, "data/seed/stories/9/request.json"), "utf8");
-    const written = parseRequest(text);   // what org provisioning reads back (found live: the normalized form did not parse)
-    assert.deepEqual(written.objects.map(describeEntry), ["3 Account", "2 Case (Status=Escalated)"]);
-    assert.doesNotMatch(text, /null/, "the file a person reads has no empty keys");
-    assert.equal(outputs[0].changed, true);
-    commands["data request"]();
-    assert.equal(outputs[1].changed, false, "the same line again changes nothing (no commit)");
-    // story-data.yml takes the summary after the first ": " (sed 's/^[^:]*: //')
-    assert.deepEqual(said.map((l) => l.replace(/^[^:]*: /, "")), ["3 Account; 2 Case (Status=Escalated)", "3 Account; 2 Case (Status=Escalated)"]);
-  } finally { process.chdir(cwd); }
 });
 
 test("workflows: /data and data-seed never put typed text in a script; a /data request loads before it is committed; CI checks every story's request", () => {
@@ -593,7 +654,7 @@ test("workflows: /data and data-seed never put typed text in a script; a /data r
     assert.doesNotMatch(scripts, /\$\{\{\s*inputs\./, `${name}: typed inputs reach the shell only as environment variables`);
   }
   const story = wf("story-data.yml");
-  assert.ok(story.indexOf("data seed --org") < story.indexOf("git commit"), "loaded first: a request that does not fit is never committed");
+  assert.ok(story.indexOf("data apply --story") < story.indexOf("git commit"), "loaded first: a request that does not fit is never committed");
   assert.doesNotMatch(story, /Co-authored-by/, "test data never reaches production: the person is named, not made the commit's co-author");
   assert.match(wf("ci.yml"), /for f in data\/seed\/stories\/\*\/request\.json[\s\S]*node \.pipeline\/pipeline\/bin\/pipe\.mjs data check --request "\$f"/, "main's code, one file at a time (works before and after main learns the all-stories check)");
   assert.match(wf("data-seed.yml"), /--instance-url https:\/\/test\.salesforce\.com/);
@@ -635,15 +696,82 @@ test("review findings: /data waits for the org's lane and always gives it back; 
   const wf = (name) => yaml.load(readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), "utf8"));
   const steps = wf("story-data.yml").jobs.data.steps;
   const at = (re) => steps.findIndex((s) => re.test(s.run || ""));
-  assert.ok(at(/lane acquire "\$BRANCH"/) >= 0 && at(/lane acquire/) < at(/data seed --org/), "the lane before any load");
+  assert.ok(at(/lane acquire "\$BRANCH"/) >= 0 && at(/lane acquire/) < at(/data apply --story/), "the lane before any load");
   assert.match(steps[at(/lane release/)].if, /always\(\)/);
   assert.match(steps[at(/git ls-remote/)].run, /--state merged[\s\S]*is merged, so its org is gone/);
   assert.equal(wf("data-seed.yml").defaults.run.shell, "bash", "bash (with pipefail): `pipe ... | tee` fails the step when pipe fails");
-  assert.match(steps[at(/data seed --org/)].run, /grep -q '\^- '[^\n]*exit 1/, "an error that lists no problem is not the request's fault: the run fails");
+});
+
+test("story-data branches on pipe data apply's JSON outcome: no stderr '- ' contract, no sed parsing, the success reply the card reads", () => {
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  const steps = yaml.load(readFileSync(new URL("../../.github/workflows/story-data.yml", import.meta.url), "utf8")).jobs.data.steps;
+  const run = steps.find((s) => /data apply --story/.test(s.run || "")).run;
+  assert.match(run, /data apply --story "\$KEY" --org "\$ALIAS" --data "\$REQUEST" > "\$OUT"\n/, "a non-zero exit (an sf or login error) fails the step under bash -e: never answered as 'cannot be loaded' (bug B)");
+  assert.match(run, /case "\$\(jq -r \.outcome "\$OUT"\)" in\s+refused\)[\s\S]*jq -r '\.problems\[\]/);
+  assert.match(run, /\*\) echo "::error::pipe data apply gave no outcome:"[^\n]*exit 1/);
+  assert.doesNotMatch(run, /grep[^\n]*'\^- '|sed -n 's\/\^\[\^:\]|data request|data seed|git checkout -q --|rm -f/, "the policy lives in data apply");
+  assert.match(run, /if \[ "\$\(jq -r \.changed "\$OUT"\)" = true \]; then\s+git add "\$\(jq -r \.file "\$OUT"\)"/, "committed only when the use case wrote a changed file");
+  assert.match(run, /echo "🧪 @\$WHO: \*\*Test data:\*\* \$SUMMARY"/, "plan.mjs storyTestData reads the first line");
+  assert.match(run, /echo "<!-- pipeline:test-data -->"; \} > "\$RUNNER_TEMP\/said\.md"/, "the card reads the reply by its marker (DATA_MARK)");
 });
 
 test("review findings: a combobox (free text) is never profiled, and its typed values are never checked against its suggestions", () => {
   const schema = schemaOf([{ name: "Lead", fields: [field("LastName", "string", { nillable: false, nameField: true }), field("Rating", "combobox", { picklistValues: [{ value: "Hot" }] })] }]);
   assert.ok(!profileQueries(schema, ["Lead"]).some((q) => q.field === "Rating"), "a combobox holds what people typed");
   assert.deepEqual(loadPlan(schema, requestOf([{ object: "Lead", count: 1, set: { Rating: "Lukewarm" } }])).problems, []);
+});
+
+// ---- the second architecture review (8 Nov): small duplications folded into one rule each
+
+test("one rule each: a tree seed takes a request's date tokens (${TODAY-30}), SOQL and Apex strings are quoted one way, lists are cut one way", async () => {
+  const { expandSeed, seedReplaceApex, volumeApex, VOLUME_MARKER } = await import("../src/org/data.mjs");
+  const { soqlString } = await import("../src/data/soql.mjs");
+  const seed = expandSeed({ "Case.json": '{"Due__c":"${TODAY-30}","Next__c":"${TODAY+7}","On__c":"${TODAY}","Year":"${LAST_YEAR}","Name":"${SEED_MARKER}"}' }, { today: TODAY, marker: "[seed abc]" });
+  assert.equal(seed["Case.json"], '{"Due__c":"2026-10-09","Next__c":"2026-11-15","On__c":"2026-11-08","Year":"2025","Name":"[seed abc]"}', "the same tokens as a Data request's set values");
+  assert.equal(resolveTokens("${TODAY-30}", TODAY), "2026-10-09");
+  assert.equal(soqlString("O'Brien \\ Co"), "'O\\'Brien \\\\ Co'");
+  assert.match(seedReplaceApex({ "Account.json": JSON.stringify({ records: [{ Name: "O'Brien" }] }) }, []), /\{ 'O\\'Brien' \}/);
+  assert.match(volumeApex(3).at(-1), new RegExp(`insert new Account\\(Name = '${VOLUME_MARKER(3).replace(/[[\]]/g, "\\$&")}'\\);`));
+  const wide = schemaOf([{ name: "Wide__c", fields: Array.from({ length: 25 }, (_, i) => field(`F${i}__c`, "string")) }]);
+  assert.deepEqual(profileQueries(wide, ["Wide__c"]).filter((q) => q.kind === "fill").map((q) => q.fields.length), [20, 5], "20 fields per aggregate query (ledger.mjs chunk)");
+});
+
+test("sf adapter: an org whose objects cannot be listed throws (a login error), never an empty list that reads a typed request blind", () => {
+  const listed = recordedSf((args) => (args[0] === "sobject" ? ["Account", "Contact"] : null));
+  assert.deepEqual(sfDataStore({ sf: listed.sf, alias: "issue-9" }).objectNames(), ["Account", "Contact"]);
+  const loggedOut = recordedSf(() => JSON.stringify({ status: 1, name: "NoOrgFound", message: "No authorization information found for issue-9." }));
+  assert.throws(() => sfDataStore({ sf: loggedOut.sf, alias: "issue-9" }).objectNames(), /could not list the objects in issue-9 \(is the org logged in\?\)/);
+});
+
+test("sf adapter: every ledger in the org is listed in one query on first use; each content read once; a save or a drop keeps the copy current", () => {
+  let read = 0;
+  const replies = (args, body, rest) => {
+    if (args[0] === "data" && args[1] === "query" && args.some((a) => /Title LIKE/.test(a))) return recorded("query-ledgers");
+    if (args[0] === "data" && args[1] === "query") return { records: [{ ContentDocumentId: "069000000000003AAA" }] };
+    if (rest?.url.endsWith("/VersionData")) { read++; return recorded("rest-get-versiondata"); }
+    if (rest?.method === "POST") return recorded("rest-post-contentversion");
+    if (rest?.method === "DELETE") return { statusCode: 204, body: null };
+    return {};
+  };
+  const { sf, calls } = recordedSf(replies);
+  const store = sfDataStore({ sf, alias: "staging" });
+  const listings = () => calls.filter((a) => a[1] === "query" && a.some((x) => /Title LIKE/.test(x)));
+  const gets = () => ({ length: read });
+  const scopes = Array.from({ length: 30 }, (_, i) => `story ${100 + i}`);
+  assert.ok(scopes.every((s) => store.readLedger(s).state === "none"), "30 stories without a ledger");
+  assert.equal(listings().length, 1, "one query for all of them (was one each)");
+  assert.match(listings()[0].find((x) => /Title LIKE/.test(x)), /WHERE Title LIKE '\[data ledger %\]' AND IsLatest = true ORDER BY CreatedDate DESC$/);
+  assert.equal(store.readLedger("story 9").ledger.requestId, "abc123", "a listed ledger: its content, one GET");
+  store.readLedger("story 9");
+  assert.deepEqual([listings().length, gets().length], [1, 1], "read once per store");
+  store.saveLedger("story 9", finish(begin({ scope: "story 9", requestId: "new", loadedAt: "t" })));
+  assert.equal(JSON.parse(Buffer.from(JSON.parse(readFileSync(calls.filter((a) => a[0] === "api").at(-1).find((a) => a.startsWith("@")).slice(1), "utf8")).VersionData, "base64")).requestId, "new");
+  assert.equal(store.readLedger("story 9").ledger.requestId, "new", "a ledger saved during the run reads back as saved, without another GET");
+  store.saveLedger("story 200", finish(begin({ scope: "story 200", requestId: "fresh", loadedAt: "t" })));
+  assert.equal(store.readLedger("story 200").ledger.requestId, "fresh", "a new ledger too");
+  store.dropLedger("story 9");
+  assert.equal(store.readLedger("story 9").state, "none", "a dropped ledger is gone");
+  assert.deepEqual([listings().length, gets().length], [1, 1], "no second listing, no second read");
+  const failing = recordedSf((args) => (args[1] === "query" ? JSON.stringify({ status: 1, name: "INVALID_SESSION_ID", message: "Session expired or invalid" }) : {}));
+  assert.throws(() => sfDataStore({ sf: failing.sf, alias: "staging" }).readLedger("story 9"), /Session expired/, "a listing that fails is never 'no ledger' (that would load a second, untracked set)");
 });

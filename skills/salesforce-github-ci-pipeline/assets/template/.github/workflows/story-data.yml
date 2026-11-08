@@ -1,11 +1,12 @@
 name: story-data
-# COMMAND: `/data Account 20; Contact 2 per Account; Case 5 Status=Escalated` on a story or its PR. The typed request is
-# read against the story's scratch org (its objects, any case, with a did-you-mean), written as the story's Data
-# request (data/seed/stories/<key>/request.json), committed to the story branch as the pipeline App, and loaded into the
-# story's org at once, shaped like production (the Data profile, read on demand); only a request that loaded is
-# committed. Staging and UAT load it from the branch later. Test data never reaches production, so the commit names the person but does not make them its
-# co-author (the approval rule is about code). A request that does not fit is answered with every problem; nothing is
-# committed. Agent-free: main's pipeline code, no AI. The typed text reaches the shell only as an environment variable.
+# COMMAND: `/data Account 20; Contact 2 per Account; Case 5 Status=Escalated` on a story or its PR. `pipe data apply`
+# decides everything (data/load.mjs applyDataRequest): the typed request is read against the story's scratch org (its
+# objects, any case, with a did-you-mean), loaded at once, shaped like production (the Data profile, read on demand), and
+# only then written as the story's Data request (data/seed/stories/<key>/request.json). It prints one JSON outcome:
+# refused (every problem; nothing loaded or written) or loaded; any other error fails the run. This workflow only
+# commits the file as the pipeline App when it changed, and replies. Staging and UAT load it from the branch later. Test
+# data never reaches production, so the commit names the person but does not make them its co-author (the approval rule
+# is about code). Agent-free: main's pipeline code, no AI. The typed text reaches the shell only as an environment variable.
 run-name: "test data for story ${{ inputs.story }} (@${{ inputs.who }})"
 on:
   workflow_dispatch:
@@ -82,7 +83,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
         run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --minutes 15
-      - name: Read the request against the story's org, commit it, load it
+      - name: Load the request into the story's org; commit it only if it loaded
         if: steps.started.outputs.yes == 'true'
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe commands use the tracker
@@ -91,27 +92,27 @@ jobs:
         run: |
           node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" --now "loading the test data @$WHO asked for" || true
           ALIAS=$(node .pipeline/pipeline/bin/pipe.mjs org attach "$BRANCH")
-          FILE="data/seed/stories/$KEY/request.json"
-          refuse() {   # every problem, nothing committed; the request file goes back to what the branch has
-            { echo "🧪 @$WHO: that test data cannot be loaded into \`$BRANCH\`, so nothing changed:"; echo; { grep '^- ' "$1" | grep -v '^- For example' || sed -n '1,5p' "$1"; }; echo; echo "For example: \`/data Account 20; Contact 2 per Account; Case 5 Status=Escalated\`"; } > "$RUNNER_TEMP/said.md"
-            git checkout -q -- "$FILE" 2>/dev/null || rm -f "$FILE"
-            node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "$(cat "$RUNNER_TEMP/said.md")"
-            node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" || true
-          }
-          if ! node .pipeline/pipeline/bin/pipe.mjs data request --story "$KEY" --org "$ALIAS" --data "$REQUEST" > "$RUNNER_TEMP/wrote.txt" 2> "$RUNNER_TEMP/problems.txt"; then refuse "$RUNNER_TEMP/problems.txt"; exit 0; fi
-          # load before committing: a request that parses but does not fit the org (a lookup test data cannot fill) is refused here
-          if ! node .pipeline/pipeline/bin/pipe.mjs data seed --org "$ALIAS" --request "$FILE" > "$RUNNER_TEMP/loaded.txt" 2> "$RUNNER_TEMP/problems.txt"; then
-            grep -q '^- ' "$RUNNER_TEMP/problems.txt" || { cat "$RUNNER_TEMP/problems.txt"; exit 1; }   # not the request's fault: fail the run
-            refuse "$RUNNER_TEMP/problems.txt"; exit 0
-          fi
-          SUMMARY=$(sed -n 's/^[^:]*: //p' "$RUNNER_TEMP/wrote.txt" | head -1)
-          git add "$FILE"
-          if ! git diff --cached --quiet; then
+          # one typed outcome (refused | loaded); an sf or login error exits non-zero and fails the run (set -e)
+          OUT="$RUNNER_TEMP/outcome.json"
+          node .pipeline/pipeline/bin/pipe.mjs data apply --story "$KEY" --org "$ALIAS" --data "$REQUEST" > "$OUT"
+          case "$(jq -r .outcome "$OUT")" in
+            refused)
+              { echo "🧪 @$WHO: that test data cannot be loaded into \`$BRANCH\`, so nothing changed:"; echo; jq -r '.problems[] | "- " + .' "$OUT"; echo
+                echo "For example: \`/data Account 20; Contact 2 per Account; Case 5 Status=Escalated\`"; } > "$RUNNER_TEMP/said.md"
+              node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "$(cat "$RUNNER_TEMP/said.md")"
+              node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" || true
+              exit 0 ;;
+            loaded) ;;
+            *) echo "::error::pipe data apply gave no outcome:"; cat "$OUT"; exit 1 ;;
+          esac
+          SUMMARY=$(jq -r .summary "$OUT")
+          if [ "$(jq -r .changed "$OUT")" = true ]; then
+            git add "$(jq -r .file "$OUT")"
             git config user.name "__owner__-pipeline[bot]"; git config user.email "pipeline@users.noreply.github.com"
             printf 'test(data): story %s test data: %s\n\nAsked for by @%s with /data. Test data only: it never reaches production.\n' "$KEY" "$SUMMARY" "$WHO" > "$RUNNER_TEMP/msg.txt"
-            git commit -q -F "$RUNNER_TEMP/msg.txt"
-            git push -q origin "HEAD:$BRANCH"
+            git diff --cached --quiet || { git commit -q -F "$RUNNER_TEMP/msg.txt"; git push -q origin "HEAD:$BRANCH"; }
           fi
+          jq -r '(if .fresh then "loaded: " else "already loaded: " end) + .records, (.profiled // empty), (.warnings[] | "warning: " + .)' "$OUT" > "$RUNNER_TEMP/loaded.txt"
           { echo "🧪 @$WHO: **Test data:** $SUMMARY"; echo; echo "Loaded into \`$BRANCH\`:"; echo; sed 's/^/> /' "$RUNNER_TEMP/loaded.txt"; echo;
             echo "Committed to the story ($(git rev-parse --short HEAD)), so staging and UAT get it too. Another \`/data\` replaces this set; records made by hand stay.";
             echo; echo "<!-- pipeline:test-data -->"; } > "$RUNNER_TEMP/said.md"

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { DEVHUB } from "./fleet.mjs";
 import { ledgerTitle, encodeLedger, decodeLedger, chunk } from "../data/ledger.mjs";
 import { isAggregate } from "../data/profile.mjs";
+import { soqlString } from "../data/soql.mjs";
 import { DataRequestError } from "../data/request.mjs";
 
 export const BATCH_SIZE = 200;   // sf data import tree and the composite delete both take up to 200 records
@@ -17,7 +18,6 @@ const LEDGER_FILE = "data-ledger.json";
 const ALREADY_GONE = /ENTITY_IS_DELETED|INVALID_CROSS_REFERENCE_KEY/;
 
 const scratchFile = (name) => join(mkdtempSync(join(tmpdir(), "data-")), name);
-const soqlString = (text) => `'${String(text).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 
 /**
  * GET requests sent 25 to a REST composite batch call (haltOnError false: each answers alone; plain /composite stops
@@ -103,14 +103,33 @@ function importErrors(reply) {
 
 /** The Org data store for one org. sf: the io seam; active: the Dev Hub's active scratch orgs (ScratchOrgInfo rows). */
 export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] }) {
-  const documents = {};   // scope -> ContentDocumentId of its ledger, once known
   let identityOnce = null;
   const rest = restIn({ sf, alias, apiVersion });
 
   const query = (soql, opts) => sf(["data", "query", "-o", alias, "-q", soql], opts)?.records || [];
 
-  function ledgerRow(scope) {
-    return query(`SELECT Id, ContentDocumentId FROM ContentVersion WHERE Title = ${soqlString(ledgerTitle(scope))} AND IsLatest = true ORDER BY CreatedDate DESC LIMIT 1`, { allowFail: true })[0] || null;
+  // Every Data ledger in the org, listed once per store on first use (one query), so a scope with no ledger costs nothing
+  // and one with a ledger one GET of its content, read once and kept: staging reads every story's ledger, which was two
+  // sf calls per story. Title -> { versionId, documentId, found }. Saves and drops keep it current, so a ledger written
+  // during the run reads back as written. The listing query throws when it fails: "no ledger" would load a second,
+  // untracked set. The contents cannot be batched: /composite/batch answers VersionData with INVALID_BATCH_REQUEST
+  // ("Cannot access this resource in a batch request"), and /composite with JSON_PARSER_ERROR (live, 8 Nov).
+  let ledgers = null;
+  function allLedgers() {
+    if (ledgers) return ledgers;
+    const rows = query(`SELECT Id, ContentDocumentId, Title FROM ContentVersion WHERE Title LIKE ${soqlString(ledgerTitle("%"))} AND IsLatest = true ORDER BY CreatedDate DESC`);
+    ledgers = new Map();
+    for (const r of rows) if (!ledgers.has(r.Title)) ledgers.set(r.Title, { versionId: r.Id, documentId: r.ContentDocumentId, found: null });   // newest first
+    return ledgers;
+  }
+  const readContent = (content) => {
+    const ledger = decodeLedger(content);
+    return ledger ? { state: "found", ledger } : { state: "unreadable", detail: `${LEDGER_FILE} is not a ledger` };
+  };
+  function contentOf(entry) {
+    if (entry.found) return entry.found;
+    try { entry.found = readContent(rest("GET", `/sobjects/ContentVersion/${entry.versionId}/VersionData`)); } catch (e) { entry.found = { state: "unreadable", detail: e.message }; }
+    return entry.found;
   }
 
   return {
@@ -133,9 +152,11 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
 
     describe: (names) => describeIn(rest, apiVersion, names),
 
+    /** Every object in the org. An org that cannot be listed (a login or sf error) throws: an empty list would read a typed request without its did-you-mean, as if the names were the person's mistake. */
     objectNames() {
       const names = sf(["sobject", "list", "-s", "all", "-o", alias], { allowFail: true });
-      return Array.isArray(names) ? names : [];
+      if (!Array.isArray(names)) throw new Error(`could not list the objects in ${alias} (is the org logged in?)`);
+      return names;
     },
 
     /** One tree file; all or nothing. Throws when the reply does not account for every record. */
@@ -164,29 +185,27 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
     },
 
     readLedger(scope) {
-      const row = ledgerRow(scope);
-      if (!row) return { state: "none" };
-      documents[scope] = row.ContentDocumentId;
-      let content;
-      try { content = rest("GET", `/sobjects/ContentVersion/${row.Id}/VersionData`); } catch (e) { return { state: "unreadable", detail: e.message }; }
-      const ledger = decodeLedger(content);
-      return ledger ? { state: "found", ledger } : { state: "unreadable", detail: `${LEDGER_FILE} is not a ledger` };
+      const entry = allLedgers().get(ledgerTitle(scope));
+      return entry ? contentOf(entry) : { state: "none" };
     },
 
     saveLedger(scope, ledger) {
-      const documentId = documents[scope] ?? ledgerRow(scope)?.ContentDocumentId ?? null;
+      const title = ledgerTitle(scope);
+      const documentId = allLedgers().get(title)?.documentId ?? null;
       const created = rest("POST", "/sobjects/ContentVersion", {
-        Title: ledgerTitle(scope), PathOnClient: LEDGER_FILE, VersionData: Buffer.from(encodeLedger(ledger)).toString("base64"),
+        Title: title, PathOnClient: LEDGER_FILE, VersionData: Buffer.from(encodeLedger(ledger)).toString("base64"),
         ...(documentId ? { ContentDocumentId: documentId } : {}),
       });
-      if (!created?.id) throw new Error(`the org did not return an id for ${ledgerTitle(scope)}`);
-      documents[scope] = documentId || query(`SELECT ContentDocumentId FROM ContentVersion WHERE Id = '${created.id}'`)[0]?.ContentDocumentId;
+      if (!created?.id) throw new Error(`the org did not return an id for ${title}`);
+      const savedIn = documentId || query(`SELECT ContentDocumentId FROM ContentVersion WHERE Id = ${soqlString(created.id)}`)[0]?.ContentDocumentId;
+      ledgers.set(title, { versionId: created.id, documentId: savedIn, found: readContent(encodeLedger(ledger)) });
     },
 
     dropLedger(scope) {
-      const documentId = documents[scope] ?? ledgerRow(scope)?.ContentDocumentId;
+      const title = ledgerTitle(scope);
+      const documentId = allLedgers().get(title)?.documentId;
       if (documentId) rest("DELETE", `/sobjects/ContentDocument/${documentId}`);
-      delete documents[scope];
+      ledgers.delete(title);
     },
   };
 }

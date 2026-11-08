@@ -5,6 +5,7 @@
 // the Profile source port below, and the profile lives in memory for that load only (never saved). The queries and the
 // profile built from their rows are pure.
 import { schemaOf } from "./schema.mjs";
+import { chunk } from "./ledger.mjs";
 
 /**
  * @typedef {object} ProfileSource  Production, read-only, as the profile needs it. Facts only.
@@ -16,7 +17,7 @@ import { schemaOf } from "./schema.mjs";
 export const PROFILE_VERSION = 1;
 export const FLOOR = 5;
 export const SUPPRESSED = "suppressed";
-const CHUNK = 20;
+const FIELDS_PER_QUERY = 20;
 
 /** An aggregate query: the only kind the profile ever sends to production (every row is a count or an average). */
 export const isAggregate = (soql) => /^\s*SELECT\b/i.test(soql) && /\b(COUNT|AVG)\(/i.test(soql);
@@ -39,18 +40,12 @@ function objectQueries(o, excluded) {
   const dates = fields.filter((f) => (f.kind === "date" || f.kind === "datetime") && f.groupable !== false);
   return [
     { object: o.name, kind: "count", soql: `SELECT COUNT(Id) n FROM ${o.name}` },
-    ...chunks(countable).map((part) => ({ object: o.name, kind: "fill", fields: part.map((f) => f.name), soql: `SELECT ${part.map((f, i) => `COUNT(${f.name}) f${i}`).join(", ")} FROM ${o.name}` })),
+    ...chunk(countable, FIELDS_PER_QUERY).map((part) => ({ object: o.name, kind: "fill", fields: part.map((f) => f.name), soql: `SELECT ${part.map((f, i) => `COUNT(${f.name}) f${i}`).join(", ")} FROM ${o.name}` })),
     ...grouped.map((f) => ({ object: o.name, kind: "values", field: f.name, soql: `SELECT ${f.name} v, COUNT(Id) n FROM ${o.name} GROUP BY ${f.name}` })),
     ...(o.recordTypes.length ? [{ object: o.name, kind: "recordTypes", soql: `SELECT RecordType.DeveloperName v, COUNT(Id) n FROM ${o.name} GROUP BY RecordType.DeveloperName` }] : []),
-    ...chunks(numbers).map((part) => ({ object: o.name, kind: "numbers", fields: part.map((f) => f.name), soql: `SELECT ${part.map((f, i) => `AVG(${f.name}) a${i}, COUNT(${f.name}) n${i}`).join(", ")} FROM ${o.name}` })),
+    ...chunk(numbers, FIELDS_PER_QUERY).map((part) => ({ object: o.name, kind: "numbers", fields: part.map((f) => f.name), soql: `SELECT ${part.map((f, i) => `AVG(${f.name}) a${i}, COUNT(${f.name}) n${i}`).join(", ")} FROM ${o.name}` })),
     ...dates.map((f) => ({ object: o.name, kind: "dates", field: f.name, soql: `SELECT CALENDAR_YEAR(${f.name}) y, COUNT(Id) n FROM ${o.name} WHERE ${f.name} != null GROUP BY CALENDAR_YEAR(${f.name})` })),
   ];
-}
-
-function chunks(list) {
-  const out = [];
-  for (let i = 0; i < list.length; i += CHUNK) out.push(list.slice(i, i + CHUNK));
-  return out;
 }
 
 /**

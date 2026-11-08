@@ -60,8 +60,6 @@ jobs:
       - name: Test data
         run: |
           ORG="sandbox-$SANDBOX"
-          case "$ACTION" in
-            seed)
           set +e   # the summary says what happened either way; the step then fails if pipe did
           case "$ACTION" in
             seed)
