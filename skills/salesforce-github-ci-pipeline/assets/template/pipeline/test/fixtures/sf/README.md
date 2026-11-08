@@ -13,3 +13,6 @@ uses. Re-record them when the CLI changes how it replies:
 - `import-tree-error.json`: a failed `sf data import tree` (exit 1); each record's reason is in `data`, not `message`
 - `rest-composite-batch-query.json`: the Profile source's `/composite/batch` of aggregate queries, one counted and one
   failed (`INVALID_FIELD`). Recorded from the scratch org, never production: no production figure goes into git
+- `query-ledgers.json`: `sf data query` listing every Data ledger in the org (`Title LIKE '[data ledger %]'`), newest
+  first. A ledger's content cannot come in a batch: `/composite/batch` answers `VersionData` with
+  `INVALID_BATCH_REQUEST` ("Cannot access this resource in a batch request"), so each is one GET (`rest-get-versiondata.json`)

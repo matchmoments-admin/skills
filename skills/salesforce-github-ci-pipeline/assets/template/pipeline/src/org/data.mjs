@@ -2,19 +2,23 @@
 // production's Data profile, read on demand, tracked by a Data ledger), and the staging volume records. Part of Org provisioning
 // (pipeline/src/org.mjs): orgRegistry composes these methods with the provisioning core. Wiring only: loading a request
 // is the use case in pipeline/src/data/load.mjs, over the Org data store's sf adapter (./data-store.mjs).
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { baselineId as idOf } from "../baseline.mjs";
 import { PIPELINE_ROOT } from "../io.mjs";
 import { parseRequest, requestId, DataRequestError } from "../data/request.mjs";
-import { loadTestData, removeTestData, testDataStatus, guardAgainstProduction } from "../data/load.mjs";
+import { loadTestData, applyDataRequest, readTypedRequest, guardAgainstProduction } from "../data/load.mjs";
 import { sfDataStore, sfProfileSource } from "./data-store.mjs";
-/** The seed's files with their date tokens filled in (data/seed/README.md). Pure: { name: text } -> { name: text }. */
+import { resolveTokens } from "../data/generate.mjs";
+import { soqlString } from "../data/soql.mjs";
+
+/**
+ * The seed's files with their tokens filled in (data/seed/README.md): the date tokens a Data request takes too
+ * (${TODAY}, ${TODAY-30}, ${THIS_YEAR}..., one rule: generate.mjs resolveTokens) and ${SEED_MARKER}. Pure: { name: text } -> { name: text }.
+ */
 export function expandSeed(files, { today = new Date(), marker }) {
-  const y = today.getUTCFullYear();
-  const tokens = { TODAY: today.toISOString().slice(0, 10), THIS_YEAR: String(y), LAST_YEAR: String(y - 1), NEXT_YEAR: String(y + 1), SEED_MARKER: marker };
-  return Object.fromEntries(Object.entries(files).map(([n, t]) => [n, String(t).replace(/\$\{(TODAY|THIS_YEAR|LAST_YEAR|NEXT_YEAR|SEED_MARKER)\}/g, (_, k) => tokens[k])]));
+  return Object.fromEntries(Object.entries(files).map(([n, t]) => [n, resolveTokens(String(t), today).replace(/\$\{SEED_MARKER\}/g, marker)]));
 }
 
 /**
@@ -25,7 +29,7 @@ export function expandSeed(files, { today = new Date(), marker }) {
  */
 export function seedReplaceApex(files, staleMarkers) {
   const recs = (n) => { try { return JSON.parse(files[n] || "{}").records || []; } catch { return []; } };
-  const q = (xs) => xs.map((x) => `'${String(x).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`).join(", ");
+  const q = (xs) => xs.map(soqlString).join(", ");
   const names = [...new Set([...recs("Account.json").map((r) => r.Name).filter((n) => n && !n.includes("${")), ...staleMarkers])];
   const emails = [...new Set(recs("Lead.json").map((r) => r.Email).filter(Boolean))];
   return [
@@ -57,7 +61,7 @@ export function volumeApex(n, chunk = 1000) {
       "List<Opportunity> o = new List<Opportunity>();",
       `for (Account x : a) o.add(new Opportunity(Name = x.Name + ' deal', AccountId = x.Id, StageName = 'Prospecting', CloseDate = Date.today().addDays(30), Amount = 10000));`,
       "insert o;",
-      ...(to === n ? [`insert new Account(Name = '${VOLUME_MARKER(n)}');`] : []),
+      ...(to === n ? [`insert new Account(Name = ${soqlString(VOLUME_MARKER(n))});`] : []),
     ].join("\n"));
   }
   return calls;
@@ -111,15 +115,15 @@ export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active
     const root = join(process.cwd(), STORIES_DIR);
     const has = (key, file) => existsSync(join(root, key, file));
     const keys = stories === "all" ? (existsSync(root) ? readdirSync(root).filter((k) => has(k, "plan.json") || has(k, "request.json")).sort() : []) : story ? [String(story)] : [];
-    const seeds = id ? [{ dir: seedDir, marker: `[seed ${id}]`, stale: "Name LIKE '[seed %' AND (NOT Name LIKE '[seed story%')" }] : [];
-    for (const k of keys.filter((key) => has(key, "plan.json"))) seeds.push({ dir: join(root, k), marker: `[seed story ${k} ${idOf(join(root, k))}]`, stale: `Name LIKE '[seed story ${k} %'` });
+    const seeds = id ? [{ dir: seedDir, marker: `[seed ${id}]`, stale: `Name LIKE ${soqlString("[seed %")} AND (NOT Name LIKE ${soqlString("[seed story%")})` }] : [];
+    for (const k of keys.filter((key) => has(key, "plan.json"))) seeds.push({ dir: join(root, k), marker: `[seed story ${k} ${idOf(join(root, k))}]`, stale: `Name LIKE ${soqlString(`[seed story ${k} %`)}` });
     const requests = keys.filter((key) => has(key, "request.json")).map((k) => ({ key: k, scope: `story ${k}`, file: join(root, k, "request.json") }));
     return { seeds, requests };
   }
 
   /** One legacy seed (a tree plan with a marker Account), loaded once; an earlier version of it is removed by name first. */
   function loadSeed(alias, { dir, marker, stale: staleWhere }) {
-    const have = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${marker}'`], { allowFail: true })?.records?.length;
+    const have = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = ${soqlString(marker)}`], { allowFail: true })?.records?.length;
     if (have) { log(`${alias} already has ${marker}`); return false; }
     const files = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => [f, readFileSync(join(dir, f), "utf8")]));
     removeEarlierSeed(alias, files, staleWhere, marker);
@@ -183,9 +187,14 @@ export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active
       return loaded;
     },
 
-    /** Load a Data request into any non-production org (data/load.mjs loadTestData), shaped by production's profile, with main's rules. Logs its warnings. */
-    loadTestData(alias, { request, scope, ...overrides }) {
-      const result = loadTestData(storeFor(alias), { ...loadDefaults(), ...overrides, request, scope });
+    /**
+     * Load a Data request into any non-production org (data/load.mjs loadTestData), shaped by production's profile, with
+     * main's rules: a parsed `request`, or `typed` ("Account 20; Contact 2 per Account", read against the org's objects).
+     * Logs its warnings and records the event.
+     */
+    loadTestData(alias, { request = null, typed = null, scope, ...overrides }) {
+      const store = storeFor(alias);
+      const result = loadTestData(store, { ...loadDefaults(), ...overrides, request: request || readTypedRequest(store, typed), scope });
       if (result.profiled) log(`${alias} test data (${scope}): ${result.profiled}`);
       for (const w of result.warnings) log(`::warning::${alias} test data (${scope}): ${w}`);
       log(result.loaded ? `loaded test data for ${scope} into ${alias}: ${result.summary}` : `${alias} already holds the test data for ${scope} (${result.summary})`);
@@ -193,19 +202,24 @@ export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active
       return result;
     },
 
-    /** Remove what a scope's ledger tracks (the undo). */
-    removeTestData: (alias, scope) => removeTestData(storeFor(alias), scope),
+    /**
+     * /data on a story (data/load.mjs applyDataRequest): the typed line loaded into the story's org, and only then written
+     * as the story's Data request (data/seed/stories/<key>/request.json in the working directory). Returns the outcome.
+     */
+    applyTestData(alias, { story, typed }) {
+      if (!/^[A-Za-z0-9-]+$/.test(String(story))) throw new Error(`not a story key: ${story}`);
+      const path = join(STORIES_DIR, String(story), "request.json");
+      const storyFile = { path, read: () => (existsSync(path) ? readFileSync(path, "utf8") : null), write: (text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); } };
+      return applyDataRequest(storeFor(alias), { typed, scope: `story ${story}`, storyFile, load: (args) => self.loadTestData(alias, args) });
+    },
 
-    /** Every object in the org, for reading a typed request (/data) and its did-you-mean. */
-    dataObjects: (alias) => storeFor(alias).objectNames(),
-
-    /** What an org holds for a scope. */
-    dataStatus: (alias, scope) => testDataStatus(storeFor(alias), scope),
+    /** The org's Org data store, for the use cases that need nothing else (data/load.mjs: removeTestData, testDataStatus). */
+    dataStore: (alias) => storeFor(alias),
 
     /** Load the staging volume once (volumeApex; its marker account says it is there). Best effort: a failure warns. */
     volume(alias, n) {
       if (!n || n < 1) return false;
-      if (sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = '${VOLUME_MARKER(n)}'`], { allowFail: true })?.records?.length) return false;
+      if (sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = ${soqlString(VOLUME_MARKER(n))}`], { allowFail: true })?.records?.length) return false;
       const t0 = Date.now();
       for (const [i, apex] of volumeApex(n).entries()) {
         const f = join(tmpdir(), `volume-${process.pid}-${i}.apex`);

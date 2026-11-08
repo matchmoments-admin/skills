@@ -33,8 +33,9 @@ Apex tests never see any of this. They build their own data (a `TestDataFactory`
 ```
 
 - **Where requests come from:** the AI plan's `### Test data` line (`/data Account 20; Contact 2 per Account`), which
-  the build writes as the story's `request.json`; a `/data ...` comment on a started story (`story-data.yml`: read
-  against the story's org with a did-you-mean, loaded, and only then committed to the branch as the App, never as the
+  the build writes as the story's `request.json`; a `/data ...` comment on a started story (`story-data.yml` runs `pipe data apply`: read
+  against the story's org with a did-you-mean, loaded, and only then written; one JSON outcome, `refused` (every
+  problem) or `loaded`, and any other error fails the run; the workflow commits a changed file as the App, never as the
   person's code; the card's org row shows the story's test data); and **Actions › data-seed** for a Developer sandbox
   (sandbox name, `seed`/`status`/`remove`, typed request or file; it logs in as `<SF_CI_USERNAME>.<sandbox>` with the
   CI certificate, which needs the sandbox created or refreshed after the connected app existed).

@@ -95,6 +95,14 @@ Every entry happened in a real run. Search this file for the error text you see.
   `pipe ... | tee` in a workflow step needs `shell: bash` (pipefail) or the step shows green on failure. The seed fold
   deleted a story's `request.json` with its tree seed: it now folds only the tree seed. A refusal echoing typed text
   could put the card's marker in an App comment: the card reads only a success reply that ends with the marker.
+- **Policy in a workflow's shell goes unchecked** → a stray, unclosed `case` in a `run:` block failed every dispatch of
+  data-seed, and the regex tests over the YAML passed; a test now runs `bash -n` on every `run:` block of every workflow
+  and action (with `${{ }}` replaced). `/data` told a failure from a refusal by grepping stderr for `- ` lines, so an sf
+  or login error was answered "cannot be loaded" and the run passed: `pipe data apply` now decides (load, then write
+  the file only if it loaded) and prints one JSON outcome the workflow reads with `jq`; any other error exits 1.
+- **A Data ledger's content cannot be batched** → `/composite/batch` answers `ContentVersion/<id>/VersionData` with
+  `INVALID_BATCH_REQUEST` ("Cannot access this resource in a batch request"), and `/composite` with `JSON_PARSER_ERROR`.
+  List every ledger in one query (`Title LIKE '[data ledger %]'`) and GET each content once.
 - **Shape orgs' roles cannot be assigned** ("invalid cross reference id", even from Apex; deploying the Role metadata over them does not help) → delete them leaves-first and recreate them as metadata, before the deploy (folder shares and sharing rules attach to roles at deploy time).
 - **Logging in as a persona without a password** → turn on `SecuritySettings.enableAdminLoginAsAnyUser` in scratch orgs and use `/servlet/servlet.su?oid=..&suorgadminid=..` on the classic (instance URL) domain after the admin's front-door login; the Lightning domain aborts. Users as records (`sf org create user` refuses JWT on Hyperforce); licences are few: deactivate other persona users when `LICENSE_LIMIT_EXCEEDED`.
 

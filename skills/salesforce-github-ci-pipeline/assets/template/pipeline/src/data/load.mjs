@@ -3,7 +3,7 @@
 // org/data-store.mjs (sf) and test/data-store-memory.mjs (in memory), so every ordering and failure rule here is
 // tested without an org.
 
-import { requestId, describeEntry, didYouMean, DataRequestError } from "./request.mjs";
+import { requestId, describeEntry, didYouMean, parseDataCommand, requestFile, DataRequestError, DATA_COMMAND_EXAMPLE } from "./request.mjs";
 import { schemaOf } from "./schema.mjs";
 import { objectsNeeded, loadPlan } from "./load-plan.mjs";
 import { generateRecords } from "./generate.mjs";
@@ -62,6 +62,38 @@ export function loadTestData(store, { request, scope, profile = null, profileSou
   ledger = finish(ledger);
   saveOrExplain(store, scope, ledger, { object: null, ids: [] });
   return { loaded: true, summary: `${summary(ledger)} from ${request.objects.map(describeEntry).join("; ")}`, warnings: [...shape.warnings, ...warnings], profiled: shape.profiled };
+}
+
+/** A typed request ("Account 20; Contact 2 per Account"), read against the org's own objects (any case, did-you-mean). Throws DataRequestError. */
+export function readTypedRequest(store, typed) {
+  const { request, problems } = parseDataCommand(typed, store.objectNames());
+  if (!request) throw new DataRequestError(problems.length ? problems : ['say what to load, e.g. "Account 20; Contact 2 per Account"']);
+  return request;
+}
+
+/**
+ * /data on a story: the typed line read against the story's org, loaded (loadTestData, or `load` when the caller wires
+ * its own defaults and logging), and only then written to `storyFile` (the story's Data request, in its file format), so
+ * a request that did not load is never committed. storyFile: { path, read(): text | null, write(text) }.
+ * Returns { outcome: "refused", problems } (the request's to change: nothing loaded, nothing written) or
+ * { outcome: "loaded", summary, records, fresh, profiled, warnings, changed, file }. Anything else throws: the run failed.
+ */
+export function applyDataRequest(store, { typed, scope, storyFile, load = (args) => loadTestData(store, args), ...options }) {
+  let request, result;
+  try {
+    request = readTypedRequest(store, typed);
+    result = load({ ...options, request, scope });
+  } catch (e) {
+    if (e instanceof DataRequestError) return { outcome: "refused", problems: e.problems.filter((p) => p !== DATA_COMMAND_EXAMPLE) };
+    throw e;
+  }
+  const text = JSON.stringify(requestFile(request), null, 2) + "\n";
+  const changed = storyFile.read() !== text;
+  if (changed) storyFile.write(text);
+  return {
+    outcome: "loaded", summary: request.objects.map(describeEntry).join("; "), records: result.summary, fresh: result.loaded,
+    profiled: result.profiled || null, warnings: result.warnings, changed, file: storyFile.path,
+  };
 }
 
 /**
