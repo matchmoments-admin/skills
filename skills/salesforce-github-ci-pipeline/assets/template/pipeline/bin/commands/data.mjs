@@ -1,5 +1,6 @@
 // The test data commands of `pipe` (see the header of pipeline/bin/pipe.mjs): check a Data request without an org, load
-// it into any non-production org, apply /data to a story, say what an org holds, and remove it again. The decisions live
+// it into any non-production org, apply /data to a story, refresh what an org holds (production's shape today), say what
+// it holds, and remove it again. The decisions live
 // in pipeline/src/data/load.mjs; the org adapter in pipeline/src/org/data-store.mjs.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -13,6 +14,9 @@ export function scopeOf(path) {
 }
 
 const bullets = (lines) => lines.map((l) => `- ${l}`).join("\n");
+
+/** One set's refresh in people's words, with what was read from production and any warning. */
+const refreshLine = (r) => [`${r.outcome === "refreshed" ? "refreshed" : r.outcome === "refused" ? "not refreshed" : "skipped"} ${r.scope}: ${r.summary}`, ...(r.profiled ? [`  ${r.profiled}`] : []), ...r.warnings.map((w) => `  warning: ${w}`)].join("\n");
 const STORIES = "data/seed/stories";
 
 /** Every story's request in the checkout, checked offline: [{ file, problems }] (problems empty when it is valid). */
@@ -49,6 +53,8 @@ export function dataCommands({ flag, has = () => false, output, say, orgs }) {
     }
   };
 
+  const noProfile = () => (has("no-profile") ? { profileSource: null } : {});
+
   return {
     "data check": explained(() => {   // a request is valid (no org needed): agents run it before pushing; no --request: every story's (CI)
       if (!flag("request") && !flag("data")) {
@@ -62,11 +68,11 @@ export function dataCommands({ flag, has = () => false, output, say, orgs }) {
       output({ ok: true, objects: request.objects.length });
       return say(`the request is valid: ${request.objects.map(describeEntry).join("; ")}`);
     }),
-    "data seed": explained(() => {   // load a request into any non-production org (scratch org or sandbox), once; --no-profile: no production reads
+    "data seed": explained(() => {   // load a request into any non-production org (scratch org or sandbox), once (--refresh: again); --no-profile: no production reads
       const org = required("org", "issue-512");
       const { file, request, typed } = readRequest();
       const scope = scopeFor(file);
-      const result = orgs().loadTestData(org, { ...(typed ? { typed } : { request }), scope, ...(has("no-profile") ? { profileSource: null } : {}) });
+      const result = orgs().loadTestData(org, { ...(typed ? { typed } : { request }), scope, refresh: has("refresh"), ...noProfile() });
       output({ loaded: result.loaded, scope, summary: result.summary, profiled: result.profiled || "", warnings: result.warnings.join(" | ") });
       const profiled = result.profiled ? `\n${result.profiled}` : "";
       const warnings = result.warnings.length ? `\nwarnings:\n${bullets(result.warnings)}` : "";
@@ -80,6 +86,14 @@ export function dataCommands({ flag, has = () => false, output, say, orgs }) {
       const outcome = orgs().applyTestData(org, { story, typed });
       output({ outcome: outcome.outcome, changed: Boolean(outcome.changed) });
       return say(JSON.stringify(outcome));
+    },
+    "data refresh": () => {   // load again what an org holds (every Data request set, or --scope), shaped like production today
+      const org = required("org", "staging");
+      const results = orgs().refreshTestData(org, { scope: flag("scope") || null, ...noProfile() });
+      const refused = results.filter((r) => r.outcome === "refused");
+      output({ refreshed: results.filter((r) => r.outcome === "refreshed").length, refused: refused.length });
+      say(results.length ? results.map(refreshLine).join("\n") : `${org} holds no test data sets`);
+      if (refused.length) throw new Error(`${refused.length} test data set(s) in ${org} were not refreshed (their records stay as they were):\n${refused.map((r) => `${r.scope}:\n${bullets(r.problems)}`).join("\n")}`);
     },
     "data status": () => {   // what an org holds for a scope
       const org = required("org", "issue-512"), scope = required("scope", '"story 512"');

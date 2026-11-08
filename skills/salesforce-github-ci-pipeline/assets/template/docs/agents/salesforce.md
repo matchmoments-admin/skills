@@ -143,7 +143,7 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   criterion depends on (`set`, date tokens such as `${TODAY-30}` work); never names, emails or real data. The pipeline
   generates the records to fit each org's own fields, picklists and lookups (and makes any required parents), shaped
   like production, and loads them into the story's org, staging and UAT, once each. Check it with
-  `pipe data check --request <file>`. People change it with a `/data Account 20; Contact 2 per Account` comment. A picklist
+  `pipe data check --request <file>`. People change it with a `/data Account 20; Contact 2 per Account` comment (`/data refresh` loads it again, shaped like production today). A picklist
   value in `set` must be one of the field's active values (a typo is refused with a did-you-mean), and records the org
   refuses (a validation rule) come back as the request's problem, with Salesforce's reason.
 - **A tree seed only for records a UI test finds by an exact name:** `data/seed/stories/<story key>/plan.json`

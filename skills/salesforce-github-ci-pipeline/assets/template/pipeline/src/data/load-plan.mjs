@@ -1,7 +1,7 @@
 // The load plan: which objects a Data request needs, its entries resolved against the org schema, and the order to
 // insert them (parents first). Decided once here: the describe loop asks it which objects to describe, the generator
 // takes its entries and only makes values. Pure; it never changes the request it is given.
-import { didYouMean } from "./request.mjs";
+import { didYouMean, MAX_RECORDS } from "./request.mjs";
 import { requiredParents, referenceTo, NEVER_CREATED } from "./schema.mjs";
 
 export const DEFAULT_PARENTS = 5;
@@ -30,7 +30,17 @@ export function loadPlan(schema, request) {
   const entries = request.objects.map((entry) => resolveEntry(schema, entry, problems)).filter(Boolean);
   if (problems.length) return { entries, order: [], problems, warnings };
   addMissingParents(schema, entries, problems, warnings);
-  return { entries, order: insertOrder(schema, entries, problems), problems, warnings };
+  const order = insertOrder(schema, entries, problems);
+  const total = plannedRecords(entries, order);
+  if (total > MAX_RECORDS) problems.push(`the request makes ${total} records; one load takes up to ${MAX_RECORDS}. Ask for fewer, or fewer per parent`);
+  return { entries, order, problems, warnings };
+}
+
+/** How many records the plan makes, counted before any is generated (per parent multiplies: 2,000 x 50 x 50 is 5 million). */
+function plannedRecords(entries, order) {
+  const made = {};
+  for (const name of order) for (const e of entries.filter((x) => x.object === name)) made[name] = (made[name] || 0) + (e.perParent ? (made[e.perParent.object] || 0) * e.perParent.count : e.count);
+  return Object.values(made).reduce((sum, n) => sum + n, 0);
 }
 
 function resolveEntry(schema, entry, problems) {

@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { baselineId as idOf } from "../baseline.mjs";
 import { PIPELINE_ROOT } from "../io.mjs";
 import { parseRequest, requestId, DataRequestError } from "../data/request.mjs";
-import { loadTestData, loadTreeSeed, applyDataRequest, readTypedRequest, guardAgainstProduction } from "../data/load.mjs";
+import { loadTestData, loadTreeSeed, applyDataRequest, refreshTestData, readTypedRequest, guardAgainstProduction } from "../data/load.mjs";
 import { CORE_SEED_SCOPE, storySeedScope, LEGACY_CORE_MARKERS, legacyStoryMarkers, foldedStories } from "../data/tree-seed.mjs";
 import { sfDataStore, sfProfileSource } from "./data-store.mjs";
 import { soqlString } from "../data/soql.mjs";
@@ -171,6 +171,14 @@ export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active
       const path = join(STORIES_DIR, String(story), "request.json");
       const storyFile = { path, read: () => (existsSync(path) ? readFileSync(path, "utf8") : null), write: (text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); } };
       return applyDataRequest(storeFor(alias), { typed, scope: `story ${story}`, storyFile, load: (args) => self.loadTestData(alias, args) });
+    },
+
+    /**
+     * Refresh (data/load.mjs refreshTestData): every Data request set the org holds (or `scope`), loaded again from the
+     * request its ledger keeps, shaped like production today. Returns one result per set.
+     */
+    refreshTestData(alias, { scope = null, ...overrides } = {}) {
+      return refreshTestData(storeFor(alias), { scope, load: (args) => self.loadTestData(alias, { ...args, ...overrides }) });
     },
 
     /** The org's Org data store, for the use cases that need nothing else (data/load.mjs: removeTestData, testDataStatus). */

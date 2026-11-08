@@ -1,0 +1,38 @@
+{
+  "status": 0,
+  "result": {
+    "jobInfo": {
+      "id": "750dq00000Vz233AAB",
+      "operation": "delete",
+      "object": "Contact",
+      "createdById": "005000000000000AAA",
+      "createdDate": "2026-11-08T18:39:40.000+0000",
+      "systemModstamp": "2026-11-08T18:39:43.000+0000",
+      "state": "JobComplete",
+      "concurrencyMode": "Parallel",
+      "contentType": "CSV",
+      "apiVersion": 68,
+      "jobType": "V2Ingest",
+      "lineEnding": "LF",
+      "columnDelimiter": "COMMA",
+      "numberRecordsProcessed": 1,
+      "numberRecordsFailed": 0,
+      "retries": 0,
+      "totalProcessingTime": 352,
+      "apiActiveProcessingTime": 301,
+      "apexProcessingTime": 0,
+      "isPkChunkingSupported": false
+    },
+    "records": {
+      "successfulResults": [
+        {
+          "sf__Id": "003dq000014LYwjAAG",
+          "sf__Created": "false",
+          "Id": "003dq000014LYwjAAG"
+        }
+      ],
+      "failedResults": [],
+      "unprocessedRecords": []
+    }
+  }
+}

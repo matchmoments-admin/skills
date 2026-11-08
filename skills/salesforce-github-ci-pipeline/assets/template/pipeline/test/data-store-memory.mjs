@@ -1,13 +1,15 @@
 // The Org data store's in-memory adapter (the port is in pipeline/src/data/load.mjs): an org as a map of records, with
 // failures on demand, so the use case's ordering and failure rules are tested without an org or the sf CLI.
 import { decodeLedger, encodeLedger } from "../src/data/ledger.mjs";
+import { DataRequestError } from "../src/data/request.mjs";
 
 /**
- * describes: { [object]: sobject describe }. Failures: failInsert (the Nth insert throws), failSaves (that many ledger
+ * describes: { [object]: sobject describe }. Failures: failInsert (the Nth insert throws; refuseInsert: as the org
+ * refusing the records, a DataRequestError), failSaves (that many ledger
  * saves throw), refuseDeletes (ids that will not delete), unreadableLedger (a ledger file that is not a ledger),
  * failLegacy (removing a seed loaded the earlier way fails). bulk: { from, max }, see batchSizeFor.
  */
-export function memoryDataStore({ describes = {}, identity = {}, batchSize = 200, failInsert = null, failSaves = 0, refuseDeletes = [], unreadableLedger = false, failLegacy = false, bulk = null } = {}) {
+export function memoryDataStore({ describes = {}, identity = {}, batchSize = 200, failInsert = null, refuseInsert = false, failSaves = 0, refuseDeletes = [], unreadableLedger = false, failLegacy = false, bulk = null } = {}) {
   const records = new Map(), ledgers = {};
   let inserts = 0, saves = 0, nextId = 0, savesToFail = failSaves;
   const calls = [], insertOptions = [];
@@ -25,7 +27,7 @@ export function memoryDataStore({ describes = {}, identity = {}, batchSize = 200
       inserts++;
       calls.push(`insert ${object} ${list.length}`);
       insertOptions.push({ object, count: list.length, refsNeeded });
-      if (inserts === failInsert) throw new Error(`insert ${inserts} failed on purpose`);
+      if (inserts === failInsert) throw refuseInsert ? new DataRequestError([`memory-org refused the ${list.length} ${object} records: FIELD_CUSTOM_VALIDATION_EXCEPTION on purpose`]) : new Error(`insert ${inserts} failed on purpose`);
       return list.map((r) => {
         const id = `${object.slice(0, 3).toUpperCase()}${String(++nextId).padStart(4, "0")}`;
         records.set(id, { object, ...r.fields });
@@ -66,9 +68,11 @@ export function memoryDataStore({ describes = {}, identity = {}, batchSize = 200
       ledgers[scope] = encodeLedger(ledger);
     },
     dropLedger(scope) { delete ledgers[scope]; },
+    ledgerScopes: () => Object.keys(ledgers),
     // for the tests: a record made by a person, what the org holds, and its ledger
     addByHand(object, fields) { const id = `HAND${++nextId}`; records.set(id, { object, ...fields }); return id; },
     holds: (id) => records.has(id),
+    saves: () => saves,
     count: (object, where = () => true) => [...records.values()].filter((r) => r.object === object && where(r)).length,
     ledger: (scope) => (ledgers[scope] ? JSON.parse(ledgers[scope]) : null),
     refuseDeletesOf(ids) { refuseDeletes = ids; },

@@ -3,12 +3,12 @@
 // composite delete, the Data ledger as a ContentVersion), and the Profile source (see data/profile.mjs): production read
 // through aggregate queries only, batched in REST composite batch calls. Facts only; the use case decides.
 // pipeline/test/data.test.mjs runs both on recorded CLI output.
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEVHUB } from "./fleet.mjs";
-import { ledgerTitle, encodeLedger, decodeLedger, chunk } from "../data/ledger.mjs";
-import { isAggregate } from "../data/profile.mjs";
+import { ledgerTitle, scopeOfTitle, encodeLedger, decodeLedger, chunk } from "../data/ledger.mjs";
+import { isAggregate, groupedField, GROUPABLE_TYPES } from "../data/profile.mjs";
 import { soqlString } from "../data/soql.mjs";
 import { DataRequestError } from "../data/request.mjs";
 
@@ -23,7 +23,11 @@ export const BULK_WAIT = 15;
 const LEDGER_FILE = "data-ledger.json";
 const ALREADY_GONE = /ENTITY_IS_DELETED|INVALID_CROSS_REFERENCE_KEY/;
 
-const scratchFile = (name) => join(mkdtempSync(join(tmpdir(), "data-")), name);
+/** `text` in a file of its own for the length of `use(path)`, removed afterwards (a 10,000-record load writes hundreds). */
+function withScratchFile(name, text, use) {
+  const dir = mkdtempSync(join(tmpdir(), "data-"));
+  try { const path = join(dir, name); writeFileSync(path, text); return use(path, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+}
 
 /**
  * GET requests sent 25 to a REST composite batch call (haltOnError false: each answers alone; plain /composite stops
@@ -54,17 +58,10 @@ function restIn({ sf, alias, apiVersion }) {
   return function rest(method, path, body) {
     const url = `/services/data/v${apiVersion}${path}`;
     const args = ["api", "request", "rest", "-o", alias];
-    if (body !== undefined) {
-      const file = scratchFile("body.json");
-      writeFileSync(file, JSON.stringify(body));
-      args.push(url, "-X", method, "-H", "Content-Type:application/json", "-b", `@${file}`);
-    } else {
-      const definition = scratchFile("request.json");
-      writeFileSync(definition, JSON.stringify({ url, method, body: { mode: "raw", raw: "" } }));
-      args.push("-f", definition);
-    }
     // a failed call exits 1 with the HTTP reply still in its result: keep it (allowFail "json"), so the error says why
-    const reply = sf(args, { allowFail: "json" });
+    const reply = body !== undefined
+      ? withScratchFile("body.json", JSON.stringify(body), (file) => sf([...args, url, "-X", method, "-H", "Content-Type:application/json", "-b", `@${file}`], { allowFail: "json" }))
+      : withScratchFile("request.json", JSON.stringify({ url, method, body: { mode: "raw", raw: "" } }), (file) => sf([...args, "-f", file], { allowFail: "json" }));
     if (reply?.failed && reply.statusCode === undefined) throw new Error(`sf api request rest ${method} ${path} failed in ${alias} (no HTTP reply: is the org logged in?)`);
     const status = Number(reply?.statusCode ?? 200);
     if (status >= 400) throw new Error(`${method} ${path} in ${alias} answered ${status}: ${JSON.stringify(reply?.body ?? "").slice(0, 300)}`);
@@ -81,15 +78,21 @@ function restIn({ sf, alias, apiVersion }) {
 export function sfProfileSource({ sf, alias = DEVHUB, apiVersion = "67.0" }) {
   const rest = restIn({ sf, alias, apiVersion });
   const describes = new Map(), results = new Map();
+  function describe(names) {
+    const missing = names.filter((n) => !describes.has(n));
+    for (const [name, d] of Object.entries(describeIn(rest, apiVersion, missing))) describes.set(name, d);
+    return Object.fromEntries(names.map((n) => [n, describes.get(n)]));
+  }
   return {
-    describe(names) {
-      const missing = names.filter((n) => !describes.has(n));
-      for (const [name, d] of Object.entries(describeIn(rest, apiVersion, missing))) describes.set(name, d);
-      return Object.fromEntries(names.map((n) => [n, describes.get(n)]));
-    },
+    describe,
     aggregate(queries) {
       const refused = queries.find((q) => !isAggregate(q.soql));
       if (refused) throw new Error(`refusing to read production (${alias}) with a query that is not an aggregate: ${refused.soql}`);
+      // a group by returns the values themselves: only a picklist's or a checkbox's, by production's own describe
+      const groups = queries.map((q) => groupedField(q.soql)).filter(Boolean);
+      const types = describe([...new Set(groups.map((g) => g.object))]);
+      const text = groups.find((g) => !GROUPABLE_TYPES.includes(types[g.object]?.fields?.find((f) => f.name === g.field)?.type));
+      if (text) throw new Error(`refusing to read production (${alias}) grouped by ${text.object}.${text.field}: only picklists and checkboxes are grouped (their values are not typed by people)`);
       const todo = [...new Set(queries.map((q) => q.soql).filter((soql) => !results.has(soql)))];
       batchGet(rest, todo.map((soql) => `v${apiVersion}/query?q=${encodeURIComponent(soql)}`)).forEach(({ ok, result }, i) => {
         results.set(todo[i], ok ? { records: result?.records || [] } : { error: JSON.stringify(result).slice(0, 200) });
@@ -155,6 +158,7 @@ export function legacySeedApex({ accountNames, leadEmails = [] }) {
 /** The Org data store for one org. sf: the io seam; active: the Dev Hub's active scratch orgs (ScratchOrgInfo rows). */
 export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] }) {
   let identityOnce = null;
+  const describes = new Map();
   const rest = restIn({ sf, alias, apiVersion });
 
   const query = (soql, opts) => sf(["data", "query", "-o", alias, "-q", soql], opts)?.records || [];
@@ -201,7 +205,12 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
       return identityOnce;
     },
 
-    describe: (names) => describeIn(rest, apiVersion, names),
+    /** Each object described once per store (staging loads every story's request: the same objects each time). */
+    describe(names) {
+      const missing = names.filter((n) => !describes.has(n));
+      for (const [name, d] of Object.entries(describeIn(rest, apiVersion, missing))) describes.set(name, d);
+      return Object.fromEntries(names.map((n) => [n, describes.get(n)]));
+    },
 
     /** Every object in the org. An org that cannot be listed (a login or sf error) throws: an empty list would read a typed request without its did-you-mean, as if the names were the person's mistake. */
     objectNames() {
@@ -224,7 +233,8 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
       return bulkInsert(object, records);
     },
 
-    remove: (ids) => removeIds(ids),
+    removeBatchSize: BULK_MAX,   // removeTracked hands one object's ids up to this many at a time; removeIds picks REST or Bulk API
+    remove: (ids, { object = null } = {}) => removeIds(ids, object),
 
     /** The marker Accounts the earlier seed mechanism left whose Name starts with `prefix`. A query that fails throws. */
     legacyMarkers(prefix) {
@@ -238,10 +248,10 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
 
     /** Remove a tree seed loaded the earlier way, by its keys (legacySeedApex), in one anonymous Apex call. Throws when it fails. */
     removeLegacySeed(keys) {
-      const file = scratchFile("legacy-seed.apex");
-      writeFileSync(file, legacySeedApex(keys));
-      sf(["apex", "run", "--file", file, "-o", alias]);
+      withScratchFile("legacy-seed.apex", legacySeedApex(keys), (file) => sf(["apex", "run", "--file", file, "-o", alias]));
     },
+
+    ledgerScopes: () => [...allLedgers().keys()].map(scopeOfTitle).filter(Boolean),
 
     readLedger(scope) {
       const entry = allLedgers().get(ledgerTitle(scope));
@@ -270,10 +280,9 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
 
   /** One tree file; all or nothing. Throws when the reply does not account for every record. */
   function treeInsert(object, records) {
-    const file = scratchFile(`${object}.json`);
-    writeFileSync(file, JSON.stringify({ records: records.map((r) => ({ attributes: { type: object, referenceId: r.ref }, ...r.fields })) }));
+    const tree = JSON.stringify({ records: records.map((r) => ({ attributes: { type: object, referenceId: r.ref }, ...r.fields })) });
     // a failed import exits 1 with each record's error in its data: keep them (allowFail "json"), so the error says why
-    const reply = sf(["data", "import", "tree", "--files", file, "-o", alias], { allowFail: "json" });
+    const reply = withScratchFile(`${object}.json`, tree, (file) => sf(["data", "import", "tree", "--files", file, "-o", alias], { allowFail: "json" }));
     if (reply?.failed) {
       const refused = importErrors(reply);
       // the org refused the records (a validation rule, a restricted value): the request's to change, so say it as one
@@ -293,9 +302,10 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
    * (timed out) cannot be taken back by id: the error names it.
    */
   function bulkInsert(object, records) {
-    const dir = mkdtempSync(join(tmpdir(), "bulk-"));
-    const file = join(dir, `${object}.csv`);
-    writeFileSync(file, toCsv(records.map((r) => r.fields)));
+    return withScratchFile(`${object}.csv`, toCsv(records.map((r) => r.fields)), (file, dir) => bulkInsertJob(object, records, file, dir));
+  }
+
+  function bulkInsertJob(object, records, file, dir) {
     const job = sf(["data", "import", "bulk", "--file", file, "--sobject", object, "--line-ending", "LF", "--wait", String(BULK_WAIT), "-o", alias], { allowFail: "json" });
     if (!job?.jobId) throw new Error(`sf data import bulk loaded none of ${records.length} ${object} records into ${alias} (no job started)`);
     if (job.failed && job.state !== "JobComplete") {
@@ -306,16 +316,40 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
     const ids = read(results?.successFilePath).map((row) => row.sf__Id).filter(Boolean);
     const failed = Number(results?.failedRecords || 0) ? read(results.failedFilePath).map((row) => row.sf__Error.replace(/:?\s*--\s*$/, "")) : [];
     if (!failed.length && ids.length === records.length) return ids.map((id) => ({ ref: null, id }));
-    const kept = chunk(ids, BATCH_SIZE).flatMap((part) => removeIds(part).failed.map((f) => f.id));
+    const kept = removeIds(ids, object).failed.map((f) => f.id);
     if (kept.length) throw new Error(`the Bulk API job ${job.jobId} loaded ${ids.length} of ${records.length} ${object} records into ${alias}, and ${kept.length} of them could not be deleted again (${kept.slice(0, 5).join(", ")}${kept.length > 5 ? ", ..." : ""}): delete them by hand or recreate the org`);
     if (!failed.length) throw new Error(`the Bulk API job ${job.jobId} loaded ${ids.length} of ${records.length} ${object} records into ${alias}; they were deleted again`);
     throw new DataRequestError([`${alias} refused ${failed.length} of the ${records.length} ${object} records: ${counted(failed)} (the ${ids.length} that loaded were deleted again)`]);
   }
 
-  function removeIds(ids) {
-    const results = rest("DELETE", `/composite/sobjects?ids=${ids.join(",")}&allOrNone=false`);
-    const failed = (Array.isArray(results) ? results : []).map((r, i) => ({ id: r.id || ids[i], ok: r.success || ALREADY_GONE.test(JSON.stringify(r.errors || [])), message: r.errors?.[0]?.message || "unknown" }))
-      .filter((r) => !r.ok).map(({ id, message }) => ({ id, message }));
-    return { failed };
+  /**
+   * Delete ids (of one object, when `object` is given): up to BULK_FROM by REST composite deletes of 200 each; more, of
+   * a named object, as one Bulk API 2.0 delete job (one sf process instead of one per 200). An id already gone counts as
+   * deleted. Returns { failed: [{ id, message }] }.
+   */
+  function removeIds(ids, object = null) {
+    if (object && ids.length > BULK_FROM) return bulkDelete(object, ids);
+    const failed = chunk(ids, BATCH_SIZE).flatMap((part) => {
+      const results = rest("DELETE", `/composite/sobjects?ids=${part.join(",")}&allOrNone=false`);
+      return (Array.isArray(results) ? results : []).map((r, i) => ({ id: r.id || part[i], ok: r.success || ALREADY_GONE.test(JSON.stringify(r.errors || [])), message: r.errors?.[0]?.message || "unknown" }));
+    });
+    return { failed: failed.filter((r) => !r.ok).map(({ id, message }) => ({ id, message })) };
+  }
+
+  /**
+   * One Bulk API 2.0 delete job. Its reply differs by outcome (sf 2.151.7, recorded 9 Nov): all deleted, `{ jobInfo: { id,
+   * state } }`; some rows failed, exit 1 with `{ jobId, state: "JobComplete" }` (FailedRecordDetailsError), and the
+   * failed rows are read from the job's results. A job that did not finish throws: what it deleted is unknown.
+   */
+  function bulkDelete(object, ids) {
+    return withScratchFile(`${object}-delete.csv`, toCsv(ids.map((Id) => ({ Id }))), (file, dir) => {
+      const job = sf(["data", "delete", "bulk", "--file", file, "--sobject", object, "--line-ending", "LF", "--wait", String(BULK_WAIT), "-o", alias], { allowFail: "json" });
+      const jobId = job?.jobId || job?.jobInfo?.id, state = job?.state || job?.jobInfo?.state;
+      if (!jobId || state !== "JobComplete") throw new Error(`the Bulk API delete of ${ids.length} ${object} records in ${alias} did not finish (${state || "no job started"}): the Data ledger still lists them, so the next load deletes them again`);
+      if (!job.failed) return { failed: [] };
+      const results = sf(["data", "bulk", "results", "--job-id", jobId, "-o", alias], { cwd: dir });
+      const rows = results?.failedFilePath ? fromCsv(readFileSync(join(dir, results.failedFilePath), "utf8")) : [];
+      return { failed: rows.filter((r) => !ALREADY_GONE.test(r.sf__Error || "")).map((r) => ({ id: r.sf__Id || r.Id, message: (r.sf__Error || "unknown").replace(/:?\s*--\s*$/, "") })) };
+    });
   }
 }

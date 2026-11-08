@@ -1,0 +1,19 @@
+{
+  "name": "FailedRecordDetailsError",
+  "message": "Job finished being processed but failed to process 1 records.",
+  "exitCode": 1,
+  "actions": [
+    "Get the job results by running: \"sf data bulk results -o <scratch user> --job-id 750dq00000Vz1zpAAB\".",
+    "View the job in the org: \"sf org open -o <scratch user> --path '/lightning/setup/AsyncApiJobStatus/page?address=%2F750dq00000Vz1zpAAB'\"."
+  ],
+  "context": "Delete",
+  "data": {
+    "jobId": "750dq00000Vz1zpAAB",
+    "state": "JobComplete"
+  },
+  "cause": "undefined",
+  "warnings": [],
+  "code": "FailedRecordDetailsError",
+  "status": 1,
+  "commandName": "Delete"
+}

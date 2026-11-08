@@ -19,8 +19,28 @@ export const FLOOR = 5;
 export const SUPPRESSED = "suppressed";
 const FIELDS_PER_QUERY = 20;
 
-/** An aggregate query: the only kind the profile ever sends to production (every row is a count or an average). */
-export const isAggregate = (soql) => /^\s*SELECT\b/i.test(soql) && /\b(COUNT|AVG)\(/i.test(soql);
+/**
+ * The only query shapes the profile sends to production, exactly as profileQueries writes them: a count, fill counts,
+ * a group by one field, the record type mix, averages, and the years of a date. Anything else (a selected or grouped
+ * text column that merely also counts) is not one of them.
+ */
+const N = "[A-Za-z][A-Za-z0-9_]*";
+const SHAPES = [
+  new RegExp(`^SELECT COUNT\\(Id\\) n FROM ${N}$`),
+  new RegExp(`^SELECT COUNT\\(${N}\\) f0(, COUNT\\(${N}\\) f\\d+)* FROM ${N}$`),
+  new RegExp(`^SELECT (${N}) v, COUNT\\(Id\\) n FROM ${N} GROUP BY \\1$`),
+  new RegExp(`^SELECT RecordType\\.DeveloperName v, COUNT\\(Id\\) n FROM ${N} GROUP BY RecordType\\.DeveloperName$`),
+  new RegExp(`^SELECT AVG\\(${N}\\) a0, COUNT\\(${N}\\) n0(, AVG\\(${N}\\) a\\d+, COUNT\\(${N}\\) n\\d+)* FROM ${N}$`),
+  new RegExp(`^SELECT CALENDAR_YEAR\\((${N})\\) y, COUNT\\(Id\\) n FROM ${N} WHERE \\1 != null GROUP BY CALENDAR_YEAR\\(\\1\\)$`),
+];
+export const isAggregate = (soql) => SHAPES.some((shape) => shape.test(String(soql)));
+
+/** The field a "values" query groups by ({ object, field }), or null: its type must be a picklist or a checkbox, never text. */
+export function groupedField(soql) {
+  const m = String(soql).match(new RegExp(`^SELECT (${N}) v, COUNT\\(Id\\) n FROM (${N}) GROUP BY \\1$`));
+  return m ? { object: m[2], field: m[1] } : null;
+}
+export const GROUPABLE_TYPES = ["picklist", "boolean"];
 
 /**
  * The aggregate SOQL to run in production for these objects: [{ object, kind, fields?, field?, soql }].
