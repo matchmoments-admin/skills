@@ -1,5 +1,5 @@
 // Test data in an org: the synthetic seed (data/seed), a story's Data request (generated from the org's own schema and
-// production's Data profile, tracked by a Data ledger), and the staging volume records. Part of Org provisioning
+// production's Data profile, read on demand, tracked by a Data ledger), and the staging volume records. Part of Org provisioning
 // (pipeline/src/org.mjs): orgRegistry composes these methods with the provisioning core. Wiring only: loading a request
 // is the use case in pipeline/src/data/load.mjs, over the Org data store's sf adapter (./data-store.mjs).
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -9,7 +9,7 @@ import { baselineId as idOf } from "../baseline.mjs";
 import { PIPELINE_ROOT } from "../io.mjs";
 import { parseRequest, requestId, DataRequestError } from "../data/request.mjs";
 import { loadTestData, removeTestData, testDataStatus, guardAgainstProduction } from "../data/load.mjs";
-import { sfDataStore } from "./data-store.mjs";
+import { sfDataStore, sfProfileSource } from "./data-store.mjs";
 /** The seed's files with their date tokens filled in (data/seed/README.md). Pure: { name: text } -> { name: text }. */
 export function expandSeed(files, { today = new Date(), marker }) {
   const y = today.getUTCFullYear();
@@ -88,15 +88,21 @@ export function foldSeeds(core, stories) {
 
 const STORIES_DIR = "data/seed/stories";
 
-/** The registry's data methods. ctx: orgRegistry's shared context (sf, log, env, ...); dataRoot: main's trusted checkout. */
-export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active = () => [], dataRoot = PIPELINE_ROOT, makeStore = null }) {
+/**
+ * The registry's data methods. ctx: orgRegistry's shared context (sf, log, env, ...); dataRoot: main's trusted checkout.
+ * makeStore (alias -> Org data store) and makeProfileSource (() -> Profile source) replace the sf adapters in tests.
+ */
+export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active = () => [], dataRoot = PIPELINE_ROOT, makeStore = null, makeProfileSource = null }) {
   const apiVersion = () => { try { return JSON.parse(readFileSync(join(dataRoot, "sfdx-project.json"), "utf8")).sourceApiVersion || "67.0"; } catch { return "67.0"; } };
   const readJson = (path) => (existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null);
   const stores = {};
   // the Org data store for an org: the sf adapter, or the one a test passes (makeStore: alias -> store)
   const storeFor = (alias) => (stores[alias] ||= makeStore ? makeStore(alias) : sfDataStore({ sf, alias, apiVersion: apiVersion(), active }));
   const testDataOn = () => String(env.SEED || "on").toLowerCase() !== "off";
-  const loadDefaults = () => ({ profile: readJson(join(dataRoot, "baseline-facts/data-profile.json")), rules: readJson(join(dataRoot, "config/data-rules.json")) || {} });
+  // production (the Dev Hub) read on demand for the profile, one source per run so each object is read once; DATA_PROFILE=off: never
+  let profileSource;
+  const productionProfile = () => (String(env.DATA_PROFILE || "on").toLowerCase() === "off" ? null : (profileSource ||= makeProfileSource ? makeProfileSource() : sfProfileSource({ sf, apiVersion: apiVersion() })));
+  const loadDefaults = () => ({ profileSource: productionProfile(), rules: readJson(join(dataRoot, "config/data-rules.json")) || {} });
 
   /** The legacy seeds (data/seed by marker, then stories' plan.json) and the stories' Data requests, for this org kind. */
   function seedSources({ story, stories }) {
@@ -177,9 +183,10 @@ export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active
       return loaded;
     },
 
-    /** Load a Data request into any non-production org (data/load.mjs loadTestData), with main's profile and rules. Logs its warnings. */
+    /** Load a Data request into any non-production org (data/load.mjs loadTestData), shaped by production's profile, with main's rules. Logs its warnings. */
     loadTestData(alias, { request, scope, ...overrides }) {
       const result = loadTestData(storeFor(alias), { ...loadDefaults(), ...overrides, request, scope });
+      if (result.profiled) log(`${alias} test data (${scope}): ${result.profiled}`);
       for (const w of result.warnings) log(`::warning::${alias} test data (${scope}): ${w}`);
       log(result.loaded ? `loaded test data for ${scope} into ${alias}: ${result.summary}` : `${alias} already holds the test data for ${scope} (${result.summary})`);
       if (result.loaded) record("seed", { action: "data", org: alias, scope });

@@ -47,9 +47,30 @@ export function memoryDataStore({ describes, identity = {}, batchSize = 200, fai
     // for the tests: a record made by a person, what the org holds, and its ledger
     addByHand(object, fields) { const id = `HAND${++nextId}`; records.set(id, { object, ...fields }); return id; },
     holds: (id) => records.has(id),
-    count: (object) => [...records.values()].filter((r) => r.object === object).length,
+    count: (object, where = () => true) => [...records.values()].filter((r) => r.object === object && where(r)).length,
     ledger: (scope) => (ledgers[scope] ? JSON.parse(ledgers[scope]) : null),
     refuseDeletesOf(ids) { refuseDeletes = ids; },
     stopFailing() { refuseDeletes = []; failInsert = null; },
+  };
+}
+
+/**
+ * The Profile source's in-memory adapter (the port is in pipeline/src/data/profile.mjs): production as describes and an
+ * answer per aggregate query (answer(query) -> rows, or throws for that query). fail: the whole source cannot be read.
+ * calls lists what was asked, so tests can prove when production was (and was not) read.
+ */
+export function memoryProfileSource({ describes, answer = () => [], fail = null }) {
+  const calls = [];
+  return {
+    calls,
+    describe(names) {
+      calls.push(`describe ${names.join(",")}`);
+      if (fail) throw new Error(fail);
+      return Object.fromEntries(names.map((n) => [n, describes[n] || null]));
+    },
+    aggregate(queries) {
+      calls.push(`aggregate ${queries.length}`);
+      return queries.map((query) => { try { return { query, records: answer(query) }; } catch (e) { return { query, error: e.message }; } });
+    },
   };
 }

@@ -77,6 +77,16 @@ Every entry happened in a real run. Search this file for the error text you see.
   `{ url, method, body: { mode: "raw", raw: "" } }`); a 4xx exits 1 with the HTTP reply still in `result`. Test the
   adapter on recorded CLI output, not a fake you wrote: the first fake got both of the first two wrong in the code's
   favour. Scratch orgs report `Organization.IsSandbox = true`.
+- **Reading production's profile in batches** → plain REST `/composite` runs at most 5 query subrequests; the 6th onward
+  answer `PROCESSING_HALTED` ("Limit number of query or Collections in Rest Operations reached"). `/composite/batch`
+  (`haltOnError: false`) runs 25 queries per call, each failing alone. `COUNT(<checkbox>)` is invalid SOQL and fails
+  the whole multi-field COUNT query it sits in: never count checkboxes (they are never empty anyway). Group only
+  fields describe marks `groupable`, average only `aggregatable` ones.
+- **Generated address data: "Mismatched integration value and ISO code for field: Billing Country Code"** → with state
+  and country picklists on, fill only `BillingCountryCode`/`BillingStateCode` (the state depends on the country through
+  `validFor`), never the text twin `BillingCountry`. It showed only once production's fill rates made optional fields
+  filled. `sf data import tree` failing says only "Data Import failed"; the per-record reasons are in the JSON's `data`
+  (exit 1): read them with the reply, or nobody can tell why.
 - **Shape orgs' roles cannot be assigned** ("invalid cross reference id", even from Apex; deploying the Role metadata over them does not help) → delete them leaves-first and recreate them as metadata, before the deploy (folder shares and sharing rules attach to roles at deploy time).
 - **Logging in as a persona without a password** → turn on `SecuritySettings.enableAdminLoginAsAnyUser` in scratch orgs and use `/servlet/servlet.su?oid=..&suorgadminid=..` on the classic (instance URL) domain after the admin's front-door login; the Lightning domain aborts. Users as records (`sf org create user` refuses JWT on Hyperforce); licences are few: deactivate other persona users when `LICENSE_LIMIT_EXCEEDED`.
 

@@ -1,30 +1,32 @@
-// The Org data store's sf adapter (see data/load.mjs for the port): the one place that knows how test data reaches an
-// org through the `sf` seam: describe, `sf data import tree --files`, the REST composite delete, and the Data ledger as a
-// ContentVersion. Facts only; the use case decides. pipeline/test/data.test.mjs runs it on recorded CLI output.
+// The sf adapters of test data's two ports: the Org data store (see data/load.mjs), the one place that knows how test
+// data reaches an org through the `sf` seam (describe, `sf data import tree --files`, the REST composite delete, the Data
+// ledger as a ContentVersion), and the Profile source (see data/profile.mjs): production read through aggregate queries
+// only, batched in REST composite batch calls. Facts only; the use case decides. pipeline/test/data.test.mjs runs both on
+// recorded CLI output.
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEVHUB } from "./fleet.mjs";
-import { ledgerTitle, encodeLedger, decodeLedger } from "../data/ledger.mjs";
+import { ledgerTitle, encodeLedger, decodeLedger, chunk } from "../data/ledger.mjs";
+import { isAggregate } from "../data/profile.mjs";
 
 export const BATCH_SIZE = 200;   // sf data import tree and the composite delete both take up to 200 records
+export const BATCH_QUERIES = 25;   // subrequests in one REST composite batch call (plain /composite runs only 5 queries)
 const LEDGER_FILE = "data-ledger.json";
 const ALREADY_GONE = /ENTITY_IS_DELETED|INVALID_CROSS_REFERENCE_KEY/;
 
 const scratchFile = (name) => join(mkdtempSync(join(tmpdir(), "data-")), name);
 const soqlString = (text) => `'${String(text).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 
-/** The Org data store for one org. sf: the io seam; active: the Dev Hub's active scratch orgs (ScratchOrgInfo rows). */
-export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] }) {
-  const documents = {};   // scope -> ContentDocumentId of its ledger, once known
-  let identityOnce = null;
+const describeIn = (sf, alias, names) => Object.fromEntries(names.map((name) => [name, sf(["sobject", "describe", "-s", name, "-o", alias], { allowFail: true }) || null]));
 
-  /**
-   * One REST call; the reply's `body` is unwrapped and a 4xx or 5xx throws. A body goes as a file (`-b @file`: without
-   * the @ the CLI sends the path itself). A call without one goes as a request definition with an empty raw body:
-   * `sf api request rest -X DELETE` alone fails with "No 'mode' found in 'body' entry" (sf 2.151.7, checked 8 Nov).
-   */
-  function rest(method, path, body) {
+/**
+ * One REST call in an org; the reply's `body` is unwrapped and a 4xx or 5xx throws. A body goes as a file (`-b @file`:
+ * without the @ the CLI sends the path itself). A call without one goes as a request definition with an empty raw body:
+ * `sf api request rest -X DELETE` alone fails with "No 'mode' found in 'body' entry" (sf 2.151.7, checked 8 Nov).
+ */
+function restIn({ sf, alias, apiVersion }) {
+  return function rest(method, path, body) {
     const url = `/services/data/v${apiVersion}${path}`;
     const args = ["api", "request", "rest", "-o", alias];
     if (body !== undefined) {
@@ -42,7 +44,55 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
     const status = Number(reply?.statusCode ?? 200);
     if (status >= 400) throw new Error(`${method} ${path} in ${alias} answered ${status}: ${JSON.stringify(reply?.body ?? "").slice(0, 300)}`);
     return reply?.body;
-  }
+  };
+}
+
+/**
+ * Production as the Profile source (data/profile.mjs): describes, and aggregate queries sent 25 to a REST composite batch
+ * call (haltOnError false, so one query that fails is an error for that query alone; plain /composite stops after 5
+ * queries with PROCESSING_HALTED, found live 8 Nov). A query that is not an aggregate is refused before anything is
+ * sent: the profile never reads a record. Results are kept for the run, so staging, which loads every story's request,
+ * reads each object once.
+ */
+export function sfProfileSource({ sf, alias = DEVHUB, apiVersion = "67.0" }) {
+  const rest = restIn({ sf, alias, apiVersion });
+  const describes = new Map(), results = new Map();
+  return {
+    describe(names) {
+      const missing = names.filter((n) => !describes.has(n));
+      for (const [name, d] of Object.entries(describeIn(sf, alias, missing))) describes.set(name, d);
+      return Object.fromEntries(names.map((n) => [n, describes.get(n)]));
+    },
+    aggregate(queries) {
+      const refused = queries.find((q) => !isAggregate(q.soql));
+      if (refused) throw new Error(`refusing to read production (${alias}) with a query that is not an aggregate: ${refused.soql}`);
+      const todo = [...new Map(queries.filter((q) => !results.has(q.soql)).map((q) => [q.soql, q])).values()];
+      for (const part of chunk(todo, BATCH_QUERIES)) {
+        const reply = rest("POST", "/composite/batch", { haltOnError: false, batchRequests: part.map((q) => ({ method: "GET", url: `v${apiVersion}/query?q=${encodeURIComponent(q.soql)}` })) });
+        const answers = reply?.results || [];
+        part.forEach((q, i) => {
+          const a = answers[i];
+          results.set(q.soql, a && Number(a.statusCode) < 300 ? { records: a.result?.records || [] } : { error: JSON.stringify(a?.result ?? "no reply").slice(0, 200) });
+        });
+      }
+      return queries.map((query) => ({ query, ...results.get(query.soql) }));
+    },
+  };
+}
+
+/** A failed tree import's record errors, each distinct one once with how many records it hit: "FIELD_INTEGRITY_EXCEPTION ... (BillingCountryCode) x5". */
+function importErrors(reply) {
+  const errors = Object.values(reply).filter((e) => e && typeof e === "object" && e.StatusCode).map((e) => `${e.StatusCode}: ${e.Message}${e.fields ? ` (${e.fields})` : ""}`);
+  if (!errors.length) return "no reason given";
+  const counts = errors.reduce((acc, e) => acc.set(e, (acc.get(e) || 0) + 1), new Map());
+  return [...counts].map(([e, n]) => `${e}${n > 1 ? ` x${n}` : ""}`).join("; ");
+}
+
+/** The Org data store for one org. sf: the io seam; active: the Dev Hub's active scratch orgs (ScratchOrgInfo rows). */
+export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] }) {
+  const documents = {};   // scope -> ContentDocumentId of its ledger, once known
+  let identityOnce = null;
+  const rest = restIn({ sf, alias, apiVersion });
 
   const query = (soql, opts) => sf(["data", "query", "-o", alias, "-q", soql], opts)?.records || [];
 
@@ -68,9 +118,7 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
       return identityOnce;
     },
 
-    describe(names) {
-      return Object.fromEntries(names.map((name) => [name, sf(["sobject", "describe", "-s", name, "-o", alias], { allowFail: true }) || null]));
-    },
+    describe: (names) => describeIn(sf, alias, names),
 
     objectNames() {
       const names = sf(["sobject", "list", "-s", "all", "-o", alias], { allowFail: true });
@@ -81,7 +129,9 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
     insert(object, records) {
       const file = scratchFile(`${object}.json`);
       writeFileSync(file, JSON.stringify({ records: records.map((r) => ({ attributes: { type: object, referenceId: r.ref }, ...r.fields })) }));
-      const reply = sf(["data", "import", "tree", "--files", file, "-o", alias]);
+      // a failed import exits 1 with each record's error in its data: keep them (allowFail "json"), so the error says why
+      const reply = sf(["data", "import", "tree", "--files", file, "-o", alias], { allowFail: "json" });
+      if (reply?.failed) throw new Error(`sf data import tree loaded none of ${records.length} ${object} records into ${alias}: ${importErrors(reply)}`);
       const rows = Array.isArray(reply) ? reply : reply?.records || [];
       const loaded = rows.filter((r) => r?.refId && r?.id).map((r) => ({ ref: r.refId, id: r.id }));
       if (loaded.length !== records.length) throw new Error(`sf data import tree loaded ${loaded.length} of ${records.length} ${object} records into ${alias}`);

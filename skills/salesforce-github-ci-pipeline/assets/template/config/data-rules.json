@@ -1,9 +1,13 @@
 {
   "version": 1,
   "never": {
-    "Case.Origin": ["Email"]
+    "Case.Origin": [
+      "Email"
+    ]
   },
   "why": {
-    "Case.Origin": "An email-origin Case starts production's Case_Classify_On_Email_Create Flow, which queues an Apex job; a pending job blocks redeploying its classes (#289). Generated data never picks these values; a scenario that sets one explicitly still can."
-  }
+    "Case.Origin": "An email-origin Case starts production's Case_Classify_On_Email_Create Flow, which queues an Apex job; a pending job blocks redeploying its classes (#289). Generated data never picks these values; a scenario that sets one explicitly still can.",
+    "profileExclude": "Fields whose production average must not be read when a request loads (\"Opportunity.Amount\"): their values are then spread evenly."
+  },
+  "profileExclude": []
 }
