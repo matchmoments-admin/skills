@@ -78,7 +78,13 @@ jobs:
           BASE="${{ github.base_ref }}"; [ -n "$BASE" ] || BASE=main
           node .pipeline/pipeline/bin/pipe.mjs access check --base "origin/$BASE"
       - name: Story test data requests are valid (data/seed/stories/*/request.json, offline)
-        run: node .pipeline/pipeline/bin/pipe.mjs data check   # main's rules, as the access check (#227)
+        run: |   # main's rules, as the access check (#227); one file at a time, so each problem names its story
+          bad=0
+          for f in data/seed/stories/*/request.json; do
+            [ -e "$f" ] || continue
+            node .pipeline/pipeline/bin/pipe.mjs data check --request "$f" || { echo "::error file=$f::$f cannot be loaded (above)"; bad=1; }
+          done
+          exit $bad
       - name: Every changed record-triggered Flow has a Flow test (as every Apex class has tests)
         if: steps.what.outputs.sf == 'true'
         run: |   # main's rule and exceptions, as the access check (#227)

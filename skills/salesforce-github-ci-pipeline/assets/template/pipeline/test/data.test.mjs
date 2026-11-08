@@ -589,6 +589,6 @@ test("workflows: /data and data-seed never put typed text in a script; a /data r
   const story = wf("story-data.yml");
   assert.ok(story.indexOf("data seed --org") < story.indexOf("git commit"), "loaded first: a request that does not fit is never committed");
   assert.doesNotMatch(story, /Co-authored-by/, "test data never reaches production: the person is named, not made the commit's co-author");
-  assert.match(wf("ci.yml"), /node \.pipeline\/pipeline\/bin\/pipe\.mjs data check\s/);
+  assert.match(wf("ci.yml"), /for f in data\/seed\/stories\/\*\/request\.json[\s\S]*node \.pipeline\/pipeline\/bin\/pipe\.mjs data check --request "\$f"/, "main's code, one file at a time (works before and after main learns the all-stories check)");
   assert.match(wf("data-seed.yml"), /--instance-url https:\/\/test\.salesforce\.com/);
 });
