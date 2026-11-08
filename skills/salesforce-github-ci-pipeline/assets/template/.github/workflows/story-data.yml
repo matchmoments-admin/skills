@@ -17,6 +17,7 @@ concurrency:
   group: story-data-${{ inputs.story }}
   cancel-in-progress: false
 permissions:
+  actions: read           # the org's lane sees which run holds it
   contents: write         # the event log; the branch is pushed as the pipeline App
   pull-requests: write
   issues: write
@@ -28,7 +29,7 @@ env:
 jobs:
   data:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35   # up to 15 waiting for the org's lane
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -55,6 +56,10 @@ jobs:
           BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
         run: |
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then echo "yes=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ -n "$(gh pr list --head "$BRANCH" --state merged --json number --jq '.[0].number // empty')" ]; then
+            node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "🧪 @$WHO: story $KEY is merged, so its org is gone. Its test data now loads in staging and UAT from the sprint; to change it, open a new story."
+            exit 0
+          fi
           node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "🧪 @$WHO: story $KEY has not started yet, so it has no org to load test data into. Put the line in the plan's **Test data** section (the build writes it), or comment \`/data ...\` again after **Start**."
       - id: id
         if: steps.started.outputs.yes == 'true'
@@ -69,6 +74,14 @@ jobs:
           consumer-key: ${{ secrets.SF_CI_CONSUMER_KEY }}
           username: ${{ secrets.SF_CI_USERNAME }}
           private-key: ${{ secrets.SF_CI_PRIVATE_KEY }}
+      - name: The org's lane (one job at a time in an org; a build, a fix, CI or a UI test may be using it)
+        if: steps.started.outputs.yes == 'true'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe commands use the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane acquire "$BRANCH" --minutes 15
       - name: Read the request against the story's org, commit it, load it
         if: steps.started.outputs.yes == 'true'
         env:
@@ -104,6 +117,14 @@ jobs:
             echo; echo "<!-- pipeline:test-data -->"; } > "$RUNNER_TEMP/said.md"
           node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "$(cat "$RUNNER_TEMP/said.md")"
           node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" || true
+      - name: Let the next job into the org's lane
+        if: always() && steps.started.outputs.yes == 'true'
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}   # TRACKER=jira: this step's pipe commands use the tracker
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.ctx.outputs.STORY_BRANCH }}
+        run: node .pipeline/pipeline/bin/pipe.mjs lane release "$BRANCH" || true
       - name: The card says it failed, and where to look
         if: failure()
         env:

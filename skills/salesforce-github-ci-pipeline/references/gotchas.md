@@ -87,6 +87,14 @@ Every entry happened in a real run. Search this file for the error text you see.
   `validFor`), never the text twin `BillingCountry`. It showed only once production's fill rates made optional fields
   filled. `sf data import tree` failing says only "Data Import failed"; the per-record reasons are in the JSON's `data`
   (exit 1): read them with the reply, or nobody can tell why.
+- **Test data on request, the architecture review's findings (8 Nov)** → a `/data` commit made the PR's review and
+  sign-off stale (the gate carried them only over spec changes): a story's `request.json` is now test data to them too
+  (the UI test still re-runs). Records the org refuses (a picklist typo, a validation rule) were a crash with no reply
+  and aborted staging's seed for every story: typed picklist values are checked with a did-you-mean, and refused records
+  are the request's problem. `/data` now waits for the org's lane (two writers on one ledger lose track of records).
+  `pipe ... | tee` in a workflow step needs `shell: bash` (pipefail) or the step shows green on failure. The seed fold
+  deleted a story's `request.json` with its tree seed: it now folds only the tree seed. A refusal echoing typed text
+  could put the card's marker in an App comment: the card reads only a success reply that ends with the marker.
 - **Shape orgs' roles cannot be assigned** ("invalid cross reference id", even from Apex; deploying the Role metadata over them does not help) → delete them leaves-first and recreate them as metadata, before the deploy (folder shares and sharing rules attach to roles at deploy time).
 - **Logging in as a persona without a password** → turn on `SecuritySettings.enableAdminLoginAsAnyUser` in scratch orgs and use `/servlet/servlet.su?oid=..&suorgadminid=..` on the classic (instance URL) domain after the admin's front-door login; the Lightning domain aborts. Users as records (`sf org create user` refuses JWT on Hyperforce); licences are few: deactivate other persona users when `LICENSE_LIMIT_EXCEEDED`.
 

@@ -127,6 +127,8 @@ export const checkPassed = (conclusion) => checkState(conclusion) === "passed";
  * A file list that is unknown (null: a diverged history, a failed diff) never carries.
  */
 const spec = (f) => f.startsWith("e2e/");
+/** A story's Data request: test data only (it never reaches production), so a /data commit keeps a review or sign-off. */
+const storyData = (f) => /^data\/seed\/stories\/[^/]+\/request\.json$/.test(f);
 /** What the staging regression tests: Salesforce source, specs, seed and org config, and the code that builds and runs
  *  staging. A release-branch commit that changes none of these (a back-merge of other pipeline work) keeps the
  *  regression an earlier commit passed (#237). */
@@ -134,8 +136,8 @@ export const STAGING_INPUTS = /^(force-app\/|e2e\/|data\/|config\/|baseline\/|sf
 const UI_ONLY = /^(e2e\/|playwright\.config\.ts$)/;
 export const RESULTS = {
   // a review or a sign-off: the code, not its specs (a spec-only push keeps them)
-  [STATUS.review]: { inputs: (f) => !spec(f) },
-  [STATUS.signoff]: { inputs: (f) => !spec(f) },
+  [STATUS.review]: { inputs: (f) => !spec(f) && !storyData(f) },
+  [STATUS.signoff]: { inputs: (f) => !spec(f) && !storyData(f) },
   // the UI test: the spec IS that test, so a changed spec has not passed yet (story #166: a weakened spec rode on an
   // earlier pass); while it runs, its own spec commit keeps it running
   [STATUS.ui]: { inputs: "exact", running: (f) => !spec(f) },
