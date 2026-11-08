@@ -71,6 +71,9 @@ export const SF_FAILURES = [
   ["slots", /scratch org slot|ORG_RESERVE|has created its \d+ scratch orgs for today/i],
   ["limit", /REQUEST_LIMIT_EXCEEDED/i],
   ["shape", /shape.{0,40}(outdated|out of date|expired)|outdated.{0,40}shape/i],
+  // minutes after a snapshot turns Active, Salesforce can still refuse orgs from it (live 8 Nov: refused 2 minutes after,
+  // fine 10 minutes later); the caller decides by the snapshot's age whether it is settling or broken
+  ["settling", /INVALID_ACCESS_LEVEL: We couldn.t create the snapshot/i],
 ];
 export const sfFailure = (message) => SF_FAILURES.find(([, re]) => re.test(String(message || "")))?.[0] || "real";
 

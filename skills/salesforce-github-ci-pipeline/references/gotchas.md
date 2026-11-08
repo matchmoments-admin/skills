@@ -111,9 +111,12 @@ Every entry happened in a real run. Search this file for the error text you see.
   `sf data delete bulk` answers differently by outcome (sf 2.151.7, 9 Nov 2026): all deleted, `result.jobInfo.{id,state}`
   and exit 0; any row failed, exit 1 `FailedRecordDetailsError` with `data.{jobId,state}`, the rows in the job's
   results (an id already gone is `INVALID_CROSS_REFERENCE_KEY`). Read both shapes.
-- **Snapshots and Files (unverified)** → it is not documented whether a snapshot copies ContentVersion files (the Data
-  ledger) with the records. If a new org shows the seed's accounts with no ledger, the loader removes that untracked
-  copy by name and loads again (one warning per org; in a sandbox the accounts stay and the load warns); check the first org after a snapshot rebuild for that warning.
+- **Snapshots and Files** → a snapshot keeps ContentVersion files with its records (checked 8 Nov 2026: an org from it
+  held the core seed's `[data ledger core seed]`), so new orgs see the seed as tracked. Should a new org ever show the
+  seed's accounts with no ledger, the loader removes that untracked copy by name in a scratch org (one warning).
+- **A snapshot minutes old can refuse orgs** → `INVALID_ACCESS_LEVEL: We couldn't create the snapshot` 2 minutes after it
+  turned Active; the same snapshot worked 10 minutes later (8 Nov 2026). Within 2 hours of Active that error falls back to
+  the shape once and keeps the snapshot; later it refuses it (tag `snapshot-refused-<name>`; delete the tag to retry).
 - **Shape orgs' roles cannot be assigned** ("invalid cross reference id", even from Apex; deploying the Role metadata over them does not help) → delete them leaves-first and recreate them as metadata, before the deploy (folder shares and sharing rules attach to roles at deploy time).
 - **Logging in as a persona without a password** → turn on `SecuritySettings.enableAdminLoginAsAnyUser` in scratch orgs and use `/servlet/servlet.su?oid=..&suorgadminid=..` on the classic (instance URL) domain after the admin's front-door login; the Lightning domain aborts. Users as records (`sf org create user` refuses JWT on Hyperforce); licences are few: deactivate other persona users when `LICENSE_LIMIT_EXCEEDED`.
 
