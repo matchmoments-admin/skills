@@ -2,7 +2,7 @@
 // a Data profile, production's shape. The org's describe decides what is valid; the profile only weights the choices, so
 // a stale profile can never produce an invalid record. Deterministic: the same inputs and seed give the same records.
 // Pure. Which objects and in what order is the load plan's job (load-plan.mjs); this module only makes values.
-import { DataRequestError, MAX_COUNT } from "./request.mjs";
+import { DataRequestError, MAX_RECORDS } from "./request.mjs";
 import { NEVER_CREATED } from "./schema.mjs";
 import { weightsOf } from "./profile.mjs";
 
@@ -13,13 +13,13 @@ const DAY = 86_400_000;
  * Records for a load plan (loadPlan, with no problems) in an org with `schema`:
  * { records: [{ ref, object, fields, parents: { field: ref } }], warnings: [text] }.
  * profile: a Data profile or null; rules: config/data-rules.json ({ never: { "Case.Origin": ["Email"] } }).
- * Throws DataRequestError when a required value cannot be made, or the plan makes more than MAX_COUNT records.
+ * Throws DataRequestError when a required value cannot be made, or the plan makes more than MAX_RECORDS records.
  */
 export function generateRecords({ schema, plan, profile = null, rules = {}, seed, today = new Date() }) {
   const problems = [];
   const context = { schema, profile, never: rules.never || {}, rng: rngFor(String(seed)), today, refs: {}, counters: {} };
   const records = plan.order.flatMap((name) => plan.entries.filter((e) => e.object === name).flatMap((entry) => recordsFor(entry, context, problems)));
-  if (records.length > MAX_COUNT) problems.push(`the request makes ${records.length} records; one load takes up to ${MAX_COUNT}. Ask for fewer, or fewer per parent`);
+  if (records.length > MAX_RECORDS) problems.push(`the request makes ${records.length} records; one load takes up to ${MAX_RECORDS}. Ask for fewer, or fewer per parent`);
   if (problems.length) throw new DataRequestError([...new Set(problems)]);
   return { records, warnings: [...plan.warnings, ...profileWarnings(plan.order, profile)] };
 }

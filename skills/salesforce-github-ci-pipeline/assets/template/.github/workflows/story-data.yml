@@ -1,5 +1,6 @@
 name: story-data
-# COMMAND: `/data Account 20; Contact 2 per Account; Case 5 Status=Escalated` on a story or its PR. `pipe data apply`
+# COMMAND: `/data Account 20; Contact 2 per Account; Case 5 Status=Escalated` on a story or its PR (`/data refresh`: the
+# story's request loaded again, shaped like production today; nothing to commit). `pipe data apply`
 # decides everything (data/load.mjs applyDataRequest): the typed request is read against the story's scratch org (its
 # objects, any case, with a did-you-mean), loaded at once, shaped like production (the Data profile, read on demand), and
 # only then written as the story's Data request (data/seed/stories/<key>/request.json). It prints one JSON outcome:
@@ -97,7 +98,8 @@ jobs:
           node .pipeline/pipeline/bin/pipe.mjs data apply --story "$KEY" --org "$ALIAS" --data "$REQUEST" > "$OUT"
           case "$(jq -r .outcome "$OUT")" in
             refused)
-              { echo "🧪 @$WHO: that test data cannot be loaded into \`$BRANCH\`, so nothing changed:"; echo; jq -r '.problems[] | "- " + .' "$OUT"; echo
+              if [ "$(jq -r .partial "$OUT")" = true ]; then WHAT="the org refused part of it (the request file is unchanged)"; else WHAT="so nothing changed"; fi
+              { echo "🧪 @$WHO: that test data cannot be loaded into \`$BRANCH\`, $WHAT:"; echo; jq -r '.problems[] | "- " + .' "$OUT"; echo
                 echo "For example: \`/data Account 20; Contact 2 per Account; Case 5 Status=Escalated\`"; } > "$RUNNER_TEMP/said.md"
               node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "$(cat "$RUNNER_TEMP/said.md")"
               node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" || true
@@ -106,15 +108,17 @@ jobs:
             *) echo "::error::pipe data apply gave no outcome:"; cat "$OUT"; exit 1 ;;
           esac
           SUMMARY=$(jq -r .summary "$OUT")
-          if [ "$(jq -r .changed "$OUT")" = true ]; then
+          CHANGED=$(jq -r .changed "$OUT")
+          if [ "$CHANGED" = true ]; then
             git add "$(jq -r .file "$OUT")"
             git config user.name "__owner__-pipeline[bot]"; git config user.email "pipeline@users.noreply.github.com"
             printf 'test(data): story %s test data: %s\n\nAsked for by @%s with /data. Test data only: it never reaches production.\n' "$KEY" "$SUMMARY" "$WHO" > "$RUNNER_TEMP/msg.txt"
             git diff --cached --quiet || { git commit -q -F "$RUNNER_TEMP/msg.txt"; git push -q origin "HEAD:$BRANCH"; }
           fi
-          jq -r '(if .fresh then "loaded: " else "already loaded: " end) + .records, (.profiled // empty), (.warnings[] | "warning: " + .)' "$OUT" > "$RUNNER_TEMP/loaded.txt"
+          jq -r '(if .refreshed then "refreshed: " elif .fresh then "loaded: " else "already loaded: " end) + .records, (.profiled // empty), (.warnings[] | "warning: " + .)' "$OUT" > "$RUNNER_TEMP/loaded.txt"
           { echo "🧪 @$WHO: **Test data:** $SUMMARY"; echo; echo "Loaded into \`$BRANCH\`:"; echo; sed 's/^/> /' "$RUNNER_TEMP/loaded.txt"; echo;
-            echo "Committed to the story ($(git rev-parse --short HEAD)), so staging and UAT get it too. Another \`/data\` replaces this set; records made by hand stay.";
+            if [ "$CHANGED" = true ]; then echo "Committed to the story ($(git rev-parse --short HEAD)), so staging and UAT get it too. Another \`/data\` replaces this set; records made by hand stay.";
+            else echo "The story's request is unchanged, so nothing was committed. Another \`/data\` replaces this set; records made by hand stay."; fi
             echo; echo "<!-- pipeline:test-data -->"; } > "$RUNNER_TEMP/said.md"
           node .pipeline/pipeline/bin/pipe.mjs tracker comment "$KEY" "$(cat "$RUNNER_TEMP/said.md")"
           node .pipeline/pipeline/bin/pipe.mjs story card "$KEY" || true

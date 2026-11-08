@@ -5,7 +5,7 @@
 //   labels    sync                                       create or update every label the pipeline uses
 //   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits · capacity [--devs N] [--in-use N (active orgs other projects hold; not this pipeline's staging, UAT or story orgs)] [--uat-sandbox] (load and cost)
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
-//   data      seed --org A --request F|--data "Account 20; Contact 2 per Account" [--scope S] [--no-profile] · status|remove --org A --scope S · check [--request F] · apply --story K --org A --data D   a Data request in any non-production org (apply: /data on a story, JSON outcome)
+//   data      seed --org A --request F|--data "Account 20; Contact 2 per Account" [--scope S] [--refresh] [--no-profile] · refresh --org A [--scope S] · status|remove --org A --scope S · check [--request F] · apply --story K --org A --data D   a Data request in any non-production org (apply: /data on a story, JSON outcome)
 //   next      --after review|ci|staging|release-pr|org-freed|any [--pr N]   what the journey owes next, started (journey.mjs)
 //   finish    review|ui-test|ci|staging|uat --pr N|--branch B --sha S --outcome O [--detail D]   end a stage (finish.mjs)
 //   reconcile [--pr N]                                    re-run runs GitHub never started; start what is owed on every idle open PR

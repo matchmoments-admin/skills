@@ -143,14 +143,15 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   criterion depends on (`set`, date tokens such as `${TODAY-30}` work); never names, emails or real data. The pipeline
   generates the records to fit each org's own fields, picklists and lookups (and makes any required parents), shaped
   like production, and loads them into the story's org, staging and UAT, once each. Check it with
-  `pipe data check --request <file>`. People change it with a `/data Account 20; Contact 2 per Account` comment. A picklist
+  `pipe data check --request <file>`. People change it with a `/data Account 20; Contact 2 per Account` comment (`/data refresh` loads it again, shaped like production today). A picklist
   value in `set` must be one of the field's active values (a typo is refused with a did-you-mean), and records the org
   refuses (a validation rule) come back as the request's problem, with Salesforce's reason.
 - **A tree seed only for records a UI test finds by an exact name:** `data/seed/stories/<story key>/plan.json`
   plus one JSON file per object (`sf data import tree` format, as `data/seed`). A tree plan's `@ref` references reach
   only records in the same plan, so when the records need a parent (an Account), the story's plan makes its own few
   synthetic parents first and references them (`@SomeAcc01`). Use picklist codes, never real people or emails. The
-  story's org, then staging and UAT load it (once, by its marker). A shipped story's tree seed is folded into the core
+  story's org, then staging and UAT load it (once, tracked by a Data ledger, scope `story <key> seed`; a changed plan
+  replaces exactly its records). The `${TODAY-30}` date tokens work here too. A shipped story's tree seed is folded into the core
   seed by a bot PR after the release; its request.json stays with the story, so staging keeps loading it for that
   story's UI test.
 - **Every Apex test class declares what it tests:** `@IsTest(testFor='ApexClass:CaseHandler,ApexTrigger:CaseTrigger')`

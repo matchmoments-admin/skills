@@ -347,7 +347,7 @@ test("baseline in orgs: one combined deploy; soft falls back to force-app alone;
   assert.match(readFileSync(new URL("../../.github/workflows/prod-baseline.yml", import.meta.url), "utf8"), /github\.event_name != 'schedule' \|\| vars\.BASELINE_NIGHTLY == 'true'/);
 });
 
-test("seed: dates never go stale; loaded once per org (markers); a story's own data too; never production", async () => {
+test("seed: dates never go stale; loaded once per org (each by its Data ledger, no marker Account); a story's own data too; never production", async () => {
   const out = expandSeed({ "a.json": '{"CloseDate":"${THIS_YEAR}-03-15","Name":"${SEED_MARKER}","Next":"${NEXT_YEAR}-01-01"}' }, { today: new Date("2026-10-09T00:00:00Z"), marker: "[seed abc]" });
   assert.equal(out["a.json"], '{"CloseDate":"2026-03-15","Name":"[seed abc]","Next":"2027-01-01"}');
   const real = JSON.parse(readFileSync(new URL("../../data/seed/Opportunity.json", import.meta.url), "utf8")).records;
@@ -362,36 +362,24 @@ test("seed: dates never go stale; loaded once per org (markers); a story's own d
   const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
+  const { memoryDataStore } = await import("./data-store-memory.mjs");
   const seedDir = mkdtempSync(join(tmpdir(), "seed-"));
   writeFileSync(join(seedDir, "plan.json"), JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
-  writeFileSync(join(seedDir, "Account.json"), JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "M" }, Name: "${SEED_MARKER}" }] }));
+  writeFileSync(join(seedDir, "Account.json"), JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "A1" }, Name: "Seed A1" }, { attributes: { type: "Account", referenceId: "M" }, Name: "${SEED_MARKER}" }] }));
   const story = mkdtempSync(join(tmpdir(), "story-"));
   mkdirSync(join(story, "data/seed/stories/150"), { recursive: true });
   writeFileSync(join(story, "data/seed/stories/150/plan.json"), JSON.stringify([{ sobject: "Lead", files: ["Lead.json"] }]));
-  writeFileSync(join(story, "data/seed/stories/150/Lead.json"), JSON.stringify({ records: [] }));
-  const mk = ({ have = false, prodId = "00D000000000001" } = {}) => {
-    const calls = [];
-    const sf = (args) => {
-      calls.push(args.join(" "));
-      if (args[0] === "org" && args[1] === "display") return { id: args.includes("devhub") ? prodId : "00D000000000002", username: "a@b" };
-      if (args[0] === "data" && args[1] === "query" && args.some((a) => a.includes("FROM Organization"))) return { records: [{ IsSandbox: true }] };
-      if (args[0] === "data" && args[1] === "query") return { records: have ? [{ Id: "001" }] : [] };
-      return {};
-    };
-    return { calls, r: orgRegistry({ sf, log: () => {}, packages: [], seedDir, env: { BASELINE: "off" } }) };
-  };
+  writeFileSync(join(story, "data/seed/stories/150/Lead.json"), JSON.stringify({ records: [{ attributes: { type: "Lead", referenceId: "L1" }, LastName: "L", Company: "C" }] }));
+  const mk = (store) => orgRegistry({ sf: () => { throw new Error("no sf: the Org data store does the talking"); }, log: () => {}, packages: [], seedDir, env: { BASELINE: "off" }, makeStore: () => store });
   const cwd = process.cwd();
   process.chdir(story);
   try {
-    let { r, calls } = mk();
-    const loaded = r.seed("issue-150", { story: "150" });
-    assert.equal(loaded.length, 2, "the core seed, then the story's own");
-    assert.match(loaded[1], /^\[seed story 150 /);
-    assert.equal(calls.filter((c) => c.startsWith("data import tree")).length, 2);
-    ({ r, calls } = mk({ have: true }));
-    assert.deepEqual(r.seed("issue-150", { story: "150" }), [], "markers present (e.g. from the snapshot): nothing loaded again");
-    ({ r } = mk({ prodId: "00D000000000002" }));
-    assert.throws(() => r.seed("devhub"), /refusing to load test data into devhub: it is production/);
+    const store = memoryDataStore();
+    const loaded = mk(store).seed("issue-150", { story: "150" });
+    assert.deepEqual(loaded.map((m) => m.replace(/ [0-9a-f]{10}\]$/, "]")), ["[data core seed]", "[data story 150 seed]"], "the core seed, then the story's own");
+    assert.deepEqual([store.count("Account"), store.count("Lead"), store.count("Account", (a) => /\$\{|\[seed/.test(a.Name))], [1, 1, 0], "the records, and no marker Account");
+    assert.deepEqual(mk(store).seed("issue-150", { story: "150" }), [], "ledgers present (e.g. from the snapshot): nothing loaded again");
+    assert.throws(() => mk(memoryDataStore({ identity: { isDevHub: true } })).seed("devhub"), /refusing to load test data into devhub: it is production/);
   } finally { process.chdir(cwd); }
 });
 
@@ -621,7 +609,7 @@ test("orgs know what they hold: the seed loads on every ready() (even when the c
   const seedDir = j(root, "core"), work = j(root, "work"), baselineDir = j(root, "baseline");
   mkdirSync(seedDir, { recursive: true });
   write(j(seedDir, "plan.json"), JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
-  write(j(seedDir, "Account.json"), JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "M" }, Name: "${SEED_MARKER}" }] }));
+  write(j(seedDir, "Account.json"), JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "C1" }, Name: "Core account" }] }));
   for (const k of ["77", "78"]) {
     mkdirSync(j(work, "data/seed/stories", k), { recursive: true });
     write(j(work, "data/seed/stories", k, "plan.json"), JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
@@ -643,22 +631,25 @@ test("orgs know what they hold: the seed loads on every ready() (even when the c
     };
     return { sf, calls: p.calls };
   };
-  const reg = (sf, env = {}, dir = seedDir) => orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], seedDir: dir, baselineDir, env: { BASELINE: "off", SEED: "on", ...env } });
+  const { memoryDataStore } = await import("./data-store-memory.mjs");
+  let store = memoryDataStore();
+  const reg = (sf, env = {}, dir = seedDir) => orgRegistry({ sf, log: () => {}, sleep: () => {}, packages: [], seedDir: dir, baselineDir, env: { BASELINE: "off", SEED: "on", ...env }, makeStore: () => store });
   const cwd = process.cwd();
   process.chdir(work);
   try {
     // a story org gets the core seed and its own story's
     let f = fake();
-    assert.deepEqual(reg(f.sf).seed("issue-77", { story: "77" }).map((m) => m.replace(/ [0-9a-f]+\]$/, "]")), ["[seed]", "[seed story 77]"]);
+    assert.deepEqual(reg(f.sf).seed("issue-77", { story: "77" }).map((m) => m.replace(/ [0-9a-f]+\]$/, "]")), ["[data core seed]", "[data story 77 seed]"]);
     // staging and UAT get every story's seed in the release
-    f = fake();
-    assert.deepEqual(reg(f.sf).seed("staging", { stories: "all" }).map((m) => m.replace(/ [0-9a-f]+\]$/, "]")), ["[seed]", "[seed story 77]", "[seed story 78]"]);
+    f = fake(); store = memoryDataStore();
+    assert.deepEqual(reg(f.sf).seed("staging", { stories: "all" }).map((m) => m.replace(/ [0-9a-f]+\]$/, "]")), ["[data core seed]", "[data story 77 seed]", "[data story 78 seed]"]);
     // ready() seeds even when it returns early because the org already holds the commit (a seed added later loads)
     const { baselineId } = await import("../src/baseline.mjs");
+    store = memoryDataStore();
     f = fake({ live: [{ Description: "issue-77", SignupUsername: "u@x", LoginUrl: "https://s" }], title: orgMod.readyMarker("abc123456789ffff", null, baselineId(seedDir)) });
     assert.equal(reg(f.sf).ready("issue-77", { commit: "abc123456789ffff" }).fresh, true);
     assert.ok(!f.calls.some((c) => c.startsWith("project deploy")), "nothing redeployed");
-    assert.ok(f.calls.some((c) => c.startsWith("data import tree")), "the story's seed loaded");
+    assert.ok(store.calls.includes("insert Account 1") && store.ledger("story 77 seed"), "the story's seed loaded");
     // a new org from a snapshot that holds this baseline: force-app only; a snapshot of another baseline: the full deploy
     const id = reg(() => ({}), { BASELINE: "soft" }).baselineId();
     for (const [desc, full] of [[`main@abc b${id}`, false], ["main@abc b0000000000", true]]) {
@@ -950,12 +941,13 @@ test("#430: the snapshot is rebuilt only when main's baseline, seed or the relea
   let lists = 0;
   const registry = (snapshots, env = {}) => orgRegistry({ sf: (a) => (a[0] === "org" && a[1] === "list" && a[2] === "snapshot" ? (lists++, snapshots) : {}), log: () => {}, packages: [], baselineDir, seedDir, shapeRoot: root, env });
   const ids = registry([]).snapshotPlan({ ifChanged: true }).ids;
-  const { baseline: b, seed: s, shape: h } = ids;
+  const { baseline: b, seed: s, shape: h, data: tracking } = ids;
+  assert.equal(tracking, "2", "how test data is tracked: tree seeds by the Data ledger");
   for (const id of [b, s, h]) assert.match(id, /^[0-9a-f]{10}$/);
   const NOW = Date.parse("2026-10-30T05:00:00Z");
   const snap = (Description, extra = {}) => ({ SnapshotName: "LCB2610300100", Status: "Active", CreatedDate: "2026-10-30T01:00:00.000+0000", Description, ...extra });
   const plan = (snaps, opts = { ifChanged: true }, env) => registry(snaps, env).snapshotPlan({ now: NOW, ...opts });
-  const held = `b${b} s${s} h${h} main@1234567`;
+  const held = `b${b} s${s} d${tracking} h${h} main@1234567`;
 
   lists = 0;
   assert.equal(plan([snap(held)]).rebuild, false, "it holds all three: nothing to rebuild");
@@ -965,6 +957,8 @@ test("#430: the snapshot is rebuilt only when main's baseline, seed or the relea
   assert.match(plan([snap(`b${b} s${s} h0000000000`)]).why, /shape/, "a release changed production's settings: the shape the snapshot was made from is old");
   assert.equal(plan([snap(`b${b} s${s} h0000000000`)]).rebuild, true);
   assert.match(plan([snap(`main@1234567 b${b} s${s}`)]).why, /shape/, "a snapshot made before #430 names no shape: rebuilt once");
+  assert.match(plan([snap(`b${b} s${s} h${h} main@1234567`)]).why, /test data tracking \(2: tree seeds by Data ledger/, "a snapshot made before the Data ledger tracked tree seeds (marker Accounts) names no d: rebuilt once");
+  assert.equal(orgMod.snapshotHolds(`b${b} s${s} d2 h${h} main@b1c2d3e`).data, "2");
   assert.match(plan([]).why, /no Active snapshot/);
   // a second push queued behind the first: the first one's snapshot, still being made, already holds main's ids
   const building = snap(held, { SnapshotName: "LCB2610300400", Status: "InProgress", CreatedDate: "2026-10-30T04:00:00.000+0000" });
@@ -997,7 +991,7 @@ test("#430: the snapshot is rebuilt only when main's baseline, seed or the relea
   assert.deepEqual(snapshotHolds(d), ids);
   const long = snapshotDescription({ ...ids, commit: "x".repeat(400) });
   assert.equal(long.length, 255); assert.deepEqual(snapshotHolds(long), ids);
-  assert.deepEqual(snapshotHolds("main@b1c2d3e"), { baseline: null, seed: null, shape: null });
+  assert.deepEqual(snapshotHolds("main@b1c2d3e"), { baseline: null, seed: null, data: null, shape: null });
   assert.equal(registry([snap(`main@b1c2d3e b${b} s${s}`)]).snapshotBaseline("LCB2610300100"), b, "older descriptions (main@ first) still read");
   const src = readFileSync(new URL("../src/org/snapshot.mjs", import.meta.url), "utf8");
   assert.equal((src.match(/\.slice\(0, 255\)/g) || []).length, 1, "the description is cut in one place");

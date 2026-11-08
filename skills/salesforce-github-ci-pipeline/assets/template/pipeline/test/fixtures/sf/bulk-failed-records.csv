@@ -1,0 +1,4 @@
+"sf__Id","sf__Error",LastName,Email,Description
+"","REQUIRED_FIELD_MISSING:Required fields are missing: [LastName]:LastName --","","bulk10@example.invalid","says ""hi"", twice"
+"","REQUIRED_FIELD_MISSING:Required fields are missing: [LastName]:LastName --","","bulk20@example.invalid","says ""hi"", twice"
+"","REQUIRED_FIELD_MISSING:Required fields are missing: [LastName]:LastName --","","bulk30@example.invalid","says ""hi"", twice"

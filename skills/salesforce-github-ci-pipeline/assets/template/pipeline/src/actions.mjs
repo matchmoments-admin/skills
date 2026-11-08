@@ -144,7 +144,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority
   if (id === "data") {   // test data on request: the story's org reads it, the story's branch keeps it (story-data.yml)
     const key = where.isPr ? storyOf(where.pr.headRefName) : String(where.number);
     if (!key) return { said: "`/data` works on a story or its pull request." };
-    if (!arg.trim()) return { said: `@${who}: say which records, on one line: \`/data Account 20; Contact 2 per Account; Case 5 Status=Escalated\`. They are generated to fit the story's org, shaped like production, and committed to the story so staging and UAT get them too.` };
+    if (!arg.trim()) return { said: `@${who}: say which records, on one line: \`/data Account 20; Contact 2 per Account; Case 5 Status=Escalated\`. They are generated to fit the story's org, shaped like production, and committed to the story so staging and UAT get them too. \`/data refresh\` loads the story's test data again, shaped like production today.` };
     host.dispatch("story-data.yml", { story: key, who, request: arg });
     return { done: `loading the test data @${who} asked for into story ${key}'s org` };
   }
@@ -170,7 +170,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority
 /** The /help reply. */
 export function help(isPr) {
   return isPr
-    ? "**On a pull request:** `/review` AI review · `/fix` AI fixes the findings · `/test` runs the UI test (`/ui-test`: Claude writes it) · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/review-ok <why>` accepts the change over a wrong AI review · `/login` (as the persona) or `/admin-login` a login to the story's org · `/retrieve` brings Setup changes made there into the story · `/data Account 20; Contact 2 per Account` loads test data into it · `/gate` checks again · `/ci` re-runs CI · on a release PR `/uat-pass`, `/uat-fail <why>`, `/uat`, `/staging`. Or tick the boxes on the card."
+    ? "**On a pull request:** `/review` AI review · `/fix` AI fixes the findings · `/test` runs the UI test (`/ui-test`: Claude writes it) · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/review-ok <why>` accepts the change over a wrong AI review · `/login` (as the persona) or `/admin-login` a login to the story's org · `/retrieve` brings Setup changes made there into the story · `/data Account 20; Contact 2 per Account` loads test data into it (`/data refresh`: again, shaped like production today) · `/gate` checks again · `/ci` re-runs CI · on a release PR `/uat-pass`, `/uat-fail <why>`, `/uat`, `/staging`. Or tick the boxes on the card."
     : "**On a story:** `/plan` Claude proposes the build and asks its questions · `/start` creates its branch and scratch org · `/build` has Claude build it · after Start: `/admin-login` to build it in Setup yourself, then `/retrieve` to bring those changes in (`/login`: see it as its users will) · `/data Account 20; Contact 2 per Account` loads test data into its org · `/hotfix` starts it as an urgent production fix. **On a spec (bigger work):** `/spec` Claude writes (or revises) the spec · `/story` makes it a story. Or tick the boxes on the card.";
 }
 

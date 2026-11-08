@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { DEVHUB } from "./fleet.mjs";
+import { TEST_DATA_VERSION } from "../data/tree-seed.mjs";
 
 /**
  * A short id of what a release can change in the org shape a snapshot is made from: the Settings metadata in the
@@ -21,18 +22,20 @@ export function shapeInputsId(root, { dirs = ["force-app"], definition = "config
 
 /**
  * What a pipeline snapshot says it holds (its Dev Hub description, at most 255 characters): the production baseline's
- * id (b), the seed's (s) and the shape inputs' (h), then main's commit. The ids come first, so the cut (here only)
- * shortens the free text, never an id. Pure.
+ * id (b), the seed's (s), how its test data is tracked (d: TEST_DATA_VERSION in data/tree-seed.mjs; 2 is the Data
+ * ledger) and the shape inputs' (h), then main's commit. The ids come first, so the cut (here only) shortens the free
+ * text, never an id. Pure.
  */
-export const snapshotDescription = ({ commit = "", baseline = null, seed = null, shape = null }) =>
-  [baseline && `b${baseline}`, seed && `s${seed}`, shape && `h${shape}`, `main@${commit}`].filter(Boolean).join(" ").slice(0, 255);
+export const snapshotDescription = ({ commit = "", baseline = null, seed = null, data = null, shape = null }) =>
+  [baseline && `b${baseline}`, seed && `s${seed}`, data && `d${data}`, shape && `h${shape}`, `main@${commit}`].filter(Boolean).join(" ").slice(0, 255);
 /** The ids a snapshot's description names (null when it names none). Pure. Ids are 10 hex (baselineId), so main's
- *  short SHA (main@b1c2d3e) is never read as one; descriptions written before #430 (main@ first) still read. */
+ *  short SHA (main@b1c2d3e) is never read as one; descriptions written before #430 (main@ first) still read. A snapshot
+ *  made before the Data ledger tracked tree seeds names no d: its seed has marker Accounts, so it is rebuilt once. */
 export const snapshotHolds = (description) => {
-  const id = (p) => new RegExp(`(?:^|\\s)${p}([0-9a-f]{10})(?=\\s|$)`).exec(String(description || ""))?.[1] || null;
-  return { baseline: id("b"), seed: id("s"), shape: id("h") };
+  const id = (p, shape = "[0-9a-f]{10}") => new RegExp(`(?:^|\\s)${p}(${shape})(?=\\s|$)`).exec(String(description || ""))?.[1] || null;
+  return { baseline: id("b"), seed: id("s"), data: id("d", "\\d{1,3}"), shape: id("h") };
 };
-const IDS = { baseline: "baseline", seed: "seed", shape: "shape inputs (production's settings, the scratch definition)" };
+const IDS = { baseline: "baseline", seed: "seed", shape: "shape inputs (production's settings, the scratch definition)", data: "test data tracking (2: tree seeds by Data ledger, no marker Accounts)" };
 const ours = (list) => (Array.isArray(list) ? list : []).filter((s) => /^LCB\d+$/.test(s.SnapshotName || ""))
   .sort((a, b) => String(b.CreatedDate).localeCompare(String(a.CreatedDate)));
 const at = (s) => Date.parse(String(s.CreatedDate).replace(/\+0000$/, "Z"));
@@ -58,14 +61,15 @@ export function snapshotMethods({ sf, sleep, log, keyFile, packages, env, baseli
      * { rebuild, why, ids } (ids: what the new one's description names). Not when SCRATCH_SNAPSHOT pins one (nothing
      * would use a new one) or is off; with olderThan, not when the newest Active one is younger; with ifChanged, not
      * when the newest Active one, or a newer one Salesforce is still making (a second push queued behind the first),
-     * already holds main's baseline, seed and shape inputs. Asked plainly (by hand): always.
+     * already holds main's baseline, seed, test data tracking and shape inputs. Asked plainly (by hand): always.
      */
     snapshotPlan({ ifChanged = false, onPush = false, olderThan = null, now = Date.now() } = {}) {
       const pin = String(env.SCRATCH_SNAPSHOT || "").trim();
       if (pin) return { rebuild: false, why: pin.toLowerCase() === "off" ? "snapshots are off (SCRATCH_SNAPSHOT=off): not built" : `::notice::SCRATCH_SNAPSHOT pins ${pin}: new orgs use it, so a pipeline snapshot would go unused; not built (unset it to build one)`, ids: {} };
       const list = ours(snapshotList()).filter((s) => !snapshotRefused(s.SnapshotName));
       const current = list.find((s) => s.Status === "Active");
-      const ids = { baseline: baseline(), seed: seedId(), shape: shapeId() };
+      const seed = seedId();
+      const ids = { baseline: baseline(), seed, data: seed ? String(TEST_DATA_VERSION) : null, shape: shapeId() };
       if (olderThan !== null && current && (now - at(current)) / 3600e3 < Number(olderThan)) return { rebuild: false, why: `${current.SnapshotName} is ${((now - at(current)) / 3600e3).toFixed(1)} h old: not rebuilt`, ids };
       if (!ifChanged) return { rebuild: true, why: "asked", ids };
       const lacks = (s) => Object.keys(IDS).find((k) => snapshotHolds(s.Description)[k] !== ids[k]);
@@ -78,7 +82,7 @@ export function snapshotMethods({ sf, sleep, log, keyFile, packages, env, baseli
       if (onPush && shapeHeld && shapeHeld !== ids.shape) return { rebuild: false, why: `main's shape inputs changed: the release rebuilds it after its shape job (${current.SnapshotName} holds ${shapeHeld}, main has ${ids.shape || "none"})`, ids };
       const k = lacks(current);
       return k ? { rebuild: true, why: `${current.SnapshotName} holds ${IDS[k]} ${snapshotHolds(current.Description)[k] || "(none named)"}, main has ${ids[k] || "none"}`, ids }
-        : { rebuild: false, why: `${current.SnapshotName} already holds main's baseline, seed and shape inputs: not rebuilt`, ids };
+        : { rebuild: false, why: `${current.SnapshotName} already holds main's baseline, seed, test data tracking and shape inputs: not rebuilt`, ids };
     },
     /** The newest Active pipeline snapshot's age in hours, or null (for "rebuild at most once a day"). */
     snapshotAgeHours(now = Date.now()) {

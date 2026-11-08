@@ -312,11 +312,11 @@ test("RunRelevantTests without coverage for new code: our test classes that name
   assert.deepEqual(tests.recheckTests({ ours: ["SiteVisitTest"], code: ["SiteVisitTrigger"], coverage: {}, read }), [], "a name is matched whole, not as a prefix");
 });
 
-test("test data: a changed seed replaces the old one in a long-lived org; staging gets volume; critical tests always run; a Persona story's spec logs in as it", async () => {
-  const { seedReplaceApex, volumeApex, VOLUME_MARKER } = await import("../src/org.mjs");
-  const files = { "Account.json": JSON.stringify({ records: [{ Name: "Seed Account 01 Pty Ltd" }, { Name: "O'Brien & Co" }, { Name: "${SEED_MARKER}" }] }), "Lead.json": JSON.stringify({ records: [{ Email: "a@x.example" }] }) };
-  const apex = seedReplaceApex(files, ["[seed abc]"]);
-  assert.match(apex, /'Seed Account 01 Pty Ltd', 'O\\'Brien & Co', '\[seed abc\]'/, "names quoted for Apex; the old marker goes too; the token never");
+test("test data: a seed loaded the earlier way is removed from a long-lived org once; staging gets volume; critical tests always run; a Persona story's spec logs in as it", async () => {
+  const { legacySeedApex, volumeApex, VOLUME_MARKER } = await import("../src/org.mjs");
+  // the keys come from the seed's records (load.mjs loadTreeSeed: Account names, Lead emails) and the markers found
+  const apex = legacySeedApex({ accountNames: ["Seed Account 01 Pty Ltd", "O'Brien & Co", "[seed abc]"], leadEmails: ["a@x.example"] });
+  assert.match(apex, /'Seed Account 01 Pty Ltd', 'O\\'Brien & Co', '\[seed abc\]'/, "names quoted for Apex; the old marker goes too");
   assert.match(apex, /delete \[SELECT Id FROM Case WHERE AccountId IN :a\];[\s\S]*delete a;/, "children before their accounts");
   assert.match(apex, /Email IN :emails AND IsConverted = false/);
   const v = volumeApex(2500);

@@ -1,0 +1,1 @@
+{"status":1,"name":"FailedRecordDetailsError","message":"Job finished being processed but failed to process 3 records.","exitCode":1,"context":"DataImportBulk","data":{"jobId":"750000000000001AAA","state":"JobComplete"},"warnings":[],"code":"FailedRecordDetailsError","commandName":"DataImportBulk"}

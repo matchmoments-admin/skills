@@ -1,47 +1,21 @@
-// Test data in an org: the synthetic seed (data/seed), a story's Data request (generated from the org's own schema and
-// production's Data profile, read on demand, tracked by a Data ledger), and the staging volume records. Part of Org provisioning
-// (pipeline/src/org.mjs): orgRegistry composes these methods with the provisioning core. Wiring only: loading a request
-// is the use case in pipeline/src/data/load.mjs, over the Org data store's sf adapter (./data-store.mjs).
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+// Test data in an org: the core seed (data/seed) and stories' tree seeds (plan.json), a story's Data request (generated
+// from the org's own schema and production's Data profile, read on demand), each tracked by its own Data ledger, and the
+// staging volume records. Part of Org provisioning (pipeline/src/org.mjs): orgRegistry composes these methods with the
+// provisioning core. Wiring only: loading is the use case in pipeline/src/data/load.mjs, over the Org data store's sf
+// adapter (./data-store.mjs).
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { baselineId as idOf } from "../baseline.mjs";
 import { PIPELINE_ROOT } from "../io.mjs";
 import { parseRequest, requestId, DataRequestError } from "../data/request.mjs";
-import { loadTestData, applyDataRequest, readTypedRequest, guardAgainstProduction } from "../data/load.mjs";
+import { loadTestData, loadTreeSeed, applyDataRequest, refreshTestData, readTypedRequest, guardAgainstProduction } from "../data/load.mjs";
+import { CORE_SEED_SCOPE, storySeedScope, LEGACY_CORE_MARKERS, legacyStoryMarkers, foldedStories } from "../data/tree-seed.mjs";
 import { sfDataStore, sfProfileSource } from "./data-store.mjs";
-import { resolveTokens } from "../data/generate.mjs";
 import { soqlString } from "../data/soql.mjs";
 
-/**
- * The seed's files with their tokens filled in (data/seed/README.md): the date tokens a Data request takes too
- * (${TODAY}, ${TODAY-30}, ${THIS_YEAR}..., one rule: generate.mjs resolveTokens) and ${SEED_MARKER}. Pure: { name: text } -> { name: text }.
- */
-export function expandSeed(files, { today = new Date(), marker }) {
-  return Object.fromEntries(Object.entries(files).map(([n, t]) => [n, resolveTokens(String(t), today).replace(/\$\{SEED_MARKER\}/g, marker)]));
-}
-
-/**
- * Anonymous Apex that removes an earlier version of the seed from a long-lived org (staging, UAT: 30 days) before the
- * new one loads, by the seed's own keys: its accounts by name (their contacts, opportunities and cases with them),
- * its leads by email, and the old markers. Without it a changed seed was inserted beside the old one, two of every
- * account. Records people or specs made on other accounts stay. Pure: seed files, stale marker names -> Apex.
- */
-export function seedReplaceApex(files, staleMarkers) {
-  const recs = (n) => { try { return JSON.parse(files[n] || "{}").records || []; } catch { return []; } };
-  const q = (xs) => xs.map(soqlString).join(", ");
-  const names = [...new Set([...recs("Account.json").map((r) => r.Name).filter((n) => n && !n.includes("${")), ...staleMarkers])];
-  const emails = [...new Set(recs("Lead.json").map((r) => r.Email).filter(Boolean))];
-  return [
-    `Set<String> names = new Set<String>{ ${q(names)} };`,
-    "List<Account> a = [SELECT Id FROM Account WHERE Name IN :names];",
-    "delete [SELECT Id FROM Case WHERE AccountId IN :a];",
-    "delete [SELECT Id FROM Opportunity WHERE AccountId IN :a];",
-    "delete [SELECT Id FROM Contact WHERE AccountId IN :a];",
-    "delete a;",
-    ...(emails.length ? [`Set<String> emails = new Set<String>{ ${q(emails)} };`, "delete [SELECT Id FROM Lead WHERE Email IN :emails AND IsConverted = false];"] : []),
-  ].join("\n");
-}
+export { expandSeed } from "../data/tree-seed.mjs";
+export { legacySeedApex } from "./data-store.mjs";
 
 /**
  * Volume for the staging regression (setting VOLUME_RECORDS, default 5000; 0 turns it off): that many accounts, each
@@ -71,7 +45,7 @@ export function volumeApex(n, chunk = 1000) {
  * Fold shipped stories' seeds into the core seed (seed-fold.yml opens it as a PR). core: { plan, files: { name: text } };
  * stories: [{ key, plan, files }]. Each story file is renamed story-<key>-<file>, its plan entries appended to the core
  * plan, and the reference ids it defines prefixed S<key> once (references to the core's own records stay as they are), so
- * two stories can never collide. A story's own marker file is dropped: the core marker covers it. Pure.
+ * two stories can never collide. A SeedMarker.json the earlier mechanism added to a story is dropped. Pure.
  */
 export function foldSeeds(core, stories) {
   const plan = [...core.plan], files = { ...core.files };
@@ -108,59 +82,47 @@ export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active
   const productionProfile = () => (String(env.DATA_PROFILE || "on").toLowerCase() === "off" ? null : (profileSource ||= makeProfileSource ? makeProfileSource() : sfProfileSource({ sf, apiVersion: apiVersion() })));
   const loadDefaults = () => ({ profileSource: productionProfile(), rules: readJson(join(dataRoot, "config/data-rules.json")) || {} });
 
-  /** The legacy seeds (data/seed by marker, then stories' plan.json) and the stories' Data requests, for this org kind. */
+  /** The tree seeds (the core seed, then stories' plan.json) and the stories' Data requests, for this org kind. */
   function seedSources({ story, stories }) {
     if (!testDataOn()) return { seeds: [], requests: [] };
     const id = seedId();
     const root = join(process.cwd(), STORIES_DIR);
     const has = (key, file) => existsSync(join(root, key, file));
     const keys = stories === "all" ? (existsSync(root) ? readdirSync(root).filter((k) => has(k, "plan.json") || has(k, "request.json")).sort() : []) : story ? [String(story)] : [];
-    const seeds = id ? [{ dir: seedDir, marker: `[seed ${id}]`, stale: `Name LIKE ${soqlString("[seed %")} AND (NOT Name LIKE ${soqlString("[seed story%")})` }] : [];
-    for (const k of keys.filter((key) => has(key, "plan.json"))) seeds.push({ dir: join(root, k), marker: `[seed story ${k} ${idOf(join(root, k))}]`, stale: `Name LIKE ${soqlString(`[seed story ${k} %`)}` });
+    const seeds = id ? [{ key: null, scope: CORE_SEED_SCOPE, id, dir: seedDir, legacy: LEGACY_CORE_MARKERS }] : [];
+    for (const k of keys.filter((key) => has(key, "plan.json"))) seeds.push({ key: k, scope: storySeedScope(k), id: idOf(join(root, k)), dir: join(root, k), legacy: legacyStoryMarkers(k) });
     const requests = keys.filter((key) => has(key, "request.json")).map((k) => ({ key: k, scope: `story ${k}`, file: join(root, k, "request.json") }));
     return { seeds, requests };
   }
 
-  /** One legacy seed (a tree plan with a marker Account), loaded once; an earlier version of it is removed by name first. */
-  function loadSeed(alias, { dir, marker, stale: staleWhere }) {
-    const have = sf(["data", "query", "-o", alias, "-q", `SELECT Id FROM Account WHERE Name = ${soqlString(marker)}`], { allowFail: true })?.records?.length;
-    if (have) { log(`${alias} already has ${marker}`); return false; }
+  /**
+   * One tree seed (data/load.mjs loadTreeSeed): loaded once, by its Data ledger; a changed one replaces the earlier
+   * records by id; one loaded the earlier way (marker Accounts) is removed once first. The core seed supersedes the
+   * seeds of the stories folded into it. Returns "[data <scope> <seed id>]" when it loaded, else null.
+   */
+  function loadSeed(alias, { key, scope, id, dir, legacy }) {
     const files = Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => [f, readFileSync(join(dir, f), "utf8")]));
-    removeEarlierSeed(alias, files, staleWhere, marker);
-    withOwnMarker(files);
-    const out = mkdtempSync(join(tmpdir(), "seed-"));
-    for (const [n, t] of Object.entries(expandSeed(files, { marker }))) writeFileSync(join(out, n), t);
-    sf(["data", "import", "tree", "--plan", join(out, "plan.json"), "-o", alias]);
-    log(`loaded test data ${marker} into ${alias}`);
-    return true;
+    const supersedes = key ? [] : foldedStories(files).map(storySeedScope);
+    const result = loadTreeSeed(storeFor(alias), { scope, id, files, legacy, supersedes });
+    if (result.migrated) log(`${alias}: removed the copy of ${scope} no Data ledger tracked (${result.migrated.join(", ")}); the ledger tracks it from now on`);
+    for (const w of result.warnings) log(`::warning::${alias} test data (${scope}): ${w}`);
+    log(result.loaded ? `loaded ${scope} into ${alias}: ${result.summary}` : `${alias} already holds ${scope} (${result.summary})`);
+    if (result.loaded) record("seed", { action: "seed", org: alias, scope });
+    return result.loaded ? `[data ${scope} ${id}]` : null;
   }
 
-  function removeEarlierSeed(alias, files, staleWhere, marker) {
-    const stale = (sf(["data", "query", "-o", alias, "-q", `SELECT Name FROM Account WHERE ${staleWhere}`], { allowFail: true })?.records || []).map((r) => r.Name);
-    if (!stale.length) return;
-    const apex = join(mkdtempSync(join(tmpdir(), "seed-replace-")), "replace.apex");
-    writeFileSync(apex, seedReplaceApex(files, stale));
-    if (sf(["apex", "run", "--file", apex, "-o", alias], { allowFail: true })) log(`${alias}: removed the earlier seed (${stale.join(", ")}) before loading ${marker}`);
-    else log(`::warning::${alias}: could not remove the earlier seed (${stale.join(", ")}); loading ${marker} beside it`);
-  }
-
-  /** A story's plan without its own marker gets one, so it too loads once. */
-  function withOwnMarker(files) {
-    if (files["plan.json"].includes("SEED_MARKER") || Object.values(files).some((t) => t.includes("${SEED_MARKER}"))) return;
-    files["SeedMarker.json"] = JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "SeedMarker" }, Name: "${SEED_MARKER}" }] });
-    files["plan.json"] = JSON.stringify([...JSON.parse(files["plan.json"]), { sobject: "Account", files: ["SeedMarker.json"] }]);
+  /** One story's request: "[data story <key> <request id>]" when it loaded, else null. */
+  function loadStoryRequest(alias, { scope, file }) {
+    const request = parseRequest(readFileSync(file, "utf8"));
+    return self.loadTestData(alias, { request, scope }).loaded ? `[data ${scope} ${requestId(request)}]` : null;
   }
 
   /**
-   * One story's request. In the story's own org a request that does not fit fails the build, loudly, where its author
+   * A story's own test data. In the story's own org data that does not fit fails the build, loudly, where its author
    * looks; in staging and UAT (every story's) it is a warning naming the story, and the other stories still load.
    */
-  function loadStoryRequest(alias, { key, scope, file }, { isolate }) {
-    try {
-      const request = parseRequest(readFileSync(file, "utf8"));
-      const result = self.loadTestData(alias, { request, scope });
-      return result.loaded ? `[data ${scope} ${requestId(request)}]` : null;
-    } catch (e) {
+  function storyData(alias, key, load, { isolate }) {
+    try { return load(); } catch (e) {
       if (!isolate || !(e instanceof DataRequestError)) throw e;
       log(`::warning::${alias}: story ${key}'s test data was not loaded:\n${e.problems.map((p) => `  - ${p}`).join("\n")}`);
       return null;
@@ -169,22 +131,20 @@ export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active
 
   const self = {
     /**
-     * Load the test data once per org: the core seed (data/seed, from main) unless its marker Account is already there
-     * (a snapshot holds it), then stories' own data (data/seed/stories/<key>/ in the working directory), each once: a
-     * story org gets its story's (story), staging and UAT every story's in the release (stories: "all"). A story's data
-     * is a tree plan (plan.json, by marker) or a Data request (request.json, by ledger), or both. SEED=off: none.
-     * Returns what was loaded: markers, and "[data <scope> <request id>]" for requests.
+     * Load the test data once per org, each set tracked by its own Data ledger: the core seed (data/seed, from main;
+     * scope "core seed"; a snapshot already holds it), then stories' own data (data/seed/stories/<key>/ in the working
+     * directory): a story org gets its story's (story), staging and UAT every story's in the release (stories: "all").
+     * A story's data is a tree plan (plan.json, scope "story <key> seed") or a Data request (request.json, scope
+     * "story <key>"), or both. SEED=off: none. Returns what was loaded: "[data <scope> <id>]" each.
      */
     seed(alias, { story = null, stories = null } = {}) {
       const { seeds, requests } = seedSources({ story, stories });
       if (!seeds.length && !requests.length) return [];
       guardAgainstProduction(storeFor(alias).identity(), alias);
-      const loaded = seeds.filter((s) => loadSeed(alias, s)).map((s) => s.marker);
-      for (const request of requests) {
-        const marker = loadStoryRequest(alias, request, { isolate: stories === "all" });
-        if (marker) loaded.push(marker);
-      }
-      return loaded;
+      const isolate = stories === "all";
+      const loaded = seeds.map((s) => (s.key ? storyData(alias, s.key, () => loadSeed(alias, s), { isolate }) : loadSeed(alias, s)));
+      for (const r of requests) loaded.push(storyData(alias, r.key, () => loadStoryRequest(alias, r), { isolate }));
+      return loaded.filter(Boolean);
     },
 
     /**
@@ -211,6 +171,14 @@ export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active
       const path = join(STORIES_DIR, String(story), "request.json");
       const storyFile = { path, read: () => (existsSync(path) ? readFileSync(path, "utf8") : null), write: (text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); } };
       return applyDataRequest(storeFor(alias), { typed, scope: `story ${story}`, storyFile, load: (args) => self.loadTestData(alias, args) });
+    },
+
+    /**
+     * Refresh (data/load.mjs refreshTestData): every Data request set the org holds (or `scope`), loaded again from the
+     * request its ledger keeps, shaped like production today. Returns one result per set.
+     */
+    refreshTestData(alias, { scope = null, ...overrides } = {}) {
+      return refreshTestData(storeFor(alias), { scope, load: (args) => self.loadTestData(alias, { ...args, ...overrides }) });
     },
 
     /** The org's Org data store, for the use cases that need nothing else (data/load.mjs: removeTestData, testDataStatus). */

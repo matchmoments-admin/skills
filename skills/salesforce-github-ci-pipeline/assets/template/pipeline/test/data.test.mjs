@@ -10,8 +10,8 @@ import { schemaOf, requiredParents, validForOf } from "../src/data/schema.mjs";
 import { objectsNeeded, loadPlan } from "../src/data/load-plan.mjs";
 import { generateRecords, resolveTokens } from "../src/data/generate.mjs";
 import { profileQueries, profileFrom, profileFor, isAggregate, SUPPRESSED } from "../src/data/profile.mjs";
-import { begin, record, finish, deletions, decide } from "../src/data/ledger.mjs";
-import { loadTestData, removeTestData, testDataStatus, applyDataRequest } from "../src/data/load.mjs";
+import { begin, record, finish, deletions, decide, scopeOfTitle, ledgerTitle } from "../src/data/ledger.mjs";
+import { loadTestData, loadTreeSeed, removeTestData, testDataStatus, applyDataRequest, refreshTestData } from "../src/data/load.mjs";
 import { sfDataStore, sfProfileSource } from "../src/org/data-store.mjs";
 import { sfFrom } from "../src/io.mjs";
 import { scopeOf, dataCommands } from "../bin/commands/data.mjs";
@@ -197,7 +197,8 @@ test("generate: values that start async automation are never picked, unless a sc
   assert.ok(generate([{ object: "Case", count: 100 }], { rules }).records.every((r) => r.fields.Origin !== "Email"));
   assert.ok(generate([{ object: "Case", count: 2, set: { Origin: "Email" } }], { rules }).records.every((r) => r.fields.Origin === "Email"));
   assert.throws(() => generate([{ object: "Case", count: 1 }], { rules: { never: { "Case.Origin": ["Email", "Phone", "Web"] } } }), /Case.Origin is required.*set it in the request/);
-  assert.throws(() => generate([{ object: "Account", count: MAX_COUNT }, { object: "Contact", count: 1 }]), /up to 2000/);
+  assert.throws(() => generate([{ object: "Account", count: MAX_COUNT }, { object: "Contact", perParent: { Account: 5 } }]), /the request makes 12000 records; one load takes up to 10000/);
+  assert.equal(generate([{ object: "Account", count: MAX_COUNT }, { object: "Contact", perParent: { Account: 4 } }]).records.length, 10000, "per parent may multiply past 2,000, up to 10,000 in all");
 });
 
 // ---- the data profile
@@ -290,6 +291,35 @@ test("load: a run that dies after a batch leaves a ledger the next run cleans up
   assert.equal(store.ledger("story 9").complete, true);
 });
 
+test("load: the ledger is saved when an object's records are in, every 2,000 records and at the end, not after every batch", () => {
+  const store = memoryDataStore({ describes: DESCRIBES });
+  loadTestData(store, { request: requestOf([{ object: "Account", count: 600 }, { object: "Contact", count: 2 }]), scope: "story 9", today: TODAY });
+  assert.equal(store.saves(), 3, "Account (3 batches), Contact, complete: 3 saves (was 5, one a batch)");
+  const big = memoryDataStore({ describes: DESCRIBES });
+  loadTestData(big, { request: requestOf([{ object: "Contact", count: 2000 }, { object: "Contact", count: 400, scenario: "more" }]), scope: "story 9", today: TODAY });
+  assert.equal(big.saves(), 3, "12 batches of one object: at 2,000, at its end, complete");
+  assert.equal(big.ledger("story 9").records.Contact.length, 2400);
+});
+
+test("load: a refusal after the org changed says so: the earlier set removed, part of the new one loaded and tracked (never 'nothing changed')", () => {
+  const store = memoryDataStore({ describes: DESCRIBES, failInsert: 3, refuseInsert: true });
+  const file = fileAt("data/seed/stories/9/request.json");
+  assert.equal(applyDataRequest(store, { typed: "Account 3", scope: "story 9", storyFile: file, today: TODAY }).outcome, "loaded");
+  const outcome = applyDataRequest(store, { typed: "Account 400; Contact 2 per Account", scope: "story 9", storyFile: file, today: TODAY });
+  assert.equal(outcome.outcome, "refused");
+  assert.equal(outcome.partial, true);
+  assert.deepEqual(outcome.problems, ["memory-org refused the 200 Account records: FIELD_CUSTOM_VALIDATION_EXCEPTION on purpose", "the earlier test data was removed and 200 new records were loaded before the org refused these, so it holds part of the set (its Data ledger tracks it, and the next load replaces it)"]);
+  assert.deepEqual([store.ledger("story 9").records.Account.length, store.ledger("story 9").complete, file.writes], [200, false, 1], "what landed is tracked; the file keeps the request that loaded");
+  const first = memoryDataStore({ describes: DESCRIBES, failInsert: 1, refuseInsert: true });
+  assert.equal(applyDataRequest(first, { typed: "Account 3", scope: "story 9", storyFile: fileAt("x"), today: TODAY }).partial, false, "refused before anything changed: nothing changed");
+});
+
+test("load plan: the record total is counted before anything is generated (per parent multiplies)", () => {
+  const plan = loadPlan(SCHEMA, requestOf([{ object: "Account", count: 2000 }, { object: "Contact", perParent: { Account: 50 } }]));
+  assert.deepEqual(plan.problems, ["the request makes 102000 records; one load takes up to 10000. Ask for fewer, or fewer per parent"]);
+  assert.deepEqual(loadPlan(SCHEMA, requestOf([{ object: "Account", count: 100 }, { object: "Contact", perParent: { Account: 50 } }])).problems, [], "5,100: fine");
+});
+
 test("load: a ledger save that fails once is retried; failing twice names the records it could not track", () => {
   assert.equal(load(memoryDataStore({ describes: DESCRIBES, failSaves: 1 })).loaded, true);
   assert.throws(() => load(memoryDataStore({ describes: DESCRIBES, failSaves: 2 })), /could not save \[data ledger story 9\] in memory-org: save 2 failed on purpose\. The 3 Account records just loaded \(ACC0001, ACC0002, ACC0003\) are not in it/);
@@ -363,21 +393,73 @@ test("profile on demand: read only when a request loads, only its objects; never
   assert.ok(partial.warnings.some((w) => /partial for Account/.test(w)), "one failed query: that object is partial, the load goes on");
 });
 
+// ---- refresh: what an org holds, loaded again so it follows production's shape today
+
+/** Production whose Account Industry mix is `leader` 90%: change it between loads to stand for production changing. */
+function changingProduction() {
+  const state = { leader: "Finance" };
+  const other = () => (state.leader === "Finance" ? "Retail" : "Finance");
+  const answer = (q) => (q.kind === "count" ? [{ n: 900 }] : q.kind === "fill" ? [Object.fromEntries(q.fields.map((f, i) => [`f${i}`, f === "Industry" ? 900 : 0]))] : q.field === "Industry" ? [{ v: state.leader, n: 810 }, { v: other(), n: 90 }] : []);
+  return { state, source: memoryProfileSource({ describes: DESCRIBES, answer }) };
+}
+
+test("refresh: the same request loads again from today's profile, replacing its records by id; without refresh it is skipped", () => {
+  const production = changingProduction();
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const request = requestOf([{ object: "Account", count: 200 }]);
+  loadTestData(store, { request, scope: "story 9", profileSource: production.source, today: TODAY });
+  const before = store.ledger("story 9").records.Account;
+  assert.deepEqual(parseRequest(store.ledger("story 9").request), request, "the ledger keeps the request, so a refresh needs nobody to type it again");
+  production.state.leader = "Retail";   // production changed
+  assert.equal(loadTestData(store, { request, scope: "story 9", profileSource: production.source, today: TODAY }).loaded, false, "no refresh: the org keeps last week's shape");
+  const refreshed = loadTestData(store, { request, scope: "story 9", refresh: true, profileSource: production.source, today: TODAY });
+  assert.equal(refreshed.loaded, true);
+  assert.ok(store.count("Account", (r) => r.Industry === "Retail") > 150, "the records follow production's new mix");
+  assert.equal(store.count("Account"), 200, "replaced, not added to");
+  assert.ok(before.every((id) => !store.holds(id)), "the earlier records went, by id");
+  assert.equal(store.ledger("story 9").requestId, requestId(request), "the same request: the same id");
+});
+
+test("refreshTestData: every request set the org holds, from its ledger; tree seeds and old ledgers skipped; one that no longer fits stays and is reported", () => {
+  const production = changingProduction();
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const load = (request, scope) => loadTestData(store, { request, scope, profileSource: production.source, today: TODAY });
+  load(requestOf([{ object: "Account", count: 50 }]), "story 9");
+  load(requestOf([{ object: "Account", count: 2 }, { object: "Contact", perParent: { Account: 2 } }]), "by hand");
+  store.saveLedger("core seed", finish(record(begin({ scope: "core seed", requestId: "seed0000v1", loadedAt: "t" }), "Account", ["001SEED"])));
+  store.saveLedger("story 5", finish(record(begin({ scope: "story 5", requestId: "old", loadedAt: "t" }), "Account", ["001OLD"])));
+  store.saveLedger("story 6", finish(record(begin({ scope: "story 6", requestId: "gone", loadedAt: "t", request: { version: 1, objects: [{ object: "Gone__c", count: 2 }] } }), "Account", ["001KEEP"])));
+  production.state.leader = "Retail";
+  const results = refreshTestData(store, { load: (args) => loadTestData(store, { ...args, profileSource: production.source, today: TODAY }) });
+  const by = Object.fromEntries(results.map((r) => [r.scope, r]));
+  assert.deepEqual(Object.fromEntries(results.map((r) => [r.scope, r.outcome])), { "story 9": "refreshed", "by hand": "refreshed", "core seed": "skipped", "story 5": "skipped", "story 6": "refused" });
+  assert.match(by["by hand"].summary, /^6 records \(Account 2, Contact 4\)/);
+  assert.match(by["story 5"].summary, /keeps no Data request/);
+  assert.deepEqual(by["story 6"].problems, ['"Gone__c" is not an object in memory-org'], "the request no longer fits the org: said, and the others still refresh");
+  assert.equal(store.ledger("story 6").records.Account[0], "001KEEP", "its records stay as they were");
+  assert.ok(store.count("Account", (r) => r.Industry === "Retail") > 40, "story 9 follows production today");
+  assert.deepEqual(refreshTestData(store, { scope: "story 9", load: (args) => loadTestData(store, { ...args, today: TODAY }) }).map((r) => r.scope), ["story 9"], "--scope: that set only");
+  assert.throws(() => refreshTestData(memoryDataStore({ describes: DESCRIBES, identity: { isDevHub: true } })), /production/, "never production");
+  assert.equal(scopeOfTitle(ledgerTitle("story 12")), "story 12");
+  assert.equal(scopeOfTitle("Quarterly report"), null);
+});
+
 // ---- the sf adapter, on recorded sf CLI output (fixtures/sf)
 
 const recorded = (name) => readFileSync(new URL(`./fixtures/sf/${name}.json`, import.meta.url), "utf8");
 /** sf as the pipeline runs it (sfFrom: the real --json unwrapping), over a runner that replays recorded stdout. */
 function recordedSf(replies) {
-  const calls = [];
-  const run = (cmd, args) => {
+  const calls = [], bodies = [];   // bodies: read while the call runs (the adapter removes its files afterwards)
+  const run = (cmd, args, opts = {}) => {
     calls.push(args);
     const body = args.includes("-b") ? readFileSync(args[args.indexOf("-b") + 1].replace(/^@/, ""), "utf8") : null;
+    bodies.push(body);
     // a REST call's url and method: from its request definition (-f), or from its arguments (-b)
     const rest = args[0] !== "api" ? null : args.includes("-f") ? JSON.parse(readFileSync(args[args.indexOf("-f") + 1], "utf8")) : { url: args.find((a) => a.startsWith("/services/")), method: args[args.indexOf("-X") + 1] };
-    const reply = replies(args, body, rest);
+    const reply = replies(args, body, rest, opts);
     return typeof reply === "string" ? reply : JSON.stringify({ status: 0, result: reply });
   };
-  return { calls, sf: sfFrom(run) };
+  return { calls, bodies, sf: sfFrom(run) };
 }
 
 test("sf adapter: REST bodies go as @file, replies are unwrapped from { statusCode, body }, and an error status throws", () => {
@@ -441,7 +523,7 @@ test("sf profile source: aggregates and describes batched 25 per composite batch
     return null;
   });
   const production = sfProfileSource({ sf, alias: "devhub" });
-  const queries = Array.from({ length: 30 }, (_, i) => ({ object: "Account", kind: "count", soql: `SELECT COUNT(Id) n FROM Account WHERE NumberOfEmployees > ${i}` }));
+  const queries = Array.from({ length: 30 }, (_, i) => ({ object: "Account", kind: "count", soql: `SELECT COUNT(Id) n FROM Object${i}__c` }));
   const results = production.aggregate([...queries, { object: "Account", kind: "values", field: "Industry", soql: "SELECT Industry v, COUNT(Id) n FROM Account GROUP BY Industry" }]);
   assert.deepEqual(sent.map((r) => r.batchRequests.length), [25, 6], "25 subrequests per call (plain /composite would halt after 5 queries)");
   assert.equal(sent[0].haltOnError, false);
@@ -452,6 +534,8 @@ test("sf profile source: aggregates and describes batched 25 per composite batch
   production.aggregate(queries.slice(0, 3));
   assert.equal(sent.length, 2, "already read this run: no new call");
   assert.throws(() => production.aggregate([{ soql: "SELECT Name, Email FROM Contact" }]), /refusing to read production \(devhub\) with a query that is not an aggregate/);
+  assert.throws(() => production.aggregate([{ soql: "SELECT Name, COUNT(Id) n FROM Contact GROUP BY Name" }]), /not an aggregate/, "a count beside a text column is not one of the profile's shapes");
+  assert.throws(() => production.aggregate([{ soql: "SELECT Name v, COUNT(Id) n FROM Account GROUP BY Name" }]), /grouped by Account\.Name: only picklists and checkboxes are grouped/, "the shape of a group, but by a text field: refused by production's describe");
   assert.equal(sent.length, 2, "refused before anything was sent");
   const before = calls.length;
   assert.deepEqual(Object.keys(production.describe(["Account", "Contact", "Nope__c"])), ["Account", "Contact", "Nope__c"]);
@@ -532,6 +616,26 @@ test("pipe data seed --data: a typed request is read against the org's objects (
   assert.equal(store.count("Account"), 0);
 });
 
+test("pipe data refresh: every set in the org, one line each; a set that no longer fits fails the command after the others refresh", async () => {
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const orgs = await memoryOrgs(store);
+  const run = (flags) => {
+    const said = [], out = {};
+    const commands = dataCommands({ flag: (n) => flags[n] ?? null, has: (n) => flags[n] === true, output: (o) => Object.assign(out, o), say: (t) => said.push(t), orgs });
+    try { commands["data refresh"](); return { said: said.join("\n"), out }; } catch (e) { return { said: said.join("\n"), out, error: e.message }; }
+  };
+  assert.equal(run({ org: "dev-sandbox" }).said, "dev-sandbox holds no test data sets");
+  dataCommands({ flag: (n) => ({ org: "dev-sandbox", data: "Account 2" })[n] ?? null, output: () => {}, say: () => {}, orgs })["data seed"]();
+  const ok = run({ org: "dev-sandbox" });
+  assert.match(ok.said, /^refreshed by hand: 2 records \(Account 2\)/);
+  assert.deepEqual([ok.out, ok.error], [{ refreshed: 1, refused: 0 }, undefined]);
+  store.saveLedger("story 6", finish(begin({ scope: "story 6", requestId: "gone", loadedAt: "t", request: { version: 1, objects: [{ object: "Gone__c", count: 2 }] } })));
+  const bad = run({ org: "dev-sandbox" });
+  assert.match(bad.said, /refreshed by hand.*\nnot refreshed story 6: story 6 no longer fits the org/s);
+  assert.match(bad.error, /^1 test data set\(s\) in dev-sandbox were not refreshed \(their records stay as they were\):\nstory 6:\n- "Gone__c" is not an object/);
+  assert.match(run({ org: "dev-sandbox", scope: "by hand" }).said, /^refreshed by hand/, "--scope: that set only");
+});
+
 // ---- /data on a story: one use case, one typed outcome (data/load.mjs applyDataRequest)
 
 /** A story's request file in memory (the storyFile port of applyDataRequest). */
@@ -541,7 +645,7 @@ test("data apply: a request that does not fit is refused with every problem, and
   const store = memoryDataStore({ describes: DESCRIBES });
   const file = fileAt("data/seed/stories/9/request.json");
   const typo = applyDataRequest(store, { typed: "Acount 5; Contact 2 per Account", scope: "story 9", storyFile: file, today: TODAY });
-  assert.deepEqual(typo, { outcome: "refused", problems: ['"Acount" is not an object in this org (did you mean Account?)'] }, "the reply adds its own example");
+  assert.deepEqual(typo, { outcome: "refused", partial: false, problems: ['"Acount" is not an object in this org (did you mean Account?)'] }, "the reply adds its own example");
   const unfillable = applyDataRequest(store, { typed: "Mandatory__c 2", scope: "story 9", storyFile: file, today: TODAY });
   assert.equal(unfillable.outcome, "refused", "parses, but does not fit the org (a lookup test data cannot fill): refused at load, before any write");
   assert.ok(unfillable.problems.length >= 1);
@@ -553,7 +657,7 @@ test("data apply: a request that loads is written in its file format; the same l
   const store = memoryDataStore({ describes: DESCRIBES });
   const file = fileAt("data/seed/stories/9/request.json");
   const first = applyDataRequest(store, { typed: "account 3; case 2 Subject=Broken", scope: "story 9", storyFile: file, today: TODAY });
-  assert.deepEqual({ ...first, records: undefined, warnings: undefined }, { outcome: "loaded", summary: "3 Account; 2 Case (Subject=Broken)", records: undefined, fresh: true, profiled: null, warnings: undefined, changed: true, file: "data/seed/stories/9/request.json" });
+  assert.deepEqual({ ...first, records: undefined, warnings: undefined }, { outcome: "loaded", summary: "3 Account; 2 Case (Subject=Broken)", records: undefined, fresh: true, refreshed: false, profiled: null, warnings: undefined, changed: true, file: "data/seed/stories/9/request.json" });
   assert.match(first.records, /^5 records \(Account 3, Case 2\) from 3 Account; 2 Case/);
   const written = parseRequest(file.text);   // what org provisioning reads back (found live: the normalized form did not parse)
   assert.deepEqual(written.objects.map(describeEntry), ["3 Account", "2 Case (Subject=Broken)"]);
@@ -563,6 +667,20 @@ test("data apply: a request that loads is written in its file format; the same l
   assert.deepEqual([again.outcome, again.fresh, again.changed, file.writes], ["loaded", false, false, 1], "unchanged: no write, no commit");
   const committedElsewhere = fileAt("data/seed/stories/9/request.json", "{}\n");
   assert.equal(applyDataRequest(store, { typed: "Account 3; Case 2 Subject=Broken", scope: "story 9", storyFile: committedElsewhere }).changed, true, "the org held it, the file did not: written");
+});
+
+test("/data refresh: the story's committed request loads again, writing nothing; a story without one is refused", () => {
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const empty = fileAt("data/seed/stories/9/request.json");
+  const none = applyDataRequest(store, { typed: "refresh", scope: "story 9", storyFile: empty, today: TODAY });
+  assert.equal(none.outcome, "refused");
+  assert.match(none.problems[0], /^the story has no test data to refresh yet \(data\/seed\/stories\/9\/request.json\)/);
+  const file = fileAt("data/seed/stories/9/request.json");
+  applyDataRequest(store, { typed: "Account 3", scope: "story 9", storyFile: file, today: TODAY });
+  const first = store.ledger("story 9").records.Account;
+  const again = applyDataRequest(store, { typed: " Refresh ", scope: "story 9", storyFile: file, today: TODAY });
+  assert.deepEqual([again.outcome, again.fresh, again.refreshed, again.changed, file.writes], ["loaded", true, true, false, 1], "loaded again; the file is unchanged, so nothing to commit");
+  assert.ok(first.every((id) => !store.holds(id)) && store.count("Account") === 3, "the records were replaced");
 });
 
 test("data apply: an error that is not the request's (an sf or login failure, production) throws, so the run fails and nothing is written (bug B)", () => {
@@ -710,7 +828,9 @@ test("story-data branches on pipe data apply's JSON outcome: no stderr '- ' cont
   assert.match(run, /case "\$\(jq -r \.outcome "\$OUT"\)" in\s+refused\)[\s\S]*jq -r '\.problems\[\]/);
   assert.match(run, /\*\) echo "::error::pipe data apply gave no outcome:"[^\n]*exit 1/);
   assert.doesNotMatch(run, /grep[^\n]*'\^- '|sed -n 's\/\^\[\^:\]|data request|data seed|git checkout -q --|rm -f/, "the policy lives in data apply");
-  assert.match(run, /if \[ "\$\(jq -r \.changed "\$OUT"\)" = true \]; then\s+git add "\$\(jq -r \.file "\$OUT"\)"/, "committed only when the use case wrote a changed file");
+  assert.match(run, /CHANGED=\$\(jq -r \.changed "\$OUT"\)\s+if \[ "\$CHANGED" = true \]; then\s+git add "\$\(jq -r \.file "\$OUT"\)"/, "committed only when the use case wrote a changed file");
+  assert.match(run, /else echo "The story's request is unchanged, so nothing was committed/, "a reply never claims a commit that did not happen (/data refresh)");
+  assert.match(run, /jq -r \.partial "\$OUT"\)" = true \]; then WHAT="the org refused part of it/, "a refusal after the org changed never says nothing changed");
   assert.match(run, /echo "🧪 @\$WHO: \*\*Test data:\*\* \$SUMMARY"/, "plan.mjs storyTestData reads the first line");
   assert.match(run, /echo "<!-- pipeline:test-data -->"; \} > "\$RUNNER_TEMP\/said\.md"/, "the card reads the reply by its marker (DATA_MARK)");
 });
@@ -724,13 +844,13 @@ test("review findings: a combobox (free text) is never profiled, and its typed v
 // ---- the second architecture review (8 Nov): small duplications folded into one rule each
 
 test("one rule each: a tree seed takes a request's date tokens (${TODAY-30}), SOQL and Apex strings are quoted one way, lists are cut one way", async () => {
-  const { expandSeed, seedReplaceApex, volumeApex, VOLUME_MARKER } = await import("../src/org/data.mjs");
+  const { expandSeed, legacySeedApex, volumeApex, VOLUME_MARKER } = await import("../src/org/data.mjs");
   const { soqlString } = await import("../src/data/soql.mjs");
   const seed = expandSeed({ "Case.json": '{"Due__c":"${TODAY-30}","Next__c":"${TODAY+7}","On__c":"${TODAY}","Year":"${LAST_YEAR}","Name":"${SEED_MARKER}"}' }, { today: TODAY, marker: "[seed abc]" });
   assert.equal(seed["Case.json"], '{"Due__c":"2026-10-09","Next__c":"2026-11-15","On__c":"2026-11-08","Year":"2025","Name":"[seed abc]"}', "the same tokens as a Data request's set values");
   assert.equal(resolveTokens("${TODAY-30}", TODAY), "2026-10-09");
   assert.equal(soqlString("O'Brien \\ Co"), "'O\\'Brien \\\\ Co'");
-  assert.match(seedReplaceApex({ "Account.json": JSON.stringify({ records: [{ Name: "O'Brien" }] }) }, []), /\{ 'O\\'Brien' \}/);
+  assert.match(legacySeedApex({ accountNames: ["O'Brien"], leadEmails: [] }), /\{ 'O\\'Brien' \}/);
   assert.match(volumeApex(3).at(-1), new RegExp(`insert new Account\\(Name = '${VOLUME_MARKER(3).replace(/[[\]]/g, "\\$&")}'\\);`));
   const wide = schemaOf([{ name: "Wide__c", fields: Array.from({ length: 25 }, (_, i) => field(`F${i}__c`, "string")) }]);
   assert.deepEqual(profileQueries(wide, ["Wide__c"]).filter((q) => q.kind === "fill").map((q) => q.fields.length), [20, 5], "20 fields per aggregate query (ledger.mjs chunk)");
@@ -753,7 +873,7 @@ test("sf adapter: every ledger in the org is listed in one query on first use; e
     if (rest?.method === "DELETE") return { statusCode: 204, body: null };
     return {};
   };
-  const { sf, calls } = recordedSf(replies);
+  const { sf, calls, bodies } = recordedSf(replies);
   const store = sfDataStore({ sf, alias: "staging" });
   const listings = () => calls.filter((a) => a[1] === "query" && a.some((x) => /Title LIKE/.test(x)));
   const gets = () => ({ length: read });
@@ -765,7 +885,7 @@ test("sf adapter: every ledger in the org is listed in one query on first use; e
   store.readLedger("story 9");
   assert.deepEqual([listings().length, gets().length], [1, 1], "read once per store");
   store.saveLedger("story 9", finish(begin({ scope: "story 9", requestId: "new", loadedAt: "t" })));
-  assert.equal(JSON.parse(Buffer.from(JSON.parse(readFileSync(calls.filter((a) => a[0] === "api").at(-1).find((a) => a.startsWith("@")).slice(1), "utf8")).VersionData, "base64")).requestId, "new");
+  assert.equal(JSON.parse(Buffer.from(JSON.parse(bodies.filter(Boolean).at(-1)).VersionData, "base64")).requestId, "new");
   assert.equal(store.readLedger("story 9").ledger.requestId, "new", "a ledger saved during the run reads back as saved, without another GET");
   store.saveLedger("story 200", finish(begin({ scope: "story 200", requestId: "fresh", loadedAt: "t" })));
   assert.equal(store.readLedger("story 200").ledger.requestId, "fresh", "a new ledger too");
@@ -774,4 +894,274 @@ test("sf adapter: every ledger in the org is listed in one query on first use; e
   assert.deepEqual([listings().length, gets().length], [1, 1], "no second listing, no second read");
   const failing = recordedSf((args) => (args[1] === "query" ? JSON.stringify({ status: 1, name: "INVALID_SESSION_ID", message: "Session expired or invalid" }) : {}));
   assert.throws(() => sfDataStore({ sf: failing.sf, alias: "staging" }).readLedger("story 9"), /Session expired/, "a listing that fails is never 'no ledger' (that would load a second, untracked set)");
+});
+
+// ---- one test data mechanism: tree seeds through the Org data store, tracked by the Data ledger (no marker Account)
+
+const SEED_FILES = {
+  "plan.json": JSON.stringify([{ sobject: "Account", saveRefs: true, files: ["Account.json"] }, { sobject: "Contact", resolveRefs: true, files: ["Contact.json"] }, { sobject: "Lead", files: ["Lead.json"] }]),
+  "Account.json": JSON.stringify({ records: [
+    { attributes: { type: "Account", referenceId: "Acc01" }, Name: "Seed Account 01 Pty Ltd", Industry: "Retail" },
+    { attributes: { type: "Account", referenceId: "Acc02" }, Name: "Seed Account 02 Pty Ltd" },
+    { attributes: { type: "Account", referenceId: "SeedMarker" }, Name: "${SEED_MARKER}", Description: "the marker the earlier mechanism used" },
+  ] }),
+  "Contact.json": JSON.stringify({ records: [
+    { attributes: { type: "Contact", referenceId: "Con01" }, LastName: "One", AccountId: "@Acc01", Birthdate: "${TODAY-30}" },
+    { attributes: { type: "Contact", referenceId: "Con02" }, LastName: "Two", AccountId: "@Acc02" },
+  ] }),
+  "Lead.json": JSON.stringify({ records: [{ attributes: { type: "Lead", referenceId: "Lead01" }, LastName: "Lead", Company: "Seed Co", Email: "lead01@example.invalid" }] }),
+};
+const CORE = { scope: "core seed", id: "seed0000v1", files: SEED_FILES, legacy: { prefix: "[seed ", except: "[seed story " }, today: TODAY };
+
+test("tree seed: a plan read into records in plan order, @references as parents, date tokens filled, the marker Account left out; every problem at once", async () => {
+  const { treeSeedRecords, expandSeed, foldedStories } = await import("../src/data/tree-seed.mjs");
+  const records = treeSeedRecords(expandSeed(SEED_FILES, { today: TODAY }));
+  assert.deepEqual(records.map((r) => `${r.object}:${r.ref}`), ["Account:Acc01", "Account:Acc02", "Contact:Con01", "Contact:Con02", "Lead:Lead01"]);
+  assert.deepEqual(records[2], { ref: "Con01", object: "Contact", fields: { LastName: "One", Birthdate: "2026-10-09" }, parents: { AccountId: "Acc01" } });
+  const real = (await import("node:fs")).readdirSync(new URL("../../data/seed/", import.meta.url)).filter((f) => f.endsWith(".json"));
+  const files = Object.fromEntries(real.map((f) => [f, readFileSync(new URL(`../../data/seed/${f}`, import.meta.url), "utf8")]));
+  const seed = treeSeedRecords(expandSeed(files, { today: TODAY }));
+  assert.ok(seed.length > 150 && !seed.some((r) => JSON.stringify(r).includes("${")), "the real core seed reads whole: every token filled, no marker");
+  // which stories a seed has folded in, from its file names (not this repo's seed: a new repo's template has none)
+  assert.deepEqual(foldedStories({ "Account.json": "{}", "story-293-Account.json": "{}", "story-444-Visit__c.json": "{}", "story-444-Account.json": "{}" }), ["293", "444"], "the stories folded into it (their seed scopes are superseded)");
+  assert.throws(() => treeSeedRecords({ "plan.json": JSON.stringify([{ sobject: "Contact", files: ["C.json", "Gone.json"] }]), "C.json": JSON.stringify({ records: [{ attributes: { type: "Contact", referenceId: "C1" }, AccountId: "@Nope", Account: { records: [] } }, { attributes: { type: "Contact", referenceId: "C1" } }] }) }),
+    (e) => e instanceof DataRequestError && e.problems.length === 4 && /@Nope is not a record earlier/.test(e.problems.join()) && /nested records/.test(e.problems.join()) && /C1 is used twice/.test(e.problems.join()) && /Gone\.json, which is not there/.test(e.problems.join()));
+});
+
+test("tree seed: loaded once by its ledger (parents' ids filled in); a changed seed replaces exactly its records; pipe data remove takes it out", () => {
+  const store = memoryDataStore();
+  const hand = store.addByHand("Account", { Name: "Made by a person" });
+  const first = loadTreeSeed(store, CORE);
+  assert.deepEqual([first.loaded, first.summary, first.migrated], [true, "5 records (Account 2, Contact 2, Lead 1)", null]);
+  const ledger = store.ledger("core seed");
+  assert.equal(ledger.requestId, "seed0000v1");
+  assert.equal(store.count("Contact", (c) => c.AccountId === ledger.records.Account[0]), 1, "a contact's @Acc01 is that account's id");
+  assert.equal(store.count("Account", (a) => /SEED_MARKER|\[seed/.test(a.Name)), 0, "no marker Account");
+  assert.equal(loadTreeSeed(store, CORE).loaded, false, "the same seed again: nothing (a snapshot already holds it)");
+  const changed = loadTreeSeed(store, { ...CORE, id: "seed0000v2", files: { ...SEED_FILES, "Lead.json": JSON.stringify({ records: [] }) } });
+  assert.equal(changed.summary, "4 records (Account 2, Contact 2)");
+  assert.deepEqual([store.count("Account"), store.count("Lead"), store.holds(hand)], [3, 0, true], "the old copy went by id; the person's account stayed");
+  assert.deepEqual(removeTestData(store, "core seed"), { removed: true, summary: "removed the test data for core seed" });
+  assert.deepEqual([store.count("Account"), store.count("Contact"), store.holds(hand)], [1, 0, true]);
+});
+
+test("tree seed migration: an org with the earlier marker seed and no ledger has that copy removed once (accounts by name with their children, leads, markers), then loads by ledger", () => {
+  const store = memoryDataStore();
+  const old = store.addByHand("Account", { Name: "Seed Account 01 Pty Ltd" });
+  store.addByHand("Contact", { LastName: "One", AccountId: old });
+  store.addByHand("Lead", { LastName: "Lead", Email: "lead01@example.invalid" });
+  store.addByHand("Account", { Name: "[seed 0123456789]" });
+  const storyMarker = store.addByHand("Account", { Name: "[seed story 77 abcdef0123]" });
+  const person = store.addByHand("Account", { Name: "A real customer" });
+  store.addByHand("Contact", { LastName: "Kept", AccountId: person });
+  const r = loadTreeSeed(store, CORE);
+  assert.deepEqual(r.migrated, ["[seed 0123456789]"], "the core marker, not a story's");
+  assert.ok(store.calls.includes("removeLegacySeed 3 1"), "two seed account names and the marker; one lead email");
+  assert.deepEqual([store.count("Account"), store.count("Contact"), store.count("Lead")], [4, 3, 1], "2 new accounts + the story's marker + the person's; 2 new contacts + the person's; the new lead");
+  assert.ok(store.holds(storyMarker) && store.holds(person), "the story's seed migrates with its own scope; people's records stay");
+  assert.equal(store.ledger("core seed").requestId, "seed0000v1");
+  const before = store.calls.length;
+  loadTreeSeed(store, CORE);
+  assert.ok(!store.calls.slice(before).some((c) => c.startsWith("legacyMarkers")), "once: with a ledger, markers are never looked for again");
+  const story = loadTreeSeed(store, { scope: "story 77 seed", id: "s77", files: { "plan.json": JSON.stringify([{ sobject: "Account", files: ["A.json"] }]), "A.json": JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "S77" }, Name: "Story 77 Account" }] }) }, legacy: { prefix: "[seed story 77 " }, today: TODAY });
+  assert.deepEqual(story.migrated, ["[seed story 77 abcdef0123]"]);
+  assert.equal(store.holds(storyMarker), false);
+  const failing = memoryDataStore({ failLegacy: true });
+  failing.addByHand("Account", { Name: "[seed 0123456789]" });
+  const warned = loadTreeSeed(failing, CORE);
+  assert.equal(warned.loaded, true, "a migration that fails warns and loads beside it, as before");
+  assert.match(warned.warnings[0], /could not remove the copy of the seed no ledger tracks \(\[seed 0123456789\]\): apex run failed on purpose/);
+});
+
+test("tree seed: with no ledger and no marker, the seed's own accounts already in our scratch org (a snapshot without its ledger file) are an untracked copy, removed before the tracked load; in a sandbox they stay", () => {
+  const sandbox = memoryDataStore();
+  const theirs = sandbox.addByHand("Account", { Name: "Seed Account 01 Pty Ltd" });
+  const kept = loadTreeSeed(sandbox, CORE);
+  assert.deepEqual([kept.migrated, sandbox.holds(theirs)], [null, true], "a sandbox's account with a seed account's name may be a person's: never deleted by name");
+  assert.match(kept.warnings[0], /found 1 accounts named as in the seed and no Data ledger: left as they are/);
+  const store = memoryDataStore({ identity: { isSandbox: false, isOurScratchOrg: true } });
+  const copy = store.addByHand("Account", { Name: "Seed Account 01 Pty Ltd" });
+  store.addByHand("Contact", { LastName: "One", AccountId: copy });
+  const person = store.addByHand("Account", { Name: "A real customer" });
+  const r = loadTreeSeed(store, CORE);
+  assert.deepEqual(r.migrated, ["1 untracked accounts named as in the seed"]);
+  assert.match(r.warnings[0], /no Data ledger: removed them before loading \(a snapshot without its ledger file\?\)/);
+  assert.deepEqual([store.count("Account"), store.count("Contact"), store.holds(person)], [3, 2, true], "one copy of the seed, not two; the person's account stays");
+  const clean = memoryDataStore();
+  assert.equal(loadTreeSeed(clean, CORE).migrated, null, "a fresh org: nothing to remove");
+  assert.ok(!clean.calls.some((c) => c.startsWith("removeLegacySeed")));
+});
+
+test("tree seed: the core seed supersedes the seeds of stories folded into it (their ledgers' records go); a seed that cannot load is refused before anything changes", () => {
+  const store = memoryDataStore();
+  loadTreeSeed(store, { scope: "story 293 seed", id: "s293", files: { "plan.json": JSON.stringify([{ sobject: "Account", files: ["A.json"] }]), "A.json": JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "S293" }, Name: "Folded" }] }) }, today: TODAY });
+  const r = loadTreeSeed(store, { ...CORE, supersedes: ["story 293 seed", "story 999 seed"] });
+  assert.deepEqual(r.warnings, ["removed the test data for story 293 seed (folded into core seed)"]);
+  assert.deepEqual([store.ledger("story 293 seed"), store.count("Account", (a) => a.Name === "Folded")], [null, 0]);
+  const broken = memoryDataStore();
+  assert.throws(() => loadTreeSeed(broken, { ...CORE, files: { ...SEED_FILES, "Contact.json": "{" } }), DataRequestError);
+  assert.deepEqual([broken.calls.filter((c) => /insert|remove|legacy/.test(c)), broken.ledger("core seed")], [[], null]);
+  assert.throws(() => loadTreeSeed(memoryDataStore({ identity: { isDevHub: true } }), CORE), /it is production \(the Dev Hub\)/);
+});
+
+test("seed(): the core seed, a story's tree seed and its request, each by its own ledger; in staging a story seed that cannot load warns and the rest load", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { dataMethods } = await import("../src/org/data.mjs");
+  const work = mkdtempSync(join(tmpdir(), "seed-ledger-"));
+  const core = join(work, "core");
+  mkdirSync(core);
+  for (const [f, t] of Object.entries(SEED_FILES)) writeFileSync(join(core, f), t);
+  const put = (key, f, t) => { mkdirSync(join(work, "data/seed/stories", key), { recursive: true }); writeFileSync(join(work, "data/seed/stories", key, f), t); };
+  put("7", "plan.json", JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
+  put("7", "Account.json", JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "S7" }, Name: "Story 7 account" }] }));
+  put("7", "request.json", JSON.stringify({ version: 1, objects: [{ object: "Account", count: 1 }] }));
+  put("8", "plan.json", JSON.stringify([{ sobject: "Account", files: ["Account.json"] }]));
+  put("8", "Account.json", JSON.stringify({ records: [{ attributes: { type: "Account", referenceId: "S8" }, ParentId: "@Nowhere" }] }));
+  const store = memoryDataStore({ describes: DESCRIBES });
+  const logs = [];
+  const methods = dataMethods({ sf: () => null, log: (l) => logs.push(l), env: { DATA_PROFILE: "off" }, seedDir: core, record: () => {}, seedId: () => "core000001", dataRoot: work, makeStore: () => store });
+  const cwd = process.cwd();
+  process.chdir(work);
+  try {
+    const loaded = methods.seed("issue-7", { story: "7" }).map((m) => m.replace(/ [0-9a-f]{10,12}\]$/, "]"));
+    assert.deepEqual(loaded, ["[data core seed core000001]", "[data story 7 seed]", "[data story 7]"].map((m) => m.replace(/ [0-9a-f]{10,12}\]$/, "]")));
+    assert.ok(store.ledger("core seed") && store.ledger("story 7 seed") && store.ledger("story 7"), "three ledgers, one per set");
+    assert.deepEqual(methods.seed("issue-7", { story: "7" }), [], "everything already there: nothing loads again");
+    assert.throws(() => methods.seed("issue-8", { story: "8" }), /@Nowhere is not a record earlier in the plan/, "the story's own org fails loudly");
+    assert.deepEqual(methods.seed("staging", { stories: "all" }), [], "staging: story 8 warns; the rest is already there");
+    assert.ok(logs.some((l) => /::warning::staging: story 8's test data was not loaded:\n  - Account\.json S8\.ParentId: @Nowhere/.test(l)));
+  } finally { process.chdir(cwd); }
+});
+
+// ---- Bulk API for big loads: inside the sf adapter, insert stays all or nothing
+
+test("sf adapter migration: marker Accounts found by a quoted LIKE; the earlier copy removed by one anonymous Apex run; a run that fails throws its reason", () => {
+  let apex = null;
+  const { sf, calls } = recordedSf((args) => {
+    if (args[1] === "query") return recorded("query-markers");
+    if (args[0] === "apex") { apex = readFileSync(args[args.indexOf("--file") + 1], "utf8"); return recorded("apex-run"); }
+    return null;
+  });
+  const store = sfDataStore({ sf, alias: "staging" });
+  assert.deepEqual(store.legacyMarkers("[seed "), ["[seed b0263961de]", "[seed story 77 4f6d22a36c]"]);
+  assert.ok(calls[0].includes("SELECT Name FROM Account WHERE Name LIKE '[seed %'"));
+  assert.deepEqual(store.accountsNamed(["O'Brien", "[seed b0263961de]"]).length, 2);
+  assert.ok(calls[1].includes("SELECT Name FROM Account WHERE Name IN ('O\\'Brien', '[seed b0263961de]')"), "names quoted, one query");
+  store.removeLegacySeed({ accountNames: ["O'Brien Pty Ltd", "[seed b0263961de]"], leadEmails: ["a@example.invalid"] });
+  assert.match(apex, /new Set<String>\{ 'O\\'Brien Pty Ltd', '\[seed b0263961de\]' \}[\s\S]*delete \[SELECT Id FROM Case WHERE AccountId IN :a\];[\s\S]*delete a;[\s\S]*Email IN :emails AND IsConverted = false/);
+  const failing = recordedSf((args) => (args[0] === "apex" ? JSON.stringify(JSON.parse(recorded("apex-run-error"))) : null));
+  assert.throws(() => sfDataStore({ sf: failing.sf, alias: "staging" }).removeLegacySeed({ accountNames: ["x"] }), /Execution failed at this code:\n\nSystem\.ListException/);
+  const down = recordedSf(() => JSON.stringify({ status: 1, name: "INVALID_SESSION_ID", message: "Session expired or invalid" }));
+  assert.throws(() => sfDataStore({ sf: down.sf, alias: "staging" }).legacyMarkers("[seed "), /Session expired/, "a failed look is never 'no markers' (the old copy would stay beside the new)");
+});
+
+test("bulk: a run of more than 2,000 records nothing references goes as one insert; parents others reference stay in batches of 200", () => {
+  const store = memoryDataStore({ describes: DESCRIBES, bulk: { from: 2000, max: 10000 } });
+  const big = loadTestData(store, { request: requestOf([{ object: "Account", count: 500 }, { object: "Contact", perParent: { Account: 5 } }]), scope: "volume", today: TODAY });
+  assert.equal(big.summary.startsWith("3000 records (Account 500, Contact 2500)"), true);
+  assert.deepEqual(store.insertOptions.map((o) => `${o.object} ${o.count} ${o.refsNeeded ? "refs" : "no refs"}`), ["Account 200 refs", "Account 200 refs", "Account 100 refs", "Contact 2500 no refs"]);
+  assert.equal(store.ledger("volume").records.Contact.length, 2500, "every id in the ledger, though the bulk job named no references");
+  const small = memoryDataStore({ describes: DESCRIBES, bulk: { from: 2000, max: 10000 } });
+  loadTestData(small, { request: requestOf([{ object: "Account", count: 3 }, { object: "Contact", perParent: { Account: 2 } }]), scope: "small", today: TODAY });
+  assert.deepEqual(small.insertOptions.map((o) => `${o.object} ${o.count} ${o.refsNeeded ? "refs" : "no refs"}`), ["Account 3 refs", "Contact 6 no refs"], "small runs: one tree import each, as before");
+  const { batchSizeFor } = sfDataStore({ sf: () => null, alias: "x" });
+  assert.deepEqual([batchSizeFor(2000, { refsNeeded: false }), batchSizeFor(2001, { refsNeeded: false }), batchSizeFor(9000, { refsNeeded: true })], [200, 10000, 200], "the sf adapter's threshold: more than 2,000, and only when no reference needs them");
+});
+
+test("sf adapter describe: each object described once per store (staging loads every story's request over the same objects)", () => {
+  const { sf, bodies } = recordedSf((args, body) => {
+    const request = JSON.parse(body);
+    return JSON.stringify({ status: 0, result: { statusCode: 200, body: { results: request.batchRequests.map((r) => ({ statusCode: 200, result: DESCRIBES[r.url.match(/sobjects\/(\w+)\/describe$/)[1]] })) } } });
+  });
+  const store = sfDataStore({ sf, alias: "staging" });
+  assert.equal(store.describe(["Account", "Contact"]).Contact.name, "Contact");
+  assert.equal(store.describe(["Account", "Case"]).Case.name, "Case");
+  const described = bodies.map((b) => JSON.parse(b).batchRequests.map((r) => r.url.match(/sobjects\/(\w+)\//)[1]));
+  assert.deepEqual(described, [["Account", "Contact"], ["Case"]], "Account was not described again");
+});
+
+test("sf adapter remove: more than 2,000 ids of one object go as one Bulk API delete job (recorded replies); fewer by REST 200 each; scratch files are removed", async () => {
+  const { mkdirSync, writeFileSync, copyFileSync, existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const fixtures = new URL("./fixtures/sf/", import.meta.url).pathname;
+  const ids = Array.from({ length: 2500 }, (_, i) => `003${String(i).padStart(12, "0")}AAA`);
+  let csv = null, file = null, rows = null;
+  const deleteSf = (jobReply) => recordedSf((args, body, rest, opts) => {
+    if (args[1] === "delete" && args[2] === "bulk") { file = args[args.indexOf("--file") + 1]; csv = readFileSync(file, "utf8"); return recorded(jobReply); }
+    if (args[1] === "bulk" && args[2] === "results") {
+      mkdirSync(opts.cwd, { recursive: true });
+      writeFileSync(join(opts.cwd, "750dq00000Vz1zpAAB-failed-records.csv"), rows);
+      return JSON.parse(recorded("bulk-delete-results")).result;
+    }
+    if (rest?.method === "DELETE") { const part = rest.url.match(/ids=([^&]+)/)[1].split(","); return { statusCode: 200, body: part.map((id) => ({ id, success: true, errors: [] })) }; }
+    return null;
+  });
+  const all = deleteSf("bulk-delete");
+  assert.deepEqual(sfDataStore({ sf: all.sf, alias: "issue-9" }).remove(ids, { object: "Contact" }), { failed: [] });
+  assert.equal(all.calls.length, 1, "one sf process for 2,500 ids (was 13)");
+  assert.deepEqual(all.calls[0].slice(0, 9), ["data", "delete", "bulk", "--file", file, "--sobject", "Contact", "--line-ending", "LF"]);
+  assert.equal(csv.split("\n").length, 2502, "a header, 2,500 ids, a newline");
+  assert.equal(existsSync(file), false, "its CSV is removed once the job is done");
+  rows = readFileSync(join(fixtures, "bulk-delete-failed-records.csv"), "utf8") + '"003000000000001AAA","DELETE_FAILED:Your attempt to delete this record failed:--","003000000000001AAA"\n';
+  const some = deleteSf("bulk-delete-failed");
+  assert.deepEqual(sfDataStore({ sf: some.sf, alias: "issue-9" }).remove(ids, { object: "Contact" }), { failed: [{ id: "003000000000001AAA", message: "DELETE_FAILED:Your attempt to delete this record failed" }] }, "the recorded failed row (an id already gone) counts as deleted; a real failure comes back by id");
+  const stuck = recordedSf((args) => (args[2] === "bulk" ? JSON.stringify({ status: 1, name: "JobTimeoutError", data: { jobId: "750X", state: "InProgress" } }) : null));
+  assert.throws(() => sfDataStore({ sf: stuck.sf, alias: "issue-9" }).remove(ids, { object: "Contact" }), /the Bulk API delete of 2500 Contact records in issue-9 did not finish \(InProgress\): the Data ledger still lists them/);
+  const few = deleteSf("bulk-delete");
+  assert.deepEqual(sfDataStore({ sf: few.sf, alias: "issue-9" }).remove(ids.slice(0, 450), { object: "Contact" }), { failed: [] });
+  assert.deepEqual(few.calls.map((a) => a[0]), ["api", "api", "api"], "450 ids: 3 REST deletes of up to 200");
+  const store = memoryDataStore({ describes: DESCRIBES });
+  loadTestData(store, { request: requestOf([{ object: "Contact", count: 2000 }, { object: "Contact", count: 500, scenario: "more" }]), scope: "big", today: TODAY });
+  removeTestData({ ...store, removeBatchSize: 10000, remove: (list, options) => { store.calls.push(`remove ${list.length} ${options.object}`); return store.remove(list); } }, "big");
+  assert.ok(store.calls.includes("remove 2500 Contact"), "the use case hands one object's ids together, named, up to the store's removeBatchSize");
+});
+
+test("sf adapter bulk: one Bulk API 2.0 job from CSV; ids from its results; a partly failed job is taken back by id and its reasons are the request's problem", async () => {
+  const { mkdirSync, writeFileSync, copyFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const fixtures = new URL("./fixtures/sf/", import.meta.url).pathname;
+  const records = Array.from({ length: 2500 }, (_, i) => ({ ref: null, fields: { LastName: `O"Brien ${i}`, Email: null, Birthdate: "2026-10-09", DoNotCall: false, Note__c: "a,b\nc" } }));
+  let csv = null, deleted = [];
+  const bulkSf = (jobReply) => recordedSf((args, body, rest, opts) => {
+    if (args[1] === "import" && args[2] === "bulk") { csv = readFileSync(args[args.indexOf("--file") + 1], "utf8"); return recorded(jobReply); }
+    if (args[1] === "bulk" && args[2] === "results") {
+      mkdirSync(opts.cwd, { recursive: true });
+      copyFileSync(join(fixtures, "bulk-success-records.csv"), join(opts.cwd, "750000000000001AAA-success-records.csv"));
+      copyFileSync(join(fixtures, "bulk-failed-records.csv"), join(opts.cwd, "750000000000001AAA-failed-records.csv"));
+      return recorded("bulk-results");
+    }
+    if (rest?.method === "DELETE") { const ids = rest.url.match(/ids=([^&]+)/)[1].split(","); deleted.push(...ids); return { statusCode: 200, body: ids.map((id) => ({ id, success: true, errors: [] })) }; }
+    return null;
+  });
+  const partial = bulkSf("bulk-import-failed");
+  assert.throws(() => sfDataStore({ sf: partial.sf, alias: "issue-9" }).insert("Contact", records, { refsNeeded: false }),
+    (e) => e instanceof DataRequestError && e.problems[0] === "issue-9 refused 3 of the 2500 Contact records: REQUIRED_FIELD_MISSING:Required fields are missing: [LastName]:LastName x3 (the 27 that loaded were deleted again)");
+  assert.equal(deleted.length, 27, "every record the job did load is deleted again: all or nothing");
+  assert.ok(deleted.every((id) => /^003000000000\d{3}AAA$/.test(id)));
+  const job = partial.calls.find((a) => a[2] === "bulk");
+  assert.deepEqual(job.slice(0, 9), ["data", "import", "bulk", "--file", job[4], "--sobject", "Contact", "--line-ending", "LF"]);
+  assert.equal(csv.split("\n")[0], "LastName,Email,Birthdate,DoNotCall,Note__c");
+  assert.equal(csv.split("\n")[1] + "\n" + csv.split("\n")[2], '"O""Brien 0",,"2026-10-09","false","a,b\nc"', "quoted, \"\" for a quote, empty for none, a newline kept inside quotes");
+  // a job that loaded everything (the recorded success reply): its ids, ref null (Bulk API results come in no set order)
+  const succeeded = (n) => recordedSf((args, body, rest, opts) => {
+    if (args[2] === "bulk" && args[1] === "import") return recorded("bulk-import");
+    if (args[2] === "results") {
+      mkdirSync(opts.cwd, { recursive: true });
+      writeFileSync(join(opts.cwd, "ok-success.csv"), ['"sf__Id","sf__Created",LastName', ...Array.from({ length: n }, (_, i) => `"003${String(i).padStart(12, "0")}AAA","true","x"`)].join("\n") + "\n");
+      return { processedRecords: n, successfulRecords: n, failedRecords: 0, successFilePath: "ok-success.csv", failedFilePath: "ok-failed.csv" };
+    }
+    if (rest?.method === "DELETE") { const ids = rest.url.match(/ids=([^&]+)/)[1].split(","); deleted.push(...ids); return { statusCode: 200, body: ids.map((id) => ({ id, success: true, errors: [] })) }; }
+    return null;
+  });
+  const ok = sfDataStore({ sf: succeeded(2500).sf, alias: "issue-9" }).insert("Contact", records, { refsNeeded: false });
+  assert.deepEqual([ok.length, ok[0], ok.every((l) => l.ref === null)], [2500, { ref: null, id: "003000000000000AAA" }, true]);
+  deleted = [];
+  assert.throws(() => sfDataStore({ sf: succeeded(2).sf, alias: "issue-9" }).insert("Contact", records, { refsNeeded: false }), /loaded 2 of 2500 Contact records into issue-9; they were deleted again/, "fewer ids than records, no reason given: still all or nothing");
+  assert.equal(deleted.length, 2);
+  // a job that did not finish cannot be taken back by id: it is named
+  const timedOut = recordedSf((args) => (args[2] === "bulk" ? JSON.stringify({ status: 1, name: "JobTimeout", message: "timed out", data: { jobId: "750000000000003AAA", state: "InProgress" } }) : null));
+  assert.throws(() => sfDataStore({ sf: timedOut.sf, alias: "issue-9" }).insert("Contact", records, { refsNeeded: false }), /Bulk API job 750000000000003AAA for 2500 Contact records in issue-9 did not finish \(InProgress\)/);
+  assert.throws(() => sfDataStore({ sf: timedOut.sf, alias: "issue-9" }).insert("Contact", records), /2500 Contact records in one insert: a tree import takes 200/, "references needed: never bulk");
 });

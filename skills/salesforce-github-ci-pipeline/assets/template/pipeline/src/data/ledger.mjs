@@ -1,7 +1,8 @@
 // The Data ledger (see GLOSSARY.md): which records a Data request loaded into an org, by id. It lives in the org itself
 // (a ContentVersion titled "[data ledger <scope>]"), so any org knows what it holds without a marker or a name. Its rules,
 // all here:
-//   - the same request, fully loaded: nothing to do; a changed one: remove the earlier records by id, then load;
+//   - the same request, fully loaded: nothing to do (unless refreshed: loaded again, shaped like production today); a
+//     changed one: remove the earlier records by id, then load;
 //   - a ledger that exists but cannot be read is a refusal, never "none" (that would load a second, untracked set);
 //   - ids whose delete failed are carried into the next ledger, so they are retried and never lost;
 //   - deletes go children before parents, in the load plan's order.
@@ -11,14 +12,18 @@ export const LEDGER_VERSION = 1;
 
 export const ledgerTitle = (scope) => `[data ledger ${scope}]`;
 
+/** The scope a ledger's title names ("[data ledger story 9]" -> "story 9"), or null for any other title. */
+export const scopeOfTitle = (title) => String(title).match(/^\[data ledger (.+)\]$/)?.[1] ?? null;
+
 /**
  * What to do, from what the store found ({ state: "none" | "unreadable" | "found", ledger, detail }) and the request id:
  * { action: "skip", ledger } | { action: "refuse", reason } | { action: "load", previous: ledger | null }.
+ * refresh: never skip (the same records again, generated from today's production profile).
  */
-export function decide(found, requestId) {
+export function decide(found, requestId, { refresh = false } = {}) {
   if (found.state === "unreadable") return { action: "refuse", reason: unreadableReason(found) };
   if (found.state === "none") return { action: "load", previous: null };
-  if (found.ledger.complete && found.ledger.requestId === requestId && !Object.keys(found.ledger.leftovers || {}).length) return { action: "skip", ledger: found.ledger };
+  if (!refresh && found.ledger.complete && found.ledger.requestId === requestId && !Object.keys(found.ledger.leftovers || {}).length) return { action: "skip", ledger: found.ledger };
   return { action: "load", previous: found.ledger };
 }
 
@@ -27,9 +32,13 @@ function unreadableReason({ scope, detail }) {
     "Nothing was loaded or deleted. Fix: delete that file in the org (Files) along with the test records it lists, or recreate the org, then load again.";
 }
 
-/** A ledger for a load that is starting: records ids per object, parents first (`order`); `leftovers` failed to delete before. */
-export function begin({ scope, requestId, loadedAt, order = [], leftovers = {} }) {
-  return { version: LEDGER_VERSION, scope, requestId, loadedAt, complete: false, order, records: {}, leftovers };
+/**
+ * A ledger for a load that is starting: records ids per object, parents first (`order`); `leftovers` failed to delete
+ * before. `request`: the Data request in its file format (requestFile), kept so the set can be refreshed without anyone
+ * typing it again; a tree seed has none (its records are fixed files).
+ */
+export function begin({ scope, requestId, loadedAt, order = [], leftovers = {}, request = null }) {
+  return { version: LEDGER_VERSION, scope, requestId, loadedAt, complete: false, order, records: {}, leftovers, ...(request ? { request } : {}) };
 }
 
 /** The ledger with these ids loaded under their object. */

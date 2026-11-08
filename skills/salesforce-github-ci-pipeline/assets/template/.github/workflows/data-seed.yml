@@ -3,7 +3,8 @@ name: data-seed
 # ("Account 20; Contact 2 per Account; Case 5 Status=Escalated") or name a committed request file, pick the sandbox, and
 # the records are generated to fit that sandbox's own schema, shaped like production (the Data profile, read on demand,
 # never saved), and tracked by a Data ledger in the sandbox: running it again with the same request does nothing, a
-# changed one replaces only its own records, and `remove` takes them out again. Records people made stay.
+# changed one replaces only its own records, `refresh` loads what the sandbox holds again so it follows production's shape
+# today (a new picklist value, a changed mix; scope `all`: every set), and `remove` takes them out again. Records people made stay.
 # The sandbox is logged in as the CI user's sandbox copy (<SF_CI_USERNAME>.<sandbox>, the same certificate: sandboxes
 # copy the connected app and its users). Production and the Dev Hub are refused by the loader itself. Agent-free.
 run-name: "test data: ${{ inputs.action }} in sandbox ${{ inputs.sandbox }}"
@@ -11,10 +12,10 @@ on:
   workflow_dispatch:
     inputs:
       sandbox: { description: "Sandbox name (the suffix of its usernames, e.g. dev1)", required: true }
-      action: { description: "seed: load the request · status: what the sandbox holds · remove: take it out again", type: choice, options: [seed, status, remove], default: seed }
+      action: { description: "seed: load the request · refresh: load the set again, shaped like production today · status: what the sandbox holds · remove: take it out again", type: choice, options: [seed, refresh, status, remove], default: seed }
       data: { description: "What to load, typed: Account 20; Contact 2 per Account; Case 5 Status=Escalated (or leave empty and give a request file)", required: false, default: "" }
       request: { description: "Or a committed request file, e.g. data/seed/stories/512/request.json", required: false, default: "" }
-      scope: { description: "The set's name in the sandbox (another seed with the same name replaces it)", required: false, default: "by hand" }
+      scope: { description: "The set's name in the sandbox (another seed with the same name replaces it; refresh: all for every set)", required: false, default: "by hand" }
 permissions:
   contents: write         # the event log
 concurrency:
@@ -65,6 +66,9 @@ jobs:
             seed)
               if [ -n "$DATA" ]; then node pipeline/bin/pipe.mjs data seed --org "$ORG" --data "$DATA" --scope "$SCOPE" 2>&1 | tee "$RUNNER_TEMP/out.txt"
               else node pipeline/bin/pipe.mjs data seed --org "$ORG" --request "$REQUEST" --scope "$SCOPE" 2>&1 | tee "$RUNNER_TEMP/out.txt"; fi ;;
+            refresh)
+              if [ "$SCOPE" = all ]; then node pipeline/bin/pipe.mjs data refresh --org "$ORG" 2>&1 | tee "$RUNNER_TEMP/out.txt"
+              else node pipeline/bin/pipe.mjs data refresh --org "$ORG" --scope "$SCOPE" 2>&1 | tee "$RUNNER_TEMP/out.txt"; fi ;;
             status) node pipeline/bin/pipe.mjs data status --org "$ORG" --scope "$SCOPE" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
             remove) node pipeline/bin/pipe.mjs data remove --org "$ORG" --scope "$SCOPE" 2>&1 | tee "$RUNNER_TEMP/out.txt" ;;
           esac

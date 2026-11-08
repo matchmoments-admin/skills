@@ -1,0 +1,14 @@
+{
+  "status": 0,
+  "result": {
+    "processedRecords": 4,
+    "successfulRecords": 3,
+    "failedRecords": 1,
+    "status": "JobComplete",
+    "operation": "delete",
+    "object": "Contact",
+    "successFilePath": "750dq00000Vz1zpAAB-success-records.csv",
+    "failedFilePath": "750dq00000Vz1zpAAB-failed-records.csv"
+  },
+  "warnings": []
+}
