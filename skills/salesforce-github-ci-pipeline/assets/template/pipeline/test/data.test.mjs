@@ -3,7 +3,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseRequest, requestId, parseDataCommand, DataRequestError, MAX_COUNT } from "../src/data/request.mjs";
+import { createRequire } from "node:module";
+import { parseRequest, requestId, parseDataCommand, describeEntry, requestFile, DataRequestError, MAX_COUNT } from "../src/data/request.mjs";
+
 import { schemaOf, requiredParents, validForOf } from "../src/data/schema.mjs";
 import { objectsNeeded, loadPlan } from "../src/data/load-plan.mjs";
 import { generateRecords, resolveTokens } from "../src/data/generate.mjs";
@@ -12,7 +14,7 @@ import { begin, record, finish, deletions, decide } from "../src/data/ledger.mjs
 import { loadTestData, removeTestData, testDataStatus } from "../src/data/load.mjs";
 import { sfDataStore, sfProfileSource } from "../src/org/data-store.mjs";
 import { sfFrom } from "../src/io.mjs";
-import { scopeOf } from "../bin/commands/data.mjs";
+import { scopeOf, dataCommands } from "../bin/commands/data.mjs";
 import { memoryDataStore, memoryProfileSource } from "./data-store-memory.mjs";
 
 const field = (name, type, extra = {}) => ({ name, type, label: name, createable: true, nillable: true, defaultedOnCreate: false, calculated: false, autoNumber: false, ...extra });
@@ -60,6 +62,15 @@ function generate(objects, extra = {}) {
 }
 
 // ---- the request and the /data command
+
+test("data request: a request written to its file reads back the same, with the same id (per parent and scenarios too)", () => {
+  for (const typed of ["Account 20; Contact 2 per Account; Case 5 Status=Escalated Origin=Web", "Visit__c 3 Visited__c=${TODAY-30}"]) {
+    const { request } = parseDataCommand(typed);
+    const again = parseRequest(JSON.parse(JSON.stringify(requestFile(request))));
+    assert.deepEqual(again, request);
+    assert.equal(requestId(again), requestId(request));
+  }
+});
 
 test("data request: validated with every problem at once; its id ignores key order; a newer version is refused", () => {
   const request = requestOf([{ object: "Account", count: 3 }, { object: "Contact", perParent: { Account: 2 }, set: { Email: "a@example.com" } }]);
@@ -415,14 +426,14 @@ test("sf adapter: a failed tree import says each distinct reason once, with how 
     /^Error: sf data import tree loaded none of 2 Account records into issue-9: FIELD_INTEGRITY_EXCEPTION: Mismatched integration value and ISO code for field: Billing Country Code \(BillingCountryCode\) x2$/);
 });
 
-test("sf profile source: aggregates only, 25 per composite batch call, a failed subrequest is that query's error; each object read once", () => {
+test("sf profile source: aggregates and describes batched 25 per composite batch call, a failed subrequest is that query's error; each object read once", () => {
   const sent = [];
   // the recorded reply (a scratch org, 8 Nov): one count, and one query that failed (INVALID_FIELD); answered per subrequest
   const [counted, failed] = JSON.parse(recorded("rest-composite-batch-query")).result.body.results;
-  const batchReply = (request) => JSON.stringify({ status: 0, result: { statusCode: 200, body: { hasErrors: true, results: request.batchRequests.map((r) => (/Industry/.test(decodeURIComponent(r.url)) ? failed : counted)) } } });
+  const described = (url) => DESCRIBES[url.match(/sobjects\/(\w+)\/describe$/)?.[1]];
+  const batchReply = (request) => JSON.stringify({ status: 0, result: { statusCode: 200, body: { hasErrors: true, results: request.batchRequests.map((r) => (/\/describe$/.test(r.url) ? (described(r.url) ? { statusCode: 200, result: described(r.url) } : { statusCode: 404, result: [{ errorCode: "NOT_FOUND" }] }) : /Industry/.test(decodeURIComponent(r.url)) ? failed : counted)) } } });
   const { sf, calls } = recordedSf((args, body) => {
-    if (args[0] === "api") { const request = JSON.parse(body); sent.push(request); return batchReply(request); }
-    if (args[0] === "sobject") return DESCRIBES[args[args.indexOf("-s") + 1]] || null;
+    if (args[0] === "api") { const request = JSON.parse(body); if (!request.batchRequests.some((r) => /\/describe$/.test(r.url))) sent.push(request); return batchReply(request); }
     return null;
   });
   const production = sfProfileSource({ sf, alias: "devhub" });
@@ -438,8 +449,10 @@ test("sf profile source: aggregates only, 25 per composite batch call, a failed 
   assert.equal(sent.length, 2, "already read this run: no new call");
   assert.throws(() => production.aggregate([{ soql: "SELECT Name, Email FROM Contact" }]), /refusing to read production \(devhub\) with a query that is not an aggregate/);
   assert.equal(sent.length, 2, "refused before anything was sent");
-  production.describe(["Account"]); production.describe(["Account"]);
-  assert.equal(calls.filter((a) => a[0] === "sobject").length, 1, "each describe once per run");
+  const before = calls.length;
+  assert.deepEqual(Object.keys(production.describe(["Account", "Contact", "Nope__c"])), ["Account", "Contact", "Nope__c"]);
+  assert.equal(production.describe(["Account", "Nope__c"]).Nope__c, null, "an object production lacks (new in the story) is null");
+  assert.equal(calls.length - before, 1, "three describes in one batch call; each object described once per run");
 });
 
 test("sf adapter: who the org is, read once; the Dev Hub's scratch-org list is asked only for a non-sandbox", () => {
@@ -482,4 +495,100 @@ test("seed: a story's request loads with SEED on even without a core seed; in st
     assert.deepEqual(loaded, [], "story 7 already loaded in this org; story 8 skipped");
     assert.ok(logs.some((l) => /::warning::staging: story 8's test data was not loaded:\n  - "Acount" is not an object/.test(l)));
   } finally { process.chdir(cwd); }
+});
+
+test("pipe data seed --data: a typed request is read against the org's objects (any case) into the \"by hand\" set; problems listed", () => {
+  const loads = [];
+  const orgs = () => ({ dataObjects: () => ["Account", "Contact", "Case"], loadTestData: (org, args) => { loads.push({ org, ...args }); return { loaded: true, summary: "ok", warnings: [], profiled: null }; } });
+  const run = (flags) => {
+    const said = [];
+    const commands = dataCommands({ flag: (n) => flags[n] ?? null, has: (n) => flags[n] === true, output: () => {}, say: (t) => said.push(t), orgs });
+    commands["data seed"]();
+    return said.join("\n");
+  };
+  run({ org: "dev-sandbox", data: "account 20; contact 2 per account" });
+  assert.deepEqual(loads[0].request.objects.map(describeEntry), ["20 Account", "2 Contact per Account"]);
+  assert.equal(loads[0].scope, "by hand", "the next typed request replaces this one");
+  assert.throws(() => run({ org: "dev-sandbox", data: "Acount 5" }), /The test data request cannot be loaded:\n- "Acount" is not an object in this org \(did you mean Account\?\)/);
+  assert.throws(() => run({ org: "dev-sandbox", data: "  " }), /--data is empty/);
+});
+
+// ---- Phase 2 and 4: test data in the story flow (the plan, /data, the card, CI) and for Developer sandboxes
+
+test("the plan asks for a Test data line; the card shows the story's test data from comments it already reads; a person's marker counts for nothing", async () => {
+  const { instructions } = await import("../src/verdict.mjs");
+  assert.match(instructions("plan", "9"), /### Tests`[\s\S]*### Test data` \(the records people and the UI tests need[\s\S]*\/data <Object> <count>[\s\S]*### Risks/);
+  const { storyTestData, DATA_MARK } = await import("../src/data/request.mjs");
+  const plan = "### Proposed build\nx\n\n### Test data\n`/data Account 20; Contact 2 per Account`\n\n### Risks\nnone\nPLAN-SIZE: S";
+  assert.equal(storyTestData({ plan }), "20 Account; 2 Contact per Account", "from the agreed plan");
+  assert.equal(storyTestData({ plan: "### Test data\nNone: the core seed is enough\n" }), null);
+  const reply = (author, created, line) => ({ author, created, body: `🧪 @ann: **Test data:** ${line}\n\n${DATA_MARK}` });
+  const comments = [reply("github-actions[bot]", "2026-11-08T01", "5 Case"), reply("github-actions[bot]", "2026-11-08T02", "10 Case (Status=Escalated)"), reply("mallory", "2026-11-08T03", "999 Account")];
+  assert.equal(storyTestData({ plan, comments }), "10 Case (Status=Escalated)", "the latest /data reply wins over the plan; a person typing the marker does not");
+  const { storyCard } = await import("../src/card.mjs");
+  const card = (extra) => storyCard({ key: "9", repoUrl: "https://github.com/o/r", branch: "issue-9", base: "main", ...extra });
+  assert.match(card({ testData: "20 Account" }), /org `issue-9` \(production's shape, its customisations and test data\); test data: 20 Account \(\*\*\/data\*\* changes it\)/);
+  assert.match(card({}), /comment \*\*\/data Account 20\*\* for more test data/, "the command is discoverable where the org is");
+});
+
+test("/data on a story or its PR dispatches story-data with the typed line; empty says how; /help lists it", async () => {
+  const { command, perform, help } = await import("../src/actions.mjs");
+  assert.deepEqual(command("/data Account 20; Contact 2 per Account\nmore words"), { id: "data", arg: "Account 20; Contact 2 per Account" });
+  const dispatched = [];
+  const host = { dispatch: (wf, inputs) => dispatched.push({ wf, inputs }) };
+  const story = perform("data", "Case 5 Status=Escalated", { number: 9, isPr: false }, "ann", { host });
+  assert.deepEqual(dispatched[0], { wf: "story-data.yml", inputs: { story: "9", who: "ann", request: "Case 5 Status=Escalated" } });
+  assert.match(story.done, /story 9's org/);
+  perform("data", "Account 3", { number: 12, isPr: true, pr: { headRefName: "issue-9" } }, "ann", { host });
+  assert.equal(dispatched[1].inputs.story, "9", "on the PR: its story");
+  assert.match(perform("data", "", { number: 9, isPr: false }, "ann", { host }).said, /`\/data Account 20; Contact 2 per Account; Case 5 Status=Escalated`/);
+  assert.equal(dispatched.length, 2, "nothing dispatched for an empty /data");
+  assert.match(help(false), /\/data Account 20/); assert.match(help(true), /\/data Account 20/);
+});
+
+test("pipe data check with no file checks every story's request offline (CI); pipe data request writes the story's file", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync: read } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { checkStoryRequests } = await import("../bin/commands/data.mjs");
+  const root = mkdtempSync(join(tmpdir(), "stories-"));
+  const put = (key, text) => { mkdirSync(join(root, key)); writeFileSync(join(root, key, "request.json"), text); };
+  put("7", JSON.stringify({ version: 1, objects: [{ object: "Account", count: 2 }] }));
+  put("8", JSON.stringify({ version: 1, objects: [{ object: "Account" }] }));
+  mkdirSync(join(root, "9"));   // a story with a tree seed only
+  const checked = checkStoryRequests(root);
+  assert.deepEqual(checked.map((c) => [c.file.split("/").slice(-2).join("/"), c.problems.length > 0]), [["7/request.json", false], ["8/request.json", true]]);
+  assert.match(checked[1].problems[0], /give either "count" or "perParent"/);
+  const work = mkdtempSync(join(tmpdir(), "story-req-"));
+  const cwd = process.cwd();
+  process.chdir(work);
+  try {
+    const said = [], outputs = [];
+    const flags = { story: "9", org: "issue-9", data: "account 3; case 2 Status=Escalated" };
+    const commands = dataCommands({ flag: (n) => flags[n] ?? null, output: (o) => outputs.push(o), say: (t) => said.push(t), orgs: () => ({ dataObjects: () => ["Account", "Case"] }) });
+    commands["data request"]();
+    const text = read(join(work, "data/seed/stories/9/request.json"), "utf8");
+    const written = parseRequest(text);   // what org provisioning reads back (found live: the normalized form did not parse)
+    assert.deepEqual(written.objects.map(describeEntry), ["3 Account", "2 Case (Status=Escalated)"]);
+    assert.doesNotMatch(text, /null/, "the file a person reads has no empty keys");
+    assert.equal(outputs[0].changed, true);
+    commands["data request"]();
+    assert.equal(outputs[1].changed, false, "the same line again changes nothing (no commit)");
+    // story-data.yml takes the summary after the first ": " (sed 's/^[^:]*: //')
+    assert.deepEqual(said.map((l) => l.replace(/^[^:]*: /, "")), ["3 Account; 2 Case (Status=Escalated)", "3 Account; 2 Case (Status=Escalated)"]);
+  } finally { process.chdir(cwd); }
+});
+
+test("workflows: /data and data-seed never put typed text in a script; a /data request loads before it is committed; CI checks every story's request", () => {
+  const wf = (name) => readFileSync(new URL(`../../.github/workflows/${name}`, import.meta.url), "utf8");
+  const yaml = createRequire(import.meta.url)("js-yaml");
+  for (const name of ["story-data.yml", "data-seed.yml"]) {
+    const scripts = Object.values(yaml.load(wf(name)).jobs).flatMap((j) => j.steps.map((st) => st.run || "")).join("\n");
+    assert.doesNotMatch(scripts, /\$\{\{\s*inputs\./, `${name}: typed inputs reach the shell only as environment variables`);
+  }
+  const story = wf("story-data.yml");
+  assert.ok(story.indexOf("data seed --org") < story.indexOf("git commit"), "loaded first: a request that does not fit is never committed");
+  assert.doesNotMatch(story, /Co-authored-by/, "test data never reaches production: the person is named, not made the commit's co-author");
+  assert.match(wf("ci.yml"), /for f in data\/seed\/stories\/\*\/request\.json[\s\S]*node \.pipeline\/pipeline\/bin\/pipe\.mjs data check --request "\$f"/, "main's code, one file at a time (works before and after main learns the all-stories check)");
+  assert.match(wf("data-seed.yml"), /--instance-url https:\/\/test\.salesforce\.com/);
 });

@@ -30,6 +30,7 @@ export const ACTIONS = {
   "fix-story": { label: "🛠 Open a fix story for the failing tests (it goes into the sprint; Plan / Start / Build it like any story)", on: "pr" },
   "org-login": { label: "🔑 Send me a login to this story's scratch org, as the story's persona (to see the feature as its users will)", on: "any" },
   "org-login-admin": { label: "🛠 Send me an admin login to this story's scratch org (System Administrator: build or change things in Setup)", on: "any" },
+  data: { label: "🧪 Comment /data Account 20; Contact 2 per Account to load test data into this story's org (committed to the story, so staging and UAT get it too)", on: "any" },
   "retrieve": { label: "📥 Bring my Setup changes into the story (what you changed in its scratch org becomes a commit on its branch)", on: "any" },
   sprint: { label: "🏁 Start the next sprint (release branch, staging org, milestone)", on: "any" },
   "release-cut": { label: "📦 Cut the sprint's release (the release PR: staging, UAT, approval, production)", on: "any" },
@@ -40,7 +41,7 @@ export const ACTIONS = {
 // the comment commands, and the action each one is
 const COMMANDS = { "/sprint": "sprint", "/spec": "spec", "/story": "story", "/tickets": "story", "/plan": "plan", "/start": "start", "/build": "build", "/hotfix": "hotfix", "/review": "review", "/fix": "fix",
   "/test": "test", "/ui-test": "ai-test", "/ship": "ship", "/review-ok": "review-ok", "/budget-ok": "budget-ok", "/uat-pass": "uat-pass", "/uat-fail": "uat-fail", "/gate": "gate", "/ci": "ci",
-  "/staging": "staging", "/uat": "uat", "/fix-story": "fix-story", "/login": "org-login", "/admin-login": "org-login-admin", "/retrieve": "retrieve", "/sprint-start": "sprint", "/release-cut": "release-cut", "/help": "help" };
+  "/staging": "staging", "/uat": "uat", "/fix-story": "fix-story", "/login": "org-login", "/admin-login": "org-login-admin", "/retrieve": "retrieve", "/data": "data", "/sprint-start": "sprint", "/release-cut": "release-cut", "/help": "help" };
 
 const MARK = (id) => `<!-- act:${id} -->`;
 
@@ -140,6 +141,13 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority
     host.dispatch("story-retrieve.yml", { story: key, who });
     return { done: `bringing @${who}'s Setup changes into story ${key}` };
   }
+  if (id === "data") {   // test data on request: the story's org reads it, the story's branch keeps it (story-data.yml)
+    const key = where.isPr ? storyOf(where.pr.headRefName) : String(where.number);
+    if (!key) return { said: "`/data` works on a story or its pull request." };
+    if (!arg.trim()) return { said: `@${who}: say which records, on one line: \`/data Account 20; Contact 2 per Account; Case 5 Status=Escalated\`. They are generated to fit the story's org, shaped like production, and committed to the story so staging and UAT get them too.` };
+    host.dispatch("story-data.yml", { story: key, who, request: arg });
+    return { done: `loading the test data @${who} asked for into story ${key}'s org` };
+  }
   if (id === "fix-story") {
     // a sprint story for what failed on the release (the failing checks' own lists), so it goes through the normal flow
     const failed = host.checkRuns(where.pr.headRefOid).filter((c) => c.conclusion === "failure");
@@ -162,8 +170,8 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority
 /** The /help reply. */
 export function help(isPr) {
   return isPr
-    ? "**On a pull request:** `/review` AI review · `/fix` AI fixes the findings · `/test` runs the UI test (`/ui-test`: Claude writes it) · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/review-ok <why>` accepts the change over a wrong AI review · `/login` (as the persona) or `/admin-login` a login to the story's org · `/retrieve` brings Setup changes made there into the story · `/gate` checks again · `/ci` re-runs CI · on a release PR `/uat-pass`, `/uat-fail <why>`, `/uat`, `/staging`. Or tick the boxes on the card."
-    : "**On a story:** `/plan` Claude proposes the build and asks its questions · `/start` creates its branch and scratch org · `/build` has Claude build it · after Start: `/admin-login` to build it in Setup yourself, then `/retrieve` to bring those changes in (`/login`: see it as its users will) · `/hotfix` starts it as an urgent production fix. **On a spec (bigger work):** `/spec` Claude writes (or revises) the spec · `/story` makes it a story. Or tick the boxes on the card.";
+    ? "**On a pull request:** `/review` AI review · `/fix` AI fixes the findings · `/test` runs the UI test (`/ui-test`: Claude writes it) · `/ship` signs off (story PRs into the sprint; PRs into main need **Approve**) · `/review-ok <why>` accepts the change over a wrong AI review · `/login` (as the persona) or `/admin-login` a login to the story's org · `/retrieve` brings Setup changes made there into the story · `/data Account 20; Contact 2 per Account` loads test data into it · `/gate` checks again · `/ci` re-runs CI · on a release PR `/uat-pass`, `/uat-fail <why>`, `/uat`, `/staging`. Or tick the boxes on the card."
+    : "**On a story:** `/plan` Claude proposes the build and asks its questions · `/start` creates its branch and scratch org · `/build` has Claude build it · after Start: `/admin-login` to build it in Setup yourself, then `/retrieve` to bring those changes in (`/login`: see it as its users will) · `/data Account 20; Contact 2 per Account` loads test data into its org · `/hotfix` starts it as an urgent production fix. **On a spec (bigger work):** `/spec` Claude writes (or revises) the spec · `/story` makes it a story. Or tick the boxes on the card.";
 }
 
 /**

@@ -196,6 +196,9 @@ export function dataMethods({ sf, log, env = {}, seedDir, record, seedId, active
     /** Remove what a scope's ledger tracks (the undo). */
     removeTestData: (alias, scope) => removeTestData(storeFor(alias), scope),
 
+    /** Every object in the org, for reading a typed request (/data) and its did-you-mean. */
+    dataObjects: (alias) => storeFor(alias).objectNames(),
+
     /** What an org holds for a scope. */
     dataStatus: (alias, scope) => testDataStatus(storeFor(alias), scope),
 
