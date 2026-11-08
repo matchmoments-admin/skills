@@ -1,0 +1,14 @@
+{
+  "status": 0,
+  "result": {
+    "processedRecords": 30,
+    "successfulRecords": 27,
+    "failedRecords": 3,
+    "status": "JobComplete",
+    "operation": "insert",
+    "object": "Contact",
+    "successFilePath": "750000000000001AAA-success-records.csv",
+    "failedFilePath": "750000000000001AAA-failed-records.csv"
+  },
+  "warnings": []
+}

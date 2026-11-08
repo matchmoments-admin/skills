@@ -4,7 +4,8 @@
 import { createHash } from "node:crypto";
 
 export const REQUEST_VERSION = 1;
-export const MAX_COUNT = 2000;
+export const MAX_COUNT = 2000;   // records one entry's "count" asks for
+export const MAX_RECORDS = 10000;   // records one load makes in all (per parent multiplies): above 2,000 of an object nothing references, the sf adapter uses Bulk API
 export const MAX_PER_PARENT = 50;
 const API_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 

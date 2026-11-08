@@ -70,7 +70,7 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **Baseline and force-app reference each other both ways** → one combined deploy from a temporary project holding both (`-d baseline -d force-app`); `BASELINE=soft` deploys `force-app` alone on failure and records why.
 - **Snapshots** → enable in the Dev Hub (Setup → Dev Hub → Scratch Org Snapshots; allocation then shows as `ActiveOrgSnapshots`). Org records: `SnapshotName`, `Status` (`InProgress` → `Active`), `CreatedDate`. Don't keep the snapshot name in a repo variable (writing variables needs more token scope): pick the newest Active `LCB…` from `sf org list snapshot` at create time. Never delete the source org while its snapshot is InProgress.
 
-- **Test data: two mechanisms, never mixed** → Apex tests make their own (a builder/persona factory; they cannot see org data). Org data for people and UI tests is a committed synthetic seed (`data/seed`, `sf data import tree`: native, fails loudly on a missing field; SFDMU silently skips one and needs a plugin). Tree import only inserts, so a marker Account (`[seed <hash>]`) makes it load once; date tokens (`${THIS_YEAR}`) keep "this year" true. The template ships the seed with standard fields only.
+- **Test data: two mechanisms, never mixed** → Apex tests make their own (a builder/persona factory; they cannot see org data). Org data for people and UI tests is a committed synthetic seed (`data/seed`, `sf data import tree`: native, fails loudly on a missing field; SFDMU silently skips one and needs a plugin). Tree import only inserts, so each seed is tracked by a Data ledger (its id a hash of its files) and loads once; the earlier marker Accounts (`[seed <hash>]`) are retired: an org that still holds one has that copy removed once, by account names and lead emails. Date tokens (`${THIS_YEAR}`, `${TODAY-30}`) keep "this year" true. The template ships the seed with standard fields only.
 - **`sf api request rest` (sf 2.151.7), three ways to lose a write silently** → `-b` takes `@file` (without the `@` it
   sends the path as the body); `--json` wraps the reply as `{ statusCode, headers, body }`, so unwrap `body`; a call
   without a body (DELETE) fails with "No 'mode' found in 'body' entry" unless sent as a request definition (`-f` with
@@ -103,6 +103,14 @@ Every entry happened in a real run. Search this file for the error text you see.
 - **A Data ledger's content cannot be batched** → `/composite/batch` answers `ContentVersion/<id>/VersionData` with
   `INVALID_BATCH_REQUEST` ("Cannot access this resource in a batch request"), and `/composite` with `JSON_PARSER_ERROR`.
   List every ledger in one query (`Title LIKE '[data ledger %]'`) and GET each content once.
+- **Bulk API 2.0 from the CLI** → `sf data import bulk` exits 1 with `FailedRecordDetailsError` when any record fails,
+  and its JSON holds only `data.jobId` and `data.state`; `sf data bulk results --job-id` writes
+  `<job>-success-records.csv` (`sf__Id`) and `<job>-failed-records.csv` (`sf__Error`) in the directory it runs in.
+  Results come in no set order, so a bulk insert cannot say which reference got which id: bulk only for records no
+  later record references. Duplicate rules apply (`DUPLICATES_DETECTED`), as they do to tree imports.
+- **Snapshots and Files (unverified)** → it is not documented whether a snapshot copies ContentVersion files (the Data
+  ledger) with the records. If a new org shows the seed's accounts with no ledger, the loader removes that untracked
+  copy by name and loads again (one warning per org); check the first org after a snapshot rebuild for that warning.
 - **Shape orgs' roles cannot be assigned** ("invalid cross reference id", even from Apex; deploying the Role metadata over them does not help) → delete them leaves-first and recreate them as metadata, before the deploy (folder shares and sharing rules attach to roles at deploy time).
 - **Logging in as a persona without a password** → turn on `SecuritySettings.enableAdminLoginAsAnyUser` in scratch orgs and use `/servlet/servlet.su?oid=..&suorgadminid=..` on the classic (instance URL) domain after the admin's front-door login; the Lightning domain aborts. Users as records (`sf org create user` refuses JWT on Hyperforce); licences are few: deactivate other persona users when `LICENSE_LIMIT_EXCEEDED`.
 

@@ -113,7 +113,7 @@ The one test against production itself is the check-only **production validation
 
 | Where | What it gets | From |
 | --- | --- | --- |
-| Every scratch org (story, CI, staging, UAT, the snapshot) | the core seed: synthetic Accounts, Contacts, Opportunities, Cases, Leads, dated at load time | `data/seed` (main's copy), once per org by a marker |
+| Every scratch org (story, CI, staging, UAT, the snapshot) | the core seed: synthetic Accounts, Contacts, Opportunities, Cases, Leads, dated at load time | `data/seed` (main's copy), once per org, tracked by its Data ledger (scope `core seed`: `pipe data status` shows it) |
 | A story's org | plus the story's own records, when the story adds an object (Claude writes them with the build) | `data/seed/stories/<key>/plan.json` (the branch) |
 | A story's org (then staging and UAT) | plus records generated from the story's **Data request** (objects and counts) to fit that org's own fields, picklists and lookups, shaped like production | `data/seed/stories/<key>/request.json`: the plan's **Test data** line, written by the build, or a `/data Account 20; Contact 2 per Account` comment on the story (loaded at once, then committed; the card's org row says what the story has) |
 | A Developer sandbox | the same, typed or from a file | **Actions › data-seed**: the sandbox's name, `seed` / `status` / `remove`, and what to load (`Account 20; Contact 2 per Account`). Logs in as the CI user's sandbox copy. Or `pipe data seed --org <alias> --data "..."`. Production and the Dev Hub are refused |

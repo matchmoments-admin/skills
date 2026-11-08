@@ -7,8 +7,8 @@ when the team turns it on. The handbook's "Test data" table is the operator view
 
 | Layer | Where | How it loads |
 |---|---|---|
-| **Core seed** | `data/seed/` (`sf data import tree` plan + one file per object, standard fields only) | Every scratch org (story, CI, staging, UAT, the snapshot), once per org through a marker Account. Date tokens (`${TODAY}`, `${THIS_YEAR}`…) are filled at load time. A changed seed replaces the old one in long-lived orgs |
-| **Story seed** | `data/seed/stories/<key>/plan.json` (same format) | Claude writes it with the build when a story adds an object (or a field people test): about 20 synthetic records, with a few synthetic parent Accounts made in the same plan (tree `@references` reach only their own plan). It loads into the story's org, then staging and UAT. After the release, `seed-fold` opens a PR folding it into the core seed |
+| **Core seed** | `data/seed/` (`sf data import tree` plan + one file per object, standard fields only) | Every scratch org (story, CI, staging, UAT, the snapshot), once per org, read into records and loaded through the Org data store like a request, tracked by a **Data ledger** (scope `core seed`, its id a hash of the files): no marker Account. Date tokens (`${TODAY}`, `${TODAY-30}`, `${THIS_YEAR}`…) are filled at load time. A changed seed replaces exactly the ledger's records by id. An org holding a copy no ledger tracks (an old `[seed <hash>]` marker, or the seed's account names with no ledger: a snapshot that kept records but not the ledger file) has it removed once by account names and lead emails first. The snapshot description names `d2` (tracked by ledger), so an older snapshot is rebuilt once |
+| **Story seed** | `data/seed/stories/<key>/plan.json` (same format) | Claude writes it with the build when a story adds an object (or a field people test): about 20 synthetic records, with a few synthetic parent Accounts made in the same plan (tree `@references` reach only their own plan). It loads into the story's org, then staging and UAT, by its own ledger (scope `story <key> seed`). After the release, `seed-fold` opens a PR folding it into the core seed, which then removes the story's own copy |
 | **Data request** | `data/seed/stories/<key>/request.json` (version 1: objects, counts, per-parent counts, set values) or `pipe data seed --org A --request F` | Generated at load time from the target org's describe, so it fits however the org is set up: required fields, picklist values (dependent picklists through `validFor`), lookups to parents it also makes. Loads into the story's org, then staging and UAT, whenever `SEED` is not `off`; one bad request in staging is a warning naming the story. Tracked by a **Data ledger** in the org (a file titled `[data ledger <scope>]`): the same request loads once, a changed one replaces only the ledger's records, `pipe data remove` undoes it. Production, the Dev Hub and any org that is not a sandbox or this Dev Hub's scratch org are refused |
 | **Volume** | generated (`VOLUME_RECORDS`, default 5000) | Staging only: accounts with opportunities by anonymous Apex, so lists, reports and Flows meet production-like numbers |
 | **Masked UAT sample** | `config/uat-sample/export.json` | Only with `UAT_SAMPLE=on`: SFDMU copies a production subset into UAT org to org, replacing names, emails and phones (`mockFields`). Then `pipe sample guard` fails if a production email domain (`UAT_SAMPLE_DOMAINS`) survived |
@@ -42,7 +42,9 @@ Apex tests never see any of this. They build their own data (a `TestDataFactory`
 - `pipe data check` (no file: every story's request, offline; CI's static job runs it) and `--request F` for one file;
   `pipe data seed --org A --request F | --data "Account 20; ..." [--scope S]` loads (typed requests default to the
   "by hand" set, which the next typed one replaces); `pipe data status|remove --org A --scope S` shows or undoes it.
-  Up to 2,000 records per load.
+  Up to 2,000 records per entry and 10,000 per load (per parent multiplies). More than 2,000 records of one object that
+  no later record references go as one Bulk API 2.0 job (`sf data import bulk`), all or nothing: a job with failed
+  records has what it loaded deleted again by id, and the reasons come back as the request's problem.
 - Values a request sets win; generated values never replace them (date tokens work: `${TODAY-30}`). Required lookups
   the generator cannot fill (polymorphic, User/RecordType/Profile..., or a lookup to the same object) are reported:
   set them in the request.
@@ -80,11 +82,11 @@ SFDMU is pinned (`sfdmu@5.8.0`). Its `--anonymise` flag only hashes values in it
 
 | Option | Verdict |
 |---|---|
-| `sf data import tree` (native) | Kept for the synthetic seeds: free, no plugin, plan files with references. The markers make it idempotent |
-| **SFDMU** (free, Apache-2.0, maintained) | Used for the masked UAT sample: org to org with relationships, `mockFields` masking. For upsert-based seeding everywhere it needs an external-ID field on every object, which isn't worth it while markers work |
+| `sf data import tree` (native) | Kept as the seeds' file format (plan files with references); loaded one object file at a time through the Org data store, so the Data ledger makes it idempotent |
+| **SFDMU** (free, Apache-2.0, maintained) | Used for the masked UAT sample: org to org with relationships, `mockFields` masking. For upsert-based seeding everywhere it needs an external-ID field on every object, which isn't worth it while the Data ledger tracks every load |
 | Snowfakery | Good recipes, but its repository was archived in April 2026. Not adopted |
 | Salesforce Data Mask & Seed | Paid, quote only, aimed at sandboxes. Consider it when UAT is a full-copy sandbox |
 | `sf data-seeding generate` (Data Seed CLI, `@salesforce/plugin-data-seeding`) | The nearest standard to the generator plus profile: AI makes look-alike data from a source org. Paid (fails without the org's data seed permission), sends both orgs' tokens and the source data to a Salesforce service in us-east-1, not reproducible, scratch-org targets undocumented. Trial it only with the licence |
-| `sf data upsert bulk` (Bulk API 2.0, CSV, external IDs) | Worth it above about 2,000 records. Needs an external-ID field on every seeded object (breaks "any org as it is"); each object is an async job, slower than tree for hundreds. The Data ledger already makes reruns safe |
+| `sf data import bulk` (Bulk API 2.0, CSV) | Used inside the sf Org data store for more than 2,000 records of one object nothing references (results come back in no set order, so ids cannot be matched to references). A job with failed records is taken back by id; a job that times out cannot be, and the error names it. Upsert by external ID is not used: it needs an external-ID field on every seeded object |
 | Partial / Full sandbox templates | Copy real production data, unmasked; Developer sandboxes get none. Not test data |
 | Gearset seeding, Own (Salesforce), Prodly, Copado Data Deploy | Paid. Gearset's add-on is about 40% of its plan price, Own $1.85–2.50 per Salesforce user per month. Worth it only for teams already on those platforms, or that need format-preserving masking at scale |

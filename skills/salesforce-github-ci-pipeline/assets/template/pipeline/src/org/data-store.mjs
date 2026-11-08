@@ -1,9 +1,9 @@
 // The sf adapters of test data's two ports: the Org data store (see data/load.mjs), the one place that knows how test
-// data reaches an org through the `sf` seam (describe, `sf data import tree --files`, the REST composite delete, the Data
-// ledger as a ContentVersion), and the Profile source (see data/profile.mjs): production read through aggregate queries
-// only, batched in REST composite batch calls. Facts only; the use case decides. pipeline/test/data.test.mjs runs both on
-// recorded CLI output.
-import { mkdtempSync, writeFileSync } from "node:fs";
+// data reaches an org through the `sf` seam (describe, `sf data import tree --files`, Bulk API 2.0 for big loads, the REST
+// composite delete, the Data ledger as a ContentVersion), and the Profile source (see data/profile.mjs): production read
+// through aggregate queries only, batched in REST composite batch calls. Facts only; the use case decides.
+// pipeline/test/data.test.mjs runs both on recorded CLI output.
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEVHUB } from "./fleet.mjs";
@@ -14,6 +14,12 @@ import { DataRequestError } from "../data/request.mjs";
 
 export const BATCH_SIZE = 200;   // sf data import tree and the composite delete both take up to 200 records
 export const BATCH_QUERIES = 25;   // subrequests in one REST composite batch call (plain /composite runs only 5 queries)
+// More records of one object than BULK_FROM, none of them a parent of a later record (Bulk API results come back in no
+// set order, so they cannot be matched to their references): one Bulk API 2.0 job of up to BULK_MAX instead of
+// BULK_FROM / 200 tree imports and ledger saves. BULK_WAIT: minutes `sf data import bulk` waits for the job.
+export const BULK_FROM = 2000;
+export const BULK_MAX = 10000;
+export const BULK_WAIT = 15;
 const LEDGER_FILE = "data-ledger.json";
 const ALREADY_GONE = /ENTITY_IS_DELETED|INVALID_CROSS_REFERENCE_KEY/;
 
@@ -101,6 +107,51 @@ function importErrors(reply) {
   return [...counts].map(([e, n]) => `${e}${n > 1 ? ` x${n}` : ""}`).join("; ");
 }
 
+/** Field values as Bulk API 2.0 CSV: a header of every field, each value quoted ("" for a quote), empty for none. Pure. */
+export function toCsv(rows) {
+  const columns = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+  const cell = (v) => (v === null || v === undefined ? "" : `"${String(v).replace(/"/g, '""')}"`);
+  return [columns.join(","), ...rows.map((r) => columns.map((c) => cell(r[c])).join(","))].join("\n") + "\n";
+}
+
+/** A Bulk API results CSV (quoted fields, "" escapes, newlines inside quotes) as rows keyed by its header. Pure. */
+export function fromCsv(text) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; } else if (c === '"') quoted = false; else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i++; row.push(field); rows.push(row); row = []; field = ""; }
+    else field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  const [header = [], ...data] = rows;
+  return data.map((cells) => Object.fromEntries(header.map((h, i) => [h, cells[i] ?? ""])));
+}
+
+const counted = (texts) => [...texts.reduce((acc, t) => acc.set(t, (acc.get(t) || 0) + 1), new Map())].map(([t, n]) => `${t}${n > 1 ? ` x${n}` : ""}`).join("; ");
+
+/**
+ * Anonymous Apex that removes a tree seed loaded the earlier way (marker Accounts, before the Data ledger tracked tree
+ * seeds), by the seed's own keys: its accounts by name (their cases, opportunities and contacts first) and its
+ * unconverted leads by email. The markers are among the names. Records people made on other accounts stay. Pure.
+ */
+export function legacySeedApex({ accountNames, leadEmails = [] }) {
+  const list = (xs) => xs.map((x) => soqlString(x)).join(", ");
+  return [
+    `Set<String> names = new Set<String>{ ${list(accountNames)} };`,
+    "List<Account> a = [SELECT Id FROM Account WHERE Name IN :names];",
+    "delete [SELECT Id FROM Case WHERE AccountId IN :a];",
+    "delete [SELECT Id FROM Opportunity WHERE AccountId IN :a];",
+    "delete [SELECT Id FROM Contact WHERE AccountId IN :a];",
+    "delete a;",
+    ...(leadEmails.length ? [`Set<String> emails = new Set<String>{ ${list(leadEmails)} };`, "delete [SELECT Id FROM Lead WHERE Email IN :emails AND IsConverted = false];"] : []),
+  ].join("\n");
+}
+
 /** The Org data store for one org. sf: the io seam; active: the Dev Hub's active scratch orgs (ScratchOrgInfo rows). */
 export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] }) {
   let identityOnce = null;
@@ -159,29 +210,37 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
       return names;
     },
 
-    /** One tree file; all or nothing. Throws when the reply does not account for every record. */
-    insert(object, records) {
-      const file = scratchFile(`${object}.json`);
-      writeFileSync(file, JSON.stringify({ records: records.map((r) => ({ attributes: { type: object, referenceId: r.ref }, ...r.fields })) }));
-      // a failed import exits 1 with each record's error in its data: keep them (allowFail "json"), so the error says why
-      const reply = sf(["data", "import", "tree", "--files", file, "-o", alias], { allowFail: "json" });
-      if (reply?.failed) {
-        const refused = importErrors(reply);
-        // the org refused the records (a validation rule, a restricted value): the request's to change, so say it as one
-        if (refused) throw new DataRequestError([`${alias} refused the ${records.length} ${object} records: ${refused}`]);
-        throw new Error(`sf data import tree loaded none of ${records.length} ${object} records into ${alias} (no reason given)`);
-      }
-      const rows = Array.isArray(reply) ? reply : reply?.records || [];
-      const loaded = rows.filter((r) => r?.refId && r?.id).map((r) => ({ ref: r.refId, id: r.id }));
-      if (loaded.length !== records.length) throw new Error(`sf data import tree loaded ${loaded.length} of ${records.length} ${object} records into ${alias}`);
-      return loaded;
+    /** How many of `count` records of one object to send per insert: a Bulk API job above BULK_FROM when no later record needs their ids by reference. */
+    batchSizeFor: (count, { refsNeeded = true } = {}) => (!refsNeeded && count > BULK_FROM ? BULK_MAX : BATCH_SIZE),
+
+    /**
+     * All or nothing. Up to 200 records: one tree file (each { ref, id }). More (only when the caller said no reference
+     * needs them, refsNeeded false): one Bulk API 2.0 job, whose ids come back with ref null; if any record fails, the
+     * ones that loaded are deleted again and the reasons thrown.
+     */
+    insert(object, records, { refsNeeded = true } = {}) {
+      if (records.length <= BATCH_SIZE) return treeInsert(object, records);
+      if (refsNeeded) throw new Error(`${records.length} ${object} records in one insert: a tree import takes ${BATCH_SIZE}, and a Bulk API job cannot say which reference got which id`);
+      return bulkInsert(object, records);
     },
 
-    remove(ids) {
-      const results = rest("DELETE", `/composite/sobjects?ids=${ids.join(",")}&allOrNone=false`);
-      const failed = (Array.isArray(results) ? results : []).map((r, i) => ({ id: r.id || ids[i], ok: r.success || ALREADY_GONE.test(JSON.stringify(r.errors || [])), message: r.errors?.[0]?.message || "unknown" }))
-        .filter((r) => !r.ok).map(({ id, message }) => ({ id, message }));
-      return { failed };
+    remove: (ids) => removeIds(ids),
+
+    /** The marker Accounts the earlier seed mechanism left whose Name starts with `prefix`. A query that fails throws. */
+    legacyMarkers(prefix) {
+      return query(`SELECT Name FROM Account WHERE Name LIKE ${soqlString(`${prefix}%`)}`).map((r) => r.Name);
+    },
+
+    /** Which of these Account names the org holds, 200 names per query. A query that fails throws. */
+    accountsNamed(names) {
+      return chunk(names, BATCH_SIZE).flatMap((part) => query(`SELECT Name FROM Account WHERE Name IN (${part.map((n) => soqlString(n)).join(", ")})`).map((r) => r.Name));
+    },
+
+    /** Remove a tree seed loaded the earlier way, by its keys (legacySeedApex), in one anonymous Apex call. Throws when it fails. */
+    removeLegacySeed(keys) {
+      const file = scratchFile("legacy-seed.apex");
+      writeFileSync(file, legacySeedApex(keys));
+      sf(["apex", "run", "--file", file, "-o", alias]);
     },
 
     readLedger(scope) {
@@ -208,4 +267,55 @@ export function sfDataStore({ sf, alias, apiVersion = "67.0", active = () => [] 
       ledgers.delete(title);
     },
   };
+
+  /** One tree file; all or nothing. Throws when the reply does not account for every record. */
+  function treeInsert(object, records) {
+    const file = scratchFile(`${object}.json`);
+    writeFileSync(file, JSON.stringify({ records: records.map((r) => ({ attributes: { type: object, referenceId: r.ref }, ...r.fields })) }));
+    // a failed import exits 1 with each record's error in its data: keep them (allowFail "json"), so the error says why
+    const reply = sf(["data", "import", "tree", "--files", file, "-o", alias], { allowFail: "json" });
+    if (reply?.failed) {
+      const refused = importErrors(reply);
+      // the org refused the records (a validation rule, a restricted value): the request's to change, so say it as one
+      if (refused) throw new DataRequestError([`${alias} refused the ${records.length} ${object} records: ${refused}`]);
+      throw new Error(`sf data import tree loaded none of ${records.length} ${object} records into ${alias} (no reason given)`);
+    }
+    const rows = Array.isArray(reply) ? reply : reply?.records || [];
+    const loaded = rows.filter((r) => r?.refId && r?.id).map((r) => ({ ref: r.refId, id: r.id }));
+    if (loaded.length !== records.length) throw new Error(`sf data import tree loaded ${loaded.length} of ${records.length} ${object} records into ${alias}`);
+    return loaded;
+  }
+
+  /**
+   * One Bulk API 2.0 job (`sf data import bulk`, then `sf data bulk results` for the ids, written as CSV files where it
+   * runs). A job that finished with failed records (exit 1, FailedRecordDetailsError) is made all or nothing: the records
+   * that loaded are deleted again by id, then the distinct reasons are a DataRequestError. A job that did not finish
+   * (timed out) cannot be taken back by id: the error names it.
+   */
+  function bulkInsert(object, records) {
+    const dir = mkdtempSync(join(tmpdir(), "bulk-"));
+    const file = join(dir, `${object}.csv`);
+    writeFileSync(file, toCsv(records.map((r) => r.fields)));
+    const job = sf(["data", "import", "bulk", "--file", file, "--sobject", object, "--line-ending", "LF", "--wait", String(BULK_WAIT), "-o", alias], { allowFail: "json" });
+    if (!job?.jobId) throw new Error(`sf data import bulk loaded none of ${records.length} ${object} records into ${alias} (no job started)`);
+    if (job.failed && job.state !== "JobComplete") {
+      throw new Error(`the Bulk API job ${job.jobId} for ${records.length} ${object} records in ${alias} did not finish (${job.state || "timed out"}): what it loaded is not tracked; see Setup > Bulk Data Load Jobs, delete them by hand or recreate the org`);
+    }
+    const results = sf(["data", "bulk", "results", "--job-id", job.jobId, "-o", alias], { cwd: dir });
+    const read = (path) => (path ? fromCsv(readFileSync(join(dir, path), "utf8")) : []);
+    const ids = read(results?.successFilePath).map((row) => row.sf__Id).filter(Boolean);
+    const failed = Number(results?.failedRecords || 0) ? read(results.failedFilePath).map((row) => row.sf__Error.replace(/:?\s*--\s*$/, "")) : [];
+    if (!failed.length && ids.length === records.length) return ids.map((id) => ({ ref: null, id }));
+    const kept = chunk(ids, BATCH_SIZE).flatMap((part) => removeIds(part).failed.map((f) => f.id));
+    if (kept.length) throw new Error(`the Bulk API job ${job.jobId} loaded ${ids.length} of ${records.length} ${object} records into ${alias}, and ${kept.length} of them could not be deleted again (${kept.slice(0, 5).join(", ")}${kept.length > 5 ? ", ..." : ""}): delete them by hand or recreate the org`);
+    if (!failed.length) throw new Error(`the Bulk API job ${job.jobId} loaded ${ids.length} of ${records.length} ${object} records into ${alias}; they were deleted again`);
+    throw new DataRequestError([`${alias} refused ${failed.length} of the ${records.length} ${object} records: ${counted(failed)} (the ${ids.length} that loaded were deleted again)`]);
+  }
+
+  function removeIds(ids) {
+    const results = rest("DELETE", `/composite/sobjects?ids=${ids.join(",")}&allOrNone=false`);
+    const failed = (Array.isArray(results) ? results : []).map((r, i) => ({ id: r.id || ids[i], ok: r.success || ALREADY_GONE.test(JSON.stringify(r.errors || [])), message: r.errors?.[0]?.message || "unknown" }))
+      .filter((r) => !r.ok).map(({ id, message }) => ({ id, message }));
+    return { failed };
+  }
 }

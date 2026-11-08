@@ -4,19 +4,25 @@ Synthetic records every scratch org gets (story, CI, staging, UAT and the snapsh
 Flow checks and demos. **Never production data.** Apex tests never see these records (they make their own with
 `TestDataFactory`: personas with a role and permission sets, accounts and opportunities in bulk).
 
-- `plan.json` and the `*.json` files: `sf data import tree` format (reference ids like `@Acc01` link children to parents).
-- Date tokens are filled in at load time, so "this year" never goes stale: `${TODAY}`, `${THIS_YEAR}`, `${LAST_YEAR}`,
-  `${NEXT_YEAR}`. `${SEED_MARKER}` names the marker Account the pipeline uses to load the seed only once per org.
+- `plan.json` and the `*.json` files: `sf data import tree` format (reference ids like `@Acc01` link children to parents,
+  which come earlier in the plan; one flat file per object, no nested records).
+- Loaded once per org through the Org data store and tracked by a **Data ledger** (scope `core seed`, its id a hash of
+  these files), like a Data request: `pipe data status --org <alias> --scope "core seed"` says what an org holds, and
+  `pipe data remove` takes it out.
+- Date tokens are filled in at load time, so "this year" never goes stale: `${TODAY}`, `${TODAY-30}`, `${TODAY+7}`,
+  `${THIS_YEAR}`, `${LAST_YEAR}`, `${NEXT_YEAR}` (the same tokens a Data request takes). The record naming
+  `${SEED_MARKER}` in `Account.json` is the marker Account the earlier mechanism loaded; it is no longer loaded.
 - A story that adds an object (or a field people test) ships its own records: `stories/<story key>/plan.json` (same
-  format; Claude writes it with the build). They load into that story's org, then staging and UAT (each once, by its
-  marker; a changed version replaces the earlier one). After the release, `seed-fold` opens a PR that folds them into the
-  files here.
+  format; Claude writes it with the build). They load into that story's org, then staging and UAT (each once, by its own
+  Data ledger, scope `story <key> seed`; a changed version replaces the earlier one by id). After the release,
+  `seed-fold` opens a PR that folds them into the files here; the core seed then removes the story's own copy.
 - No email-origin Cases: production's `Case_Classify_On_Email_Create` Flow queues an Apex job for each one, and a pending
   job blocks redeploying its classes (every org build retried 6 baseline files until 14 Oct).
 - Keep it small (hundreds of records) and use picklist codes (`BillingCountryCode`, not `BillingCountry`).
 - Changing anything here rebuilds the snapshot (`snapshot-refresh`). A long-lived org (staging, UAT: 30 days) that holds
-  an earlier version gets this one **in its place**: the old seed's accounts (with their contacts, opportunities and
-  cases), its leads and its marker are deleted first, by the names and emails in these files (`org.seedReplaceApex`).
+  an earlier version gets this one **in its place**: the ledger's records are deleted by id (children first), then this
+  version loads. An org that still holds a seed loaded the earlier way (a `[seed <hash>]` marker Account, no ledger) has
+  it removed once by the names and emails in these files (`legacySeedApex`), with its markers.
 - **Volume (staging only):** the staging org also gets `VOLUME_RECORDS` accounts, each with an opportunity (default 5000;
   `0` turns it off), loaded once (`org.volumeApex`), so list views, reports, Flows and queries meet production-like
   numbers before production does. Story orgs stay small and fast.

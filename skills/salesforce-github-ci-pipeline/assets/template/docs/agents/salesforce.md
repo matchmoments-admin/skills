@@ -150,7 +150,8 @@ The loop is red → green, but each run is a deploy plus a scratch-org test run 
   plus one JSON file per object (`sf data import tree` format, as `data/seed`). A tree plan's `@ref` references reach
   only records in the same plan, so when the records need a parent (an Account), the story's plan makes its own few
   synthetic parents first and references them (`@SomeAcc01`). Use picklist codes, never real people or emails. The
-  story's org, then staging and UAT load it (once, by its marker). A shipped story's tree seed is folded into the core
+  story's org, then staging and UAT load it (once, tracked by a Data ledger, scope `story <key> seed`; a changed plan
+  replaces exactly its records). The `${TODAY-30}` date tokens work here too. A shipped story's tree seed is folded into the core
   seed by a bot PR after the release; its request.json stays with the story, so staging keeps loading it for that
   story's UI test.
 - **Every Apex test class declares what it tests:** `@IsTest(testFor='ApexClass:CaseHandler,ApexTrigger:CaseTrigger')`

@@ -15,7 +15,7 @@ import { setupChangesMethods } from "./org/setup-changes.mjs";
 // the helpers that moved to org/, still importable from here
 /** A Salesforce login or network failure: worth one more try, and no fault of a snapshot. */
 export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB, poolToMake, stalePool, POOL } from "./org/fleet.mjs";
-export { expandSeed, seedReplaceApex, VOLUME_MARKER, volumeApex, foldSeeds } from "./org/data.mjs";
+export { expandSeed, legacySeedApex, VOLUME_MARKER, volumeApex, foldSeeds } from "./org/data.mjs";
 export { roleRebuild, personaOf, permissionSets, permissionSetGroups, assignAccess } from "./org/users.mjs";
 export { snapshotDescription, snapshotHolds } from "./org/snapshot.mjs";
 
@@ -105,7 +105,9 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
   // (held, head) => true when nothing deployable changed between them (sameSourceVia): ready() then only re-marks the org
   sameSource = () => false,
   // main's checkout: the Settings metadata and scratch definition a snapshot's shape depends on (snapshot.shapeInputsId)
-  shapeRoot = PIPELINE_ROOT }) {
+  shapeRoot = PIPELINE_ROOT,
+  // tests: alias -> Org data store (the memory adapter) in place of the sf one (org/data.mjs)
+  makeStore = null }) {
   // the production baseline (BASELINE: off | soft (default) | strict), from main's trusted checkout, never the branch's
   const baselineMode = String(env.BASELINE || "soft").toLowerCase();
   const baseline = () => (baselineMode !== "off" && existsSync(baselineDir) ? idOf(baselineDir) : null);
@@ -142,7 +144,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
   const deleteRecord = (username) => { try { return Boolean(sf(["data", "delete", "record", "-o", DEVHUB, "-s", "ActiveScratchOrg", "-w", `SignupUsername='${username}'`], { allowFail: true })); } finally { changed(); } };
 
   // the methods of each concern (pipeline/src/org/), then the provisioning core below, which composes them
-  const ctx = { sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, shapeId, active, deleteRecord, changed, snapshotList, snapshotBaselineOf, snapshotsChanged };
+  const ctx = { sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, shapeId, active, deleteRecord, changed, snapshotList, snapshotBaselineOf, snapshotsChanged, makeStore };
   const self = {
     ...fleetMethods(ctx), ...dataMethods(ctx), ...usersMethods(ctx), ...snapshotMethods(ctx), ...setupChangesMethods(ctx),
     /** The Dev Hub's active orgs (ScratchOrgInfo: SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate, Snapshot). */

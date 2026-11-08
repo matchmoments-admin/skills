@@ -1,7 +1,8 @@
 name: snapshot-refresh
 # The scratch-org snapshot new orgs start from (org.mjs create/currentSnapshot): production's shape, the managed
 # packages, the production baseline, main's source and the seed data, already deployed. Its description names what it
-# holds: b<baseline id> s<seed id> h<shape inputs id> (Settings metadata and the scratch definition). Rebuilt (#430):
+# holds: b<baseline id> s<seed id> d<test data tracking: 2, the Data ledger> h<shape inputs id> (Settings metadata and the
+# scratch definition). Rebuilt (#430; a snapshot that names no d holds marker Accounts and counts as out of date):
 # - when the baseline or the seed changes on main (a push), unless the newest snapshot, or one still being made,
 #   already holds them; a push that also changes the shape inputs waits for the release (next line);
 # - after a release (release.yml, after its shape job), only if the release changed the shape inputs: a release of

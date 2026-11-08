@@ -16,3 +16,11 @@ uses. Re-record them when the CLI changes how it replies:
 - `query-ledgers.json`: `sf data query` listing every Data ledger in the org (`Title LIKE '[data ledger %]'`), newest
   first. A ledger's content cannot come in a batch: `/composite/batch` answers `VersionData` with
   `INVALID_BATCH_REQUEST` ("Cannot access this resource in a batch request"), so each is one GET (`rest-get-versiondata.json`)
+- `query-markers.json`: `sf data query` for the marker Accounts the earlier seed mechanism left (`Name LIKE '[seed %'`;
+  the record shape recorded, the names those of the live check)
+- `apex-run.json` and `apex-run-error.json`: `sf apex run --file`, run and failed at run time (exit 1, the reason in
+  `message`); the logs are dropped
+- `bulk-import.json`, `bulk-import-failed.json`: `sf data import bulk --file <csv> --sobject Contact --wait N`; a job
+  with failed records exits 1 (`FailedRecordDetailsError`) with only `data.jobId` and `data.state` (`JobComplete`)
+- `bulk-results.json` with `bulk-success-records.csv` and `bulk-failed-records.csv`: `sf data bulk results --job-id`,
+  which writes the two CSV files where it runs (27 loaded, 3 refused for a missing `LastName`; `sf__Id`, `sf__Error`)

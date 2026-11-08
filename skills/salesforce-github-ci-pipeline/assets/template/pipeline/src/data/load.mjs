@@ -1,5 +1,6 @@
-// Loading test data (see GLOSSARY.md: Data request, Data ledger, Org data store): the use case behind `pipe data` and
-// org provisioning. It decides; the Org data store port below does the talking to an org. Two adapters fill the port:
+// Loading test data (see GLOSSARY.md: Data request, Core seed, Data ledger, Org data store): the use case behind
+// `pipe data` and org provisioning, for Data requests and tree seeds alike, each tracked by its own Data ledger. It
+// decides; the Org data store port below does the talking to an org. Two adapters fill the port:
 // org/data-store.mjs (sf) and test/data-store-memory.mjs (in memory), so every ordering and failure rule here is
 // tested without an org.
 
@@ -9,6 +10,7 @@ import { objectsNeeded, loadPlan } from "./load-plan.mjs";
 import { generateRecords } from "./generate.mjs";
 import { profileFor } from "./profile.mjs";
 import { decide, begin, record, finish, deletions, leftoversOf, summary, ledgerTitle, chunk } from "./ledger.mjs";
+import { treeSeedRecords, expandSeed } from "./tree-seed.mjs";
 
 /**
  * @typedef {object} OrgDataStore  One org's data, as the use case needs it. Facts only: no policy.
@@ -17,11 +19,18 @@ import { decide, begin, record, finish, deletions, leftoversOf, summary, ledgerT
  * @property {() => { orgId: string|null, username: string|null, isSandbox: boolean, isDevHub: boolean, isOurScratchOrg: boolean }} identity
  * @property {(names: string[]) => Record<string, object|null>} describe  sobject describes; null for an unknown object
  * @property {() => string[]} objectNames  every object in the org (for "did you mean")
- * @property {(object: string, records: { ref: string, fields: object }[]) => { ref: string, id: string }[]} insert  all or nothing
+ * @property {(object: string, records: { ref: string, fields: object }[], options?: { refsNeeded: boolean }) => { ref: string|null, id: string }[]} insert
+ *   all or nothing; ref is null only when refsNeeded is false (no later record references these)
+ * @property {(count: number, options: { refsNeeded: boolean }) => number} [batchSizeFor]  records per insert for a run of
+ *   `count` records of one object (optional: batchSize otherwise; the sf adapter goes to Bulk API for big unreferenced runs)
  * @property {(ids: string[]) => { failed: { id: string, message: string }[] }} remove  an id already gone counts as removed
  * @property {(scope: string) => { state: "none" } | { state: "unreadable", detail: string } | { state: "found", ledger: object }} readLedger
  * @property {(scope: string, ledger: object) => void} saveLedger  one file per scope; each save is a new version
  * @property {(scope: string) => void} dropLedger
+ * @property {(prefix: string) => string[]} legacyMarkers  names of the marker Accounts the earlier seed mechanism left
+ * @property {(names: string[]) => string[]} accountsNamed  which of these Account names the org holds (a tree seed copy no ledger tracks)
+ * @property {(keys: { accountNames: string[], leadEmails: string[] }) => void} removeLegacySeed  those accounts with their
+ *   cases, opportunities and contacts, and the unconverted leads with those emails (the one-time migration); throws on failure
  */
 
 /** Refuse any org that may be production: the Dev Hub, an org that cannot be identified, and anything not a sandbox or the Dev Hub's own scratch org. */
@@ -50,18 +59,72 @@ export function loadTestData(store, { request, scope, profile = null, profileSou
   if (plan.problems.length) throw new DataRequestError(plan.problems);
   const shape = profile ? { profile, warnings: [], profiled: null } : productionProfile(profileSource, plan.order, { rules, today });
   const { records, warnings } = generateRecords({ schema, plan, profile: shape.profile, rules, seed: `${scope} ${id}`, today });
-  const leftovers = decision.previous ? removeTracked(store, decision.previous) : {};
-  let ledger = begin({ scope, requestId: id, loadedAt: today.toISOString(), order: plan.order, leftovers });
+  const ledger = replaceTracked(store, { scope, id, records, order: plan.order, previous: decision.previous, today });
+  return { loaded: true, summary: `${summary(ledger)} from ${request.objects.map(describeEntry).join("; ")}`, warnings: [...shape.warnings, ...warnings], profiled: shape.profiled };
+}
+
+/**
+ * Load a tree seed (the core seed, or a story's plan.json: tree-seed.mjs) into the store's org, once, tracked by a Data
+ * ledger like a request: its id is the seed's (a hash of its files), so the same seed already loaded does nothing and a
+ * changed one replaces exactly the earlier records by id. `legacy` ({ prefix, except }) names the marker Accounts the
+ * earlier mechanism left ("[seed <hash>]", "[seed story <key> <hash>]"): an org with no ledger for this scope but such a
+ * marker had the seed loaded the old way, so that copy (its accounts by name with their children, its leads by email,
+ * and the markers) is removed once before this load. `supersedes`: scopes whose records this seed now holds (a story
+ * seed folded into the core seed): after a load their ledgers' records go. Records people made stay.
+ * Returns { loaded, summary, migrated: [marker names] | null, warnings }.
+ */
+export function loadTreeSeed(store, { scope, id, files, legacy = null, supersedes = [], today = new Date() }) {
+  guardAgainstProduction(store.identity(), store.alias);
+  const found = store.readLedger(scope);
+  const decision = decide({ ...found, scope }, id);
+  if (decision.action === "skip") return { loaded: false, summary: summary(decision.ledger), migrated: null, warnings: [] };
+  if (decision.action === "refuse") throw new Error(decision.reason);
+  const records = treeSeedRecords(expandSeed(files, { today }));
+  const warnings = [];
+  const migrated = found.state === "none" && legacy ? removeLegacySeed(store, records, legacy, warnings) : null;
+  const ledger = replaceTracked(store, { scope, id, records, order: [...new Set(records.map((r) => r.object))], previous: decision.previous, today });
+  for (const other of supersedes) if (store.readLedger(other).state === "found") warnings.push(`${removeTestData(store, other).summary} (folded into ${scope})`);
+  return { loaded: true, summary: summary(ledger), migrated, warnings };
+}
+
+/**
+ * A copy of a tree seed no ledger tracks, removed by the seed's own keys before the tracked load: the earlier
+ * mechanism's (found by its marker Accounts), or, with no marker, the seed's own accounts already in the org (a
+ * snapshot whose ledger file did not come with its records would otherwise give every new org two of each). Returns
+ * what was found (marker names, or "<n> untracked accounts"), or null.
+ */
+function removeLegacySeed(store, records, { prefix, except = null }, warnings) {
+  const seedNames = [...new Set(records.filter((r) => r.object === "Account").map((r) => r.fields.Name).filter(Boolean))];
+  const markers = store.legacyMarkers(prefix).filter((name) => !except || !name.startsWith(except));
+  const untracked = markers.length || !seedNames.length ? [] : store.accountsNamed(seedNames);
+  if (!markers.length && !untracked.length) return null;
+  const found = markers.length ? markers : [`${untracked.length} untracked accounts named as in the seed`];
+  if (!markers.length) warnings.push(`found ${found[0]} and no Data ledger: removed them before loading (a snapshot without its ledger file?)`);
+  const leadEmails = [...new Set(records.filter((r) => r.object === "Lead").map((r) => r.fields.Email).filter(Boolean))];
+  try { store.removeLegacySeed({ accountNames: [...seedNames, ...markers], leadEmails }); } catch (e) {
+    warnings.push(`could not remove the copy of the seed no ledger tracks (${found.join(", ")}): ${e.message}. Loading beside it; recreate the org for a clean copy`);
+  }
+  return found;
+}
+
+/**
+ * Records into the org under a scope's ledger: the previous ledger's records removed by id first (children first; any
+ * that fail are carried as leftovers), then batch by batch, each record's parent references turned into ids, the ledger
+ * saved after every batch, then marked complete. Returns the finished ledger.
+ */
+function replaceTracked(store, { scope, id, records, order, previous, today }) {
+  const leftovers = previous ? removeTracked(store, previous) : {};
+  let ledger = begin({ scope, requestId: id, loadedAt: today.toISOString(), order, leftovers });
   const ids = {};
-  for (const batch of batchesOf(records, store.batchSize)) {
-    const loaded = store.insert(batch.object, withParentIds(batch.records, ids));
-    for (const { ref, id: recordId } of loaded) ids[ref] = recordId;
+  for (const batch of batchesOf(records, store)) {
+    const loaded = store.insert(batch.object, withParentIds(batch.records, ids), { refsNeeded: batch.refsNeeded });
+    for (const { ref, id: recordId } of loaded) if (ref) ids[ref] = recordId;
     ledger = record(ledger, batch.object, loaded.map((l) => l.id));
     saveOrExplain(store, scope, ledger, { object: batch.object, ids: loaded.map((l) => l.id) });
   }
   ledger = finish(ledger);
   saveOrExplain(store, scope, ledger, { object: null, ids: [] });
-  return { loaded: true, summary: `${summary(ledger)} from ${request.objects.map(describeEntry).join("; ")}`, warnings: [...shape.warnings, ...warnings], profiled: shape.profiled };
+  return ledger;
 }
 
 /** A typed request ("Account 20; Contact 2 per Account"), read against the org's own objects (any case, did-you-mean). Throws DataRequestError. */
@@ -170,14 +233,23 @@ function saveOrExplain(store, scope, ledger, justLoaded) {
   }
 }
 
-/** Records cut into batches of one object each, in insert order. */
-function batchesOf(records, size) {
+/**
+ * Records cut into batches of one object each, in insert order: { object, records, refsNeeded }. refsNeeded: a later
+ * record references one of them, so the store must say which reference got which id. The store sizes the batches
+ * (batchSizeFor: a big run of records nothing references may go as one bulk job), else batchSize each.
+ */
+function batchesOf(records, store) {
+  const parents = new Set(records.flatMap((r) => Object.values(r.parents)));
   const byObject = [];
   for (const r of records) {
     const last = byObject[byObject.length - 1];
     if (last?.object === r.object) last.records.push(r); else byObject.push({ object: r.object, records: [r] });
   }
-  return byObject.flatMap(({ object, records: list }) => chunk(list, size).map((part) => ({ object, records: part })));
+  return byObject.flatMap(({ object, records: list }) => {
+    const refsNeeded = list.some((r) => parents.has(r.ref));
+    const size = store.batchSizeFor?.(list.length, { refsNeeded }) ?? store.batchSize;
+    return chunk(list, size).map((part) => ({ object, records: part, refsNeeded }));
+  });
 }
 
 /** Each record's parent references replaced by the ids those parents got. A parent with no id yet is a bug: say which. */
