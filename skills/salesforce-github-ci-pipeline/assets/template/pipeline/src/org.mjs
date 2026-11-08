@@ -97,6 +97,8 @@ function resolve(target, opts) {
   return org;
 }
 
+/** How long after a snapshot turns Active an INVALID_ACCESS_LEVEL from it means "still settling", not "broken". */
+const SETTLING_HOURS = 2;
 
 export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms), log = console.error, keyFile = process.env.SF_CI_KEY_FILE || `${process.env.RUNNER_TEMP || "/tmp"}/ci.key`, packages = packageList(), env = process.env,
   baselineDir = join(PIPELINE_ROOT, BASELINE_DIR), seedDir = join(PIPELINE_ROOT, "data/seed"), record = () => {},
@@ -270,8 +272,9 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
           if (kind !== "transient") break;
           if (attempt === 1) { log(`::warning::snapshot ${snapshot}: ${why.slice(0, 120)}... (a login or network error): trying once more`); sleep(30_000); }
         }
-        const transient = kind === "transient";
-        log(`::warning::snapshot ${snapshot} could not be used (${why || "no reason given"}): creating ${org.alias} from production's shape instead`);
+        // a snapshot still settling (that error, within SETTLING_HOURS of turning Active) is kept for the next org
+        const transient = kind === "transient" || (kind === "settling" && (self.snapshotAgeHours() ?? Infinity) < SETTLING_HOURS);
+        log(`::warning::snapshot ${snapshot} could not be used (${why || "no reason given"}): creating ${org.alias} from production's shape instead${transient ? " (the snapshot is kept: the next org tries it again)" : ""}`);
         record("snapshot", { action: "fallback", name: snapshot, org: org.description, why, transient });
         if (!transient) refuseSnapshot(snapshot, why);   // the next org goes straight to shape until a new snapshot is built
       }

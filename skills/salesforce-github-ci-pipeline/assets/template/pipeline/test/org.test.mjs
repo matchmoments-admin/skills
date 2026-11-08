@@ -769,6 +769,12 @@ test("a login error from a snapshot is tried once more and never refuses it; a r
   assert.equal(twice.events.find(([k]) => k === "snapshot")[1].transient, true);
   const real = run(["SnapshotNotActive: The snapshot is not active"]);
   assert.deepEqual([real.creates, real.refused], [1, ["LCB2610140537"]], "a snapshot error: no second try, refused");
+  const settling = "sf org create scratch failed: INVALID_ACCESS_LEVEL: We couldn’t create the snapshot INVALID_ACCESS_LEVEL. Error {2}";
+  list[0].CreatedDate = new Date(Date.now() - 10 * 60e3).toISOString().replace("Z", "+0000");
+  const fresh = run([settling]);
+  assert.deepEqual([fresh.how.fromSnapshot, fresh.refused], [false, []], "minutes old (live 8 Nov: refused 2 minutes after Active, fine 10 later): shape this once, the snapshot kept");
+  list[0].CreatedDate = "2026-10-14T05:37:00.000+0000";
+  assert.deepEqual(run([settling]).refused, ["LCB2610140537"], "days old: the same error means it is broken, refused");
 });
 
 test("one table says what kind of Salesforce failure an error is; every caller branches on the kind", async () => {
@@ -780,6 +786,7 @@ test("one table says what kind of Salesforce failure an error is; every caller b
   assert.equal(sfFailure("REQUEST_LIMIT_EXCEEDED: TotalRequests Limit exceeded"), "limit");
   assert.equal(sfFailure("ERROR: The org shape version is outdated. Recreate the org shape."), "shape");
   assert.equal(sfFailure("Deploy failed: Field Tier__c does not exist"), "real");
+  assert.equal(sfFailure("INVALID_ACCESS_LEVEL: We couldn’t create the snapshot INVALID_ACCESS_LEVEL. Error {2}"), "settling");
   for (const f of ["org.mjs", "improve.mjs", "org/users.mjs", "org/fleet.mjs"]) {
     assert.doesNotMatch(readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8"), /JwtAuthError|LICENSE_LIMIT_EXCEEDED|shape\.\{0,40\}|HTTP 50\[234\]/, `${f} keeps no failure-kind regex of its own: io.SF_FAILURES`);
   }
