@@ -3,7 +3,7 @@
 // arguments, calls the module that owns the command, and writes step outputs; the work lives in pipeline/src/.
 //   context   [--key K] [--branch B] [--labels a,b]     names for a story / the open sprint, as KEY=value lines
 //   labels    sync                                       create or update every label the pipeline uses
-//   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · temp · sweep · limits · capacity [--devs N] [--in-use N (active orgs other projects hold; not this pipeline's staging, UAT or story orgs)] [--uat-sandbox] (load and cost)
+//   org       ready <target> [--hotfix] [--manifest f] (the one way an org gets ready) · attach|remove <target> · retire-flows <alias> (Flows the source commits Obsolete or Draft, switched off) · temp · sweep · limits · capacity [--devs N] [--in-use N (active orgs other projects hold; not this pipeline's staging, UAT or story orgs)] [--uat-sandbox] (load and cost)
 //             advance <alias> --sha S   CI tested this commit in the org: it holds it now (no second deploy)
 //   data      seed --org A --request F|--data "Account 20; Contact 2 per Account" [--scope S] [--refresh] [--no-profile] · refresh --org A [--scope S] · status|remove --org A --scope S · check [--request F] · apply --story K --org A --data D   a Data request in any non-production org (apply: /data on a story, JSON outcome)
 //   next      --after review|ci|staging|release-pr|org-freed|any [--pr N]   what the journey owes next, started (journey.mjs)

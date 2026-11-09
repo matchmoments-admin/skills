@@ -90,6 +90,8 @@ jobs:
         env:
           JOB: ${{ steps.validate.outputs.job }}
         run: sf project deploy quick -o devhub --job-id "$JOB" --wait 30
+      - name: Switch off the Flows this release retires (a deploy of a Flow committed Obsolete leaves the active one running)
+        run: node pipeline/bin/pipe.mjs org retire-flows devhub
       - name: Smoke check
         run: sf data query -o devhub -q "SELECT COUNT() FROM Account" >/dev/null && echo "production responds"
       - name: The card says the deploy failed, and where to look

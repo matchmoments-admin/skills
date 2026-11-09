@@ -132,7 +132,9 @@ a mix, and a new record-triggered Flow with no reason.
 - Commit the Flow with `<status>Active</status>`. Run its tests with `sf flow run test -o issue-12 --test-level RunLocalTests`
   then `sf flow get test -o issue-12 --test-run-id <id>`.
 - Removing a Flow: a deploy cannot delete a Flow version that is active. Deactivate it first (commit the Flow with
-  `<status>Obsolete</status>`), and delete it in a later story; say in the plan which release does which.
+  `<status>Obsolete</status>`), and delete it in a later story; say in the plan which release does which. A deploy of
+  that file only adds an inactive version: the pipeline switches the active one off after every deploy (scratch orgs,
+  UAT, production: `pipe org retire-flows`), so do not deactivate it any other way.
 
 ## Deploying and testing in the scratch org
 The workflow gives you the story (title, acceptance criteria, where to see it) as a file, and an authenticated scratch org alias (for example `issue-12`) in the prompt. Type it literally: shell variables in commands are blocked by the agent's safety checks.

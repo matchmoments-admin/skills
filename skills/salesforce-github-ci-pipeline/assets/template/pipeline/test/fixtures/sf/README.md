@@ -24,3 +24,5 @@ uses. Re-record them when the CLI changes how it replies:
   with failed records exits 1 (`FailedRecordDetailsError`) with only `data.jobId` and `data.state` (`JobComplete`)
 - `bulk-results.json` with `bulk-success-records.csv` and `bulk-failed-records.csv`: `sf data bulk results --job-id`,
   which writes the two CSV files where it runs (27 loaded, 3 refused for a missing `LastName`; `sf__Id`, `sf__Error`)
+- `rest-patch-flowdefinition.json`: `sf api request rest /tooling/sobjects/FlowDefinition/<id> -X PATCH -b @<file>` with
+  `{"Metadata":{"activeVersionNumber":0}}`, which switches a Flow off (204, no body; recorded 9 Nov, sf 2.151.7)
