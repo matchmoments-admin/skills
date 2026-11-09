@@ -12,6 +12,7 @@ import { dataMethods } from "./org/data.mjs";
 import { usersMethods } from "./org/users.mjs";
 import { snapshotMethods, shapeInputsId, snapshotHolds } from "./org/snapshot.mjs";
 import { setupChangesMethods } from "./org/setup-changes.mjs";
+import { flowsMethods } from "./org/flows.mjs";
 // the helpers that moved to org/, still importable from here
 /** A Salesforce login or network failure: worth one more try, and no fault of a snapshot. */
 export { findOrphans, isPipelineOrg, capacityProblem, shapeOutdated, createRefusal, storyRefusal, mergedBefore, doneStoryOrgs, DEVHUB, poolToMake, stalePool, POOL } from "./org/fleet.mjs";
@@ -148,7 +149,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
   // the methods of each concern (pipeline/src/org/), then the provisioning core below, which composes them
   const ctx = { sf, sleep, log, keyFile, packages, env, baselineDir, seedDir, record, snapshotRefused, refuseSnapshot, baseline, seedId, shapeId, active, deleteRecord, changed, snapshotList, snapshotBaselineOf, snapshotsChanged, makeStore };
   const self = {
-    ...fleetMethods(ctx), ...dataMethods(ctx), ...usersMethods(ctx), ...snapshotMethods(ctx), ...setupChangesMethods(ctx),
+    ...fleetMethods(ctx), ...dataMethods(ctx), ...usersMethods(ctx), ...snapshotMethods(ctx), ...setupChangesMethods(ctx), ...flowsMethods(ctx),
     /** The Dev Hub's active orgs (ScratchOrgInfo: SignupUsername, LoginUrl, Description, ExpirationDate, CreatedDate, Snapshot). */
     live: () => active(),
     /** The live org for a target, or null. Description is long text, which SOQL cannot filter, so match here. */
@@ -204,6 +205,7 @@ export function orgRegistry({ sf, sleep = (ms) => Atomics.wait(new Int32Array(ne
       // baseline redeploy cost a minute or two per org, and retried components a fresh org could not take)
       try { self.deploy(org.alias, { manifest, skipBaseline: Boolean(how?.baseline && how.baseline === baseline()) }); }
       catch (e) { e.phase = "deploy"; throw e; }   // the change's own deploy failed (CI: a code failure, so autofix may start)
+      self.retireFlows(org.alias);   // a deploy leaves a Flow committed Obsolete still active (org/flows.mjs)
       self.prepare(org.alias);
       self.seed(org.alias, seedFor);
       if (org.kind === "sprint") self.volume(org.alias, Number(env.VOLUME_RECORDS ?? 5000));   // staging only

@@ -54,7 +54,7 @@ function describeIn(rest, apiVersion, names) {
  * without the @ the CLI sends the path itself). A call without one goes as a request definition with an empty raw body:
  * `sf api request rest -X DELETE` alone fails with "No 'mode' found in 'body' entry" (sf 2.151.7, checked 8 Nov).
  */
-function restIn({ sf, alias, apiVersion }) {
+export function restIn({ sf, alias, apiVersion }) {
   return function rest(method, path, body) {
     const url = `/services/data/v${apiVersion}${path}`;
     const args = ["api", "request", "rest", "-o", alias];

@@ -52,7 +52,8 @@ export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, 
   "org attach": () => { const o = orgs().attach(arg(0)); output({ alias: o.alias }); return say(o.alias); },
   "org remove": () => { const o = names.orgFor(arg(0)); if (orgs().remove(arg(0))) record("org", { action: "deleted", org: o?.description, story: o?.key }); },
   "org remove-tagged": () => { if (orgs().removeTagged(arg(0))) record("org", { action: "deleted", org: arg(0) }); },
-  "org prepare": () => { orgs().prepare(arg(0)); },
+  "org prepare": () => { orgs().retireFlows(arg(0)); orgs().prepare(arg(0)); },   // after CI's delta deploy: retired Flows off, then users
+  "org retire-flows": () => { const off = orgs().retireFlows(arg(0)); output({ off: off.join(",") }); return say(off.length ? `switched off: ${off.join(", ")}` : "no retired Flow is active"); },   // production, a UAT sandbox: after their deploy
   "org deploy": () => { orgs().deploy(arg(0), { manifest: flag("manifest") }); },
   "org temp": () => { const o = orgs().temporary(arg(0)); record("org", { action: "created", org: o.description }); output({ alias: o.alias, temp: true }); return say(o.alias); },
   "org changes": () => { const o = orgs(), c = o.retrieveChanges(arg(0), o.setupChanges(arg(0), { exclude: JSON.parse(readFileSync("config/baseline.json", "utf8")).exclude })); output({ count: c.length }); return say(c.map((x) => `${x.type}:${x.name}`).join("\n") || "no Setup changes"); },
