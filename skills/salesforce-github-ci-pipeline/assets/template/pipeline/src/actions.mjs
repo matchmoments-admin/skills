@@ -76,10 +76,10 @@ export function mayAct({ login, type, permission }) {
 
 /**
  * Do it. where: { number, isPr, pr?: { headRefName, headRefOid, baseRefName } }; who: the login (for the record).
- * deps: { host, appGh (gh as the pipeline App), gh (gh with the Actions token), inUat(sha), authority(action, login): why
+ * deps: { host, runner, appGh (gh as the pipeline App), gh (gh with the Actions token), inUat(sha), authority(action, login): why
  * this person may not approve | overrule | budget, or null (gate.authorityProblemFor on the PR's facts) }. Returns what was done.
  */
-export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority = () => null }) {
+export function perform(id, arg, where, who, { host, runner, appGh, gh, inUat, authority = () => null }) {
   const a = ACTIONS[id];
   if (id === "uat-fail" || id === "uat-pass") {
     const pr = where.pr;
@@ -87,13 +87,13 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority
     if (!inUat(pr.headRefOid)) return { said: `UAT is not running \`${pr.headRefOid.slice(0, 7)}\` (the release PR's latest commit) yet: it redeploys after the staging regression. Sign off when **Ready for UAT** names this commit.` };
     const pass = id === "uat-pass";
     host.status(pr.headRefOid, STATUS.uat, pass ? "success" : "failure", pass ? `Signed off in UAT by @${who}` : `UAT failed (@${who}): ${arg || "see the comments"}`);
-    host.dispatch("gate.yml", { pr: where.number });
+    runner.start("gate", { pr: where.number });
     return { done: pass ? `UAT signed off by @${who} on ${pr.headRefOid.slice(0, 7)}` : `UAT marked failed by @${who}` };
   }
   if (!a) return { said: null };
   // from a story: the story starts by itself once the sprint is open (one press, not two)
-  if (id === "sprint") { host.dispatch("sprint-start.yml", { sprint: arg || where.nextSprint, ...(where.isPr ? {} : { start: String(where.number) }) }); return { done: `starting sprint ${arg || where.nextSprint}${where.isPr ? "" : `, then #${where.number}`}` }; }
-  if (id === "release-cut") { host.dispatch("release-cut.yml"); return { done: "cutting the sprint's release" }; }
+  if (id === "sprint") { runner.start("sprint-start", { sprint: arg || where.nextSprint, ...(where.isPr ? {} : { start: String(where.number) }) }); return { done: `starting sprint ${arg || where.nextSprint}${where.isPr ? "" : `, then #${where.number}`}` }; }
+  if (id === "release-cut") { runner.start("release-cut"); return { done: "cutting the sprint's release" }; }
   if (a.on === "pr" && !where.isPr) return { said: `\`${id}\` works on a pull request.` };
   if (a.on === "issue" && where.isPr) return { said: `\`${id}\` works on the story (the issue).` };
   if (id === "ship") {
@@ -102,7 +102,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority
     const no = authority("approve", who);
     if (no) return { said: `Not signed off: ${no}.` };
     host.status(pr.headRefOid, STATUS.signoff, "success", `Signed off by @${who}`);
-    host.dispatch("gate.yml", { pr: where.number });
+    runner.start("gate", { pr: where.number });
     return { done: `signed off by @${who} on ${pr.headRefOid.slice(0, 7)}` };
   }
   if (id === "review-ok") {   // a person overrules the AI review on this exact commit; the reason goes on the status and the PR
@@ -112,7 +112,7 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority
     if (no) return { said: `The AI review stands: ${no}.` };
     host.status(pr.headRefOid, STATUS.review, "success", REVIEW.overruled(who, arg));
     host.record?.("overrule", { pr: Number(where.number), sha: pr.headRefOid, by: who, why: arg.slice(0, 300) });   // the metrics: how often each model's review is overruled
-    host.dispatch("gate.yml", { pr: where.number });
+    runner.start("gate", { pr: where.number });
     return { done: `AI review overruled by @${who} on ${pr.headRefOid.slice(0, 7)}`, said: `✋ @${who} accepted this change over the AI review on \`${pr.headRefOid.slice(0, 7)}\`: ${arg}. A new push needs a review again.` };
   }
   if (id === "budget-ok") {   // an approver gives a story whose agents stopped at its AI budget as much again; the reason goes on record
@@ -125,27 +125,27 @@ export function perform(id, arg, where, who, { host, appGh, gh, inUat, authority
     appGh([where.isPr ? "pr" : "issue", "edit", String(where.number), "--remove-label", "blocked"], { allowFail: true });
     return { done: `AI budget for story ${story} extended by @${who}`, said: `💵 @${who} gave story ${story} another AI budget (${setting("AI_STORY_BUDGET_USD")} USD): ${arg}. Start the agent again (for example \`/fix\` or \`/build\`).` };
   }
-  if (id === "gate") { host.dispatch("gate.yml", { pr: where.number }); return { done: "re-running the gate" }; }
-  if (id === "ci") { host.dispatch("ci.yml", { ref: where.pr.headRefName }, where.pr.headRefName); return { done: "re-running CI" }; }
-  if (id === "staging") { host.dispatch("staging-deploy.yml", {}, where.pr.headRefName); return { done: "re-running the staging regression" }; }
-  if (id === "uat") { host.dispatch("uat-deploy.yml", { pr: where.number, again: "true" }); return { done: "deploying to UAT again" }; }
-  if (id === "uat-login") { host.dispatch("uat-login.yml", { pr: where.number, who }); return { done: `sending @${who} a UAT login` }; }
+  if (id === "gate") { runner.start("gate", { pr: where.number }); return { done: "re-running the gate" }; }
+  if (id === "ci") { runner.start("ci", { ref: where.pr.headRefName }, { ref: where.pr.headRefName }); return { done: "re-running CI" }; }
+  if (id === "staging") { runner.start("staging", {}, { ref: where.pr.headRefName }); return { done: "re-running the staging regression" }; }
+  if (id === "uat") { runner.start("uat-deploy", { pr: where.number, again: "true" }); return { done: "deploying to UAT again" }; }
+  if (id === "uat-login") { runner.start("uat-login", { pr: where.number, who }); return { done: `sending @${who} a UAT login` }; }
   if (id === "org-login" || id === "org-login-admin") {   // on the story (after Start) or its PR: the story's scratch org
     const target = where.isPr ? where.pr.headRefName : storyBranch(String(where.number));
-    host.dispatch("uat-login.yml", { pr: where.number, who, target, admin: String(id === "org-login-admin") });
+    runner.start("uat-login", { pr: where.number, who, target, admin: String(id === "org-login-admin") });
     return { done: `sending @${who} ${id === "org-login-admin" ? "an admin" : "a"} login to ${target}` };
   }
   if (id === "retrieve") {
     const key = where.isPr ? storyOf(where.pr.headRefName) : String(where.number);
     if (!key) return { said: "`/retrieve` works on a story or its pull request." };
-    host.dispatch("story-retrieve.yml", { story: key, who });
+    runner.start("story-retrieve", { story: key, who });
     return { done: `bringing @${who}'s Setup changes into story ${key}` };
   }
   if (id === "data") {   // test data on request: the story's org reads it, the story's branch keeps it (story-data.yml)
     const key = where.isPr ? storyOf(where.pr.headRefName) : String(where.number);
     if (!key) return { said: "`/data` works on a story or its pull request." };
     if (!arg.trim()) return { said: `@${who}: say which records, on one line: \`/data Account 20; Contact 2 per Account; Case 5 Status=Escalated\`. They are generated to fit the story's org, shaped like production, and committed to the story so staging and UAT get them too. \`/data refresh\` loads the story's test data again, shaped like production today.` };
-    host.dispatch("story-data.yml", { story: key, who, request: arg });
+    runner.start("story-data", { story: key, who, request: arg });
     return { done: `loading the test data @${who} asked for into story ${key}'s org` };
   }
   if (id === "fix-story") {
@@ -177,9 +177,9 @@ export function help(isPr) {
 /**
  * The whole action, as both workflows run it: check the person, work out what they asked for (a command, or the boxes
  * ticked between two versions of the card), do it, say anything that needs saying, and refresh the card (clearing the
- * box). deps: { io, host, cards, log, appToken }. Returns a one-line summary.
+ * box). deps: { io, host, runner, cards, log, appToken }. Returns a one-line summary.
  */
-export async function act({ number, isPr, who, whoType, command: text = null, before = null, after = null, commentId = null }, { io, host, cards, log = () => {}, appToken, makeStory = null, specMark = "<!-- pipeline:spec -->" }) {
+export async function act({ number, isPr, who, whoType, command: text = null, before = null, after = null, commentId = null }, { io, host, runner, cards, log = () => {}, appToken, makeStory = null, specMark = "<!-- pipeline:spec -->" }) {
   const permission = host.api("GET", `repos/${host.repo}/collaborators/${who}/permission`)?.permission;
   if (!mayAct({ login: who, type: whoType, permission })) return `@${who} cannot act here (${permission || "no access"})`;
   const requested = text !== null ? [command(text)].filter(Boolean) : ticked(before, after).map((id) => ({ id, arg: "" }));
@@ -219,7 +219,7 @@ export async function act({ number, isPr, who, whoType, command: text = null, be
     }
     // the approval policy (approval.mjs) on the PR's facts; on an issue (no PR yet) only APPROVERS applies
     const authority = (action, login) => (at.pr ? authorityProblemFor(host.prFacts(at.pr.number), action, login) : authorityProblem(action, { approvers: approverList(setting("APPROVERS")) }, login));
-    const r = perform(id, arg, { ...at, nextSprint: nextSprint(sprints) }, who, { host, appGh, gh: io.gh, inUat: at.pr ? inUatOf(at.pr) : () => false, authority });
+    const r = perform(id, arg, { ...at, nextSprint: nextSprint(sprints) }, who, { host, runner, appGh, gh: io.gh, inUat: at.pr ? inUatOf(at.pr) : () => false, authority });
     if (r.said) io.gh(["issue", "comment", String(number), "--body", r.said]);
     if (r.done) { log(r.done); host.record("stage", { story: storyOf(pr?.headRefName || "") || (isPr ? undefined : String(number)), pr: isPr ? Number(number) : undefined, what: `${id} by @${who}`, state: "running" }); }
   }

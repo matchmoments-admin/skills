@@ -27,6 +27,7 @@ import * as closeout from "../src/closeout.mjs";
 import { lane, jobId, wakeAll, waiterJob } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
+import { actionsRunner } from "../src/runners/github-actions.mjs";
 import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
@@ -213,17 +214,17 @@ test("every dispatch names its ref (without one, gh needs contents: read to find
     for (const line of y.split("\n").filter((l) => /gh workflow run /.test(l))) assert.match(line, /--ref /, `${f}: ${line.trim()}`);
   }
   const calls = [];
-  codeHost({ io: { gh: (a) => calls.push(a.join(" ")) }, env: { GH_REPO: "o/r" } }).dispatch("gate.yml", { pr: 7 });
+  actionsRunner({ io: { gh: (a) => calls.push(a.join(" ")) }, repo: "o/r", env: {} }).start("gate", { pr: 7 });
   assert.deepEqual(calls, ["workflow run gate.yml --ref main -f pr=7"]);
 });
 
 test("actions: a sign-off is a trusted status on the head (into the sprint); into main it asks for a GitHub approval", () => {
   const did = [];
-  const host = { repoUrl: "https://github.com/o/r", status: (...a) => did.push(["status", ...a]), dispatch: (...a) => did.push(["dispatch", a[0]]) };
-  const deps = { host, appGh: (a) => did.push(["gh", a.join(" ")]), gh: () => {}, inUat: (sha) => sha === "in-uat" };
+  const host = { repoUrl: "https://github.com/o/r", status: (...a) => did.push(["status", ...a]) };
+  const deps = { host, runner: { start: (...a) => did.push(["dispatch", a[0]]) }, appGh: (a) => did.push(["gh", a.join(" ")]), gh: () => {}, inUat: (sha) => sha === "in-uat" };
   const story = { headRefName: "issue-106", headRefOid: "h1", baseRefName: "release/w45" };
   assert.match(actions.perform("ship", "", { number: 108, isPr: true, pr: story }, "dev", deps).done, /signed off by @dev/);
-  assert.deepEqual(did.slice(0, 2), [["status", "h1", "pipeline/sign-off", "success", "Signed off by @dev"], ["dispatch", "gate.yml"]]);
+  assert.deepEqual(did.slice(0, 2), [["status", "h1", "pipeline/sign-off", "success", "Signed off by @dev"], ["dispatch", "gate"]]);
   assert.match(actions.perform("ship", "", { number: 7, isPr: true, pr: { ...story, baseRefName: "main" } }, "dev", deps).said, /need a GitHub approval/);
   const release = { headRefName: "release/w45", headRefOid: "not-yet", baseRefName: "main" };
   assert.match(actions.perform("uat-pass", "", { number: 110, isPr: true, pr: release }, "dev", deps).said, /UAT is not running/);
@@ -255,8 +256,8 @@ test("correctness wiring: story PR base from the story, UAT never reset by a red
   assert.doesNotMatch(wf("gate"), /STATE=pending/, "the decision's status is mapped in one place (gateStatus)");
   assert.match(wf("gate"), /status set pipeline\/gate failure "\$HEAD_SHA" "Production rejected it/);
   const did = [];
-  actions.perform("uat", "", { number: 110, isPr: true, pr: { headRefName: "release/w45" } }, "dev", { host: { dispatch: (w, i) => did.push([w, i]) } });
-  assert.deepEqual(did, [["uat-deploy.yml", { pr: 110, again: "true" }]], "the card's box deploys again on purpose");
+  actions.perform("uat", "", { number: 110, isPr: true, pr: { headRefName: "release/w45" } }, "dev", { runner: { start: (j, i) => did.push([j, i]) } });
+  assert.deepEqual(did, [["uat-deploy", { pr: 110, again: "true" }]], "the card's box deploys again on purpose");
   assert.equal(names.baseFor({ labels: ["feature"], openReleaseBranch: "release/w45" }), "release/w45");
   assert.equal(names.baseFor({ labels: ["hotfix"], openReleaseBranch: "release/w45" }), "main");
 });
@@ -275,11 +276,11 @@ test("the gate holds main while production is rolled back, and a story until its
 
 test("a person can overrule a wrong AI review on the exact commit, with the reason on record; the reviewer sees CI (PR #144)", () => {
   const did = [];
-  const host = { status: (...a) => did.push(["status", ...a]), dispatch: (w, i) => did.push(["dispatch", w, i]) };
+  const host = { status: (...a) => did.push(["status", ...a]) }, runner = { start: (j, i) => did.push(["dispatch", j, i]) };
   const pr = { headRefName: "issue-143", headRefOid: "abc1234def", baseRefName: "release/2026-w46" };
-  const r = actions.perform("review-ok", "THIS_YEAR is valid SOQL; CI passed", { number: 144, isPr: true, pr }, "pm", { host });
+  const r = actions.perform("review-ok", "THIS_YEAR is valid SOQL; CI passed", { number: 144, isPr: true, pr }, "pm", { host, runner });
   assert.deepEqual(did[0], ["status", "abc1234def", gate.STATUS.review, "success", "AI review overruled by @pm: THIS_YEAR is valid SOQL; CI passed"]);
-  assert.deepEqual(did[1], ["dispatch", "gate.yml", { pr: 144 }]);
+  assert.deepEqual(did[1], ["dispatch", "gate", { pr: 144 }]);
   assert.match(r.said, /accepted this change over the AI review on `abc1234`: THIS_YEAR/);
   assert.deepEqual(actions.command("/review-ok because"), { id: "review-ok", arg: "because" });
   assert.equal(roles.modelFor("review", ""), "claude-sonnet-5-5");

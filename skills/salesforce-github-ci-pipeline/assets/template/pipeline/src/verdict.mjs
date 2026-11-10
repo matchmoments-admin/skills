@@ -75,25 +75,21 @@ export function reviewVerdict(commentBodies) {
  *  actually ran (agentRan(runId); a run that failed before the agent, e.g. on a permission, is not a round: PR #144's
  *  first two were not). Robust to what the agent called its commits. */
 export const fixRunsFor = (runs, pr, currentRunId, agentRan = () => true, since = null) =>
-  runs.filter((r) => r.display_title === `ai-fix PR #${pr}` && r.status === "completed" && ["success", "failure"].includes(r.conclusion) && String(r.id) !== String(currentRunId)
-    && (!since || String(r.created_at) > since) && agentRan(r.id)).length;
+  runs.filter((r) => r.title === `ai-fix PR #${pr}` && !r.active && ["success", "failure"].includes(r.conclusion) && String(r.id) !== String(currentRunId)
+    && (!since || String(r.createdAt) > since) && agentRan(r.id)).length;
 
 /** When a person last pushed to the PR (commits: gh pr view --json commits): rounds count again from there. Pure. */
 // A commit is a person's when one of its authors is neither the pipeline nor Claude (an AI commit's co-author).
 export const lastHumanPush = (commits, isHuman = isHumanAuthor) => (commits || []).filter((c) => (c.authors || []).some((a) => isHuman(a.login))).map((c) => c.committedDate).sort().pop() || null;
 
-/** How many AI fix rounds PR `pr` has had since a person last pushed (host: the code host; gh: the gh seam). */
-export const fixRoundsUsed = (pr, { host, gh, runId = process.env.GITHUB_RUN_ID }) =>
-  fixRunsFor(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), pr, runId, (id) => ranAgent(host.api("GET", `repos/${host.repo}/actions/runs/${id}/jobs`)?.jobs),
+/** How many AI fix rounds PR `pr` has had since a person last pushed (runner: the CI runner; gh: the gh seam). */
+export const fixRoundsUsed = (pr, { runner, gh, runId = runner.runId }) =>
+  fixRunsFor(runner.runs("ai-fix", { dispatched: true }), pr, runId, (id) => runner.agentRan(id),
     lastHumanPush(gh(["pr", "view", String(pr), "--json", "commits"])?.commits));   // a person's push resets the count
 
 /** Is an AI fix of PR `pr` queued or running? runs: ai-fix.yml's dispatched runs. A second one would fix the same
  * findings and push on top of it (#460: CI's autofix and a later failure each started one). Pure. */
-export const fixInFlight = (runs, pr) => runs.some((r) => r.display_title === `ai-fix PR #${pr}` && r.status !== "completed");
-
-/** Did this run's jobs run the agent step? jobs: the run's jobs API list. Pure. */
-// unknown jobs (an API error) count as a round, so the limit always holds
-export const ranAgent = (jobs) => !Array.isArray(jobs) || jobs.some((j) => (j.steps || []).some((s) => /claude-agent/.test(s.name || "") && ["success", "failure"].includes(s.conclusion)));
+export const fixInFlight = (runs, pr) => runs.some((r) => r.title === `ai-fix PR #${pr}` && r.active);
 
 /** How many AI fix rounds a branch has had, from the commit subjects since its base (the older count). */
 export const fixRounds = (subjects) => subjects.filter((s) => String(s).startsWith(FIX_PREFIX)).length;

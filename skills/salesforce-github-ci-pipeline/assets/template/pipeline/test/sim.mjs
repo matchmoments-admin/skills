@@ -7,6 +7,7 @@
 // commit graph answers compare. Pushes and dispatches start workflow runs (world.inflight), which a scenario finishes
 // (world.finish), as GitHub would: the journey then reacts, unless the event is dropped.
 import { codeHost } from "../src/github.mjs";
+import { actionsRunner } from "../src/runners/github-actions.mjs";
 
 export const REPO = "o/r";
 const BOT = { login: "github-actions[bot]", type: "Bot" };
@@ -133,6 +134,12 @@ export function world({ start = Date.parse("2026-10-14T00:00:00Z"), aiReview = f
     /** A fresh code host on this world (facts are cached per host, as per process in CI: take a new one per step). */
     host(env = {}) {
       return codeHost({ io, env: { GH_REPO: REPO, GITHUB_RUN_ID: s.actingRun || run(), PIPELINE_EVENTS: "off", ...env } });
+    },
+    /** The CI runner on this world: GitHub Actions, over the same io (its starts become runs here). */
+    runner(env = {}) {
+      const full = { GH_REPO: REPO, GITHUB_RUN_ID: s.actingRun || run(), PIPELINE_EVENTS: "off", ...env };
+      const h = codeHost({ io, env: full });
+      return actionsRunner({ io, api: h.api, repo: h.repo, repoUrl: h.repoUrl, env: full });
     },
     /** A commit on a branch (made from `from` when the branch is new). */
     commit(branch, files, { by = "dev", headline = "change", from = "main" } = {}) {
