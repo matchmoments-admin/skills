@@ -12,7 +12,7 @@ import { freeIdleOrgs } from "../../src/journey.mjs";
 import { sfFailure } from "../../src/io.mjs";
 import { readLog, summarize } from "../../src/events.mjs";
 
-export function orgCommands({ io, host, runner, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record, freed }) {
+export function orgCommands({ io, host, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record, freed }) {
   function orgLane(target, { card = true } = {}) {
     const org = names.orgFor(target);
     if (!org) throw new Error(`Not an org target: ${target}`);
@@ -128,7 +128,7 @@ export function orgCommands({ io, host, runner, cards, tracker, flag, has, arg, 
     if (waited > 30) record("lane", { lane: org.lock, waitedSeconds: waited, story: org.key });
     output({ lane: org.lock }); return say(org.lock);
   },
-  "lane release": () => { const { org, l } = orgLane(arg(0)); if (l.release(org.lock) && l.waiters(org.lock).length) runner.start("lane-wake"); },
+  "lane release": () => { const { org, l } = orgLane(arg(0)); if (l.release(org.lock) && l.waiters(org.lock).length) host.repoDispatch("lane-freed"); },
   "lane wake": async () => {   // --wait M: minutes to wait for a parked run to end (reconcile passes 1)
     const l = lane({ api: host.api, repo: host.repo, holder: {}, sleep, log }), dropped = [];
     const prOf = (w) => /PR #(\d+)/.exec(host.api("GET", `repos/${host.repo}/actions/runs/${w.run}`)?.display_title || "")?.[1] || null;   // ai-fix and ui-test run-names
@@ -139,7 +139,7 @@ export function orgCommands({ io, host, runner, cards, tracker, flag, has, arg, 
   },
   "lane due": () => {   // reconcile: start lane-wake when a parked job waits for a free lane (its holder died without letting go)
     if (!wakeDue({ api: host.api, repo: host.repo, l: lane({ api: host.api, repo: host.repo, holder: {}, sleep, log }) })) return say("no parked job waits for a free lane");
-    runner.start("lane-wake"); return say("a parked job waits for a free lane: started lane-wake");
+    host.dispatch("lane-wake.yml"); return say("a parked job waits for a free lane: started lane-wake");
   },
   };
 }

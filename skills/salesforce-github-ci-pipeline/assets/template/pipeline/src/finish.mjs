@@ -54,7 +54,7 @@ export function verdictOf(stage, { outcome = "", detail = "", weak = "", kind = 
  * Finish a stage on PR `pr` (or the open release PR of `branch`): the verdict on `sha`, then the gate, the card and
  * the journey, in that order, with facts gathered after the verdict. deps: { host, gh, cards, next(after, pr), record, log }.
  */
-export async function finish(stage, { pr = null, branch = null, sha = null, url = null, ...f }, { host, runner, gh, cards, next, record = () => {}, log = () => {} }) {
+export async function finish(stage, { pr = null, branch = null, sha = null, url = null, ...f }, { host, gh, cards, next, record = () => {}, log = () => {} }) {
   const s = STAGE[stage];
   const v = verdictOf(stage, f);
   if (!pr && branch) pr = host.releasePrOf(branch);
@@ -70,7 +70,7 @@ export async function finish(stage, { pr = null, branch = null, sha = null, url 
   }
   if (!pr) return { verdict: v, said: `${done.join(", ") || "no verdict"}; no open pull request` };
   // the gate when a person has acted (merge now if this was the last thing it waited on), then the card
-  if (nudge(host.prFacts(pr)).action === "dispatch") { runner.start("gate", { pr: String(pr) }); done.push("gate"); }
+  if (nudge(host.prFacts(pr)).action === "dispatch") { host.dispatch("gate.yml", { pr: String(pr) }); done.push("gate"); }
   await cards.refreshPr(pr);
   if (s.after) { const r = await next(s.after, pr); if (r?.steps?.length) done.push(r.said); }
   log(`finished ${stage} on #${pr}: ${done.join("; ") || "nothing to post"}`);
@@ -83,7 +83,7 @@ export async function finish(stage, { pr = null, branch = null, sha = null, url 
  * owes on its head, started. Idempotent: what was started is running at the next tick, so it is skipped. only: one PR.
  * deps: { host, gh, cards, next(after, pr), record, log }. Returns [{ pr, started: [..] } | { pr, skipped }].
  */
-export async function reconcile({ host, runner, gh, cards, next, record = () => {}, log = () => {}, only = null }) {
+export async function reconcile({ host, gh, cards, next, record = () => {}, log = () => {}, only = null }) {
   const open = (gh(["pr", "list", "--state", "open", "--limit", "100", "--json", "number,headRefName,baseRefName,isDraft"]) || [])
     .filter((p) => ["feature", "hotfix", "release"].includes(route(p)) && !p.isDraft && (!only || String(p.number) === String(only)));
   const runs = ["queued", "in_progress", "waiting"].flatMap((status) => host.api("GET", `repos/${host.repo}/actions/runs?status=${status}&per_page=100`)?.workflow_runs || []);
@@ -96,9 +96,9 @@ export async function reconcile({ host, runner, gh, cards, next, record = () => 
     // a gate production rejected stays failed on that head: re-validating the same code every tick only fails again
     const gate = standing(facts).gate;
     const rejected = gate.state === "failure" && /^Production rejected/.test(gate.description || "");
-    if (nudge(facts).action === "dispatch" && gate.state !== "success" && !rejected) { runner.start("gate", { pr: String(p.number) }); started.push("gate"); }
+    if (nudge(facts).action === "dispatch" && gate.state !== "success" && !rejected) { host.dispatch("gate.yml", { pr: String(p.number) }); started.push("gate"); }
     const r = await next("any", p.number);
-    started.push(...(r?.steps || []).map((s) => s.start || s.job));
+    started.push(...(r?.steps || []).map((s) => s.start || s.dispatch));
     if (started.length) {
       record("reconcile", { pr: p.number, started: started.join(",") });
       host.forget?.(p.number);   // the card shows what was just started, not the facts read before it

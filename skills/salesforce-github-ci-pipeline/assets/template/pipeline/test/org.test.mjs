@@ -208,8 +208,8 @@ test("UAT access from GitHub: the card links UAT; a stand-in offers 'Send me a U
   assert.match(sandbox, /your UAT sandbox login/);
   assert.doesNotMatch(sandbox, /act:uat-login/);
   const did = [];
-  actions.perform("uat-login", "", { number: 110, isPr: true, pr }, "tester1", { runner: { start: (j, i) => did.push([j, i]) } });
-  assert.deepEqual(did, [["uat-login", { pr: 110, who: "tester1" }]]);
+  actions.perform("uat-login", "", { number: 110, isPr: true, pr }, "tester1", { host: { dispatch: (w, i) => did.push([w, i]) } });
+  assert.deepEqual(did, [["uat-login.yml", { pr: 110, who: "tester1" }]]);
   const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const dir = mkdtempSync(`${tmpdir()}/uat-`);
@@ -443,14 +443,14 @@ test("enterprise A: a CLI warning never hides the real error; a refused snapshot
 
 test("admins' path (enterprise D): a login to the story's org from the story itself, as the persona or as an admin; Setup changes come back as a commit; people's changes only", () => {
   const did = [];
-  const deps = { runner: { start: (...a) => did.push(a) }, appGh: () => {}, gh: () => {}, inUat: () => false };
+  const deps = { host: { dispatch: (...a) => did.push(a) }, appGh: () => {}, gh: () => {}, inUat: () => false };
   actions.perform("org-login-admin", "", { number: 166, isPr: false }, "alice", deps);
   actions.perform("org-login", "", { number: 180, isPr: true, pr: { headRefName: "issue-166" } }, "bob", deps);
   actions.perform("retrieve", "", { number: 166, isPr: false }, "alice", deps);
   assert.deepEqual(did, [
-    ["uat-login", { pr: 166, who: "alice", target: "issue-166", admin: "true" }],
-    ["uat-login", { pr: 180, who: "bob", target: "issue-166", admin: "false" }],
-    ["story-retrieve", { story: "166", who: "alice" }]]);
+    ["uat-login.yml", { pr: 166, who: "alice", target: "issue-166", admin: "true" }],
+    ["uat-login.yml", { pr: 180, who: "bob", target: "issue-166", admin: "false" }],
+    ["story-retrieve.yml", { story: "166", who: "alice" }]]);
   assert.equal(actions.command("/admin-login").id, "org-login-admin");
   assert.equal(actions.command("/retrieve").id, "retrieve");
   // the started story's card offers them before there is a PR

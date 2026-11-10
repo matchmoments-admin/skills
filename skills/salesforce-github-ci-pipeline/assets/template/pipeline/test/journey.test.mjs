@@ -104,8 +104,8 @@ test("round 1: a person's push re-runs the review and resets the fix rounds; the
   const commits = [{ committedDate: "2026-10-08T10:55:01Z", authors: [{ login: "" }, { login: "claude" }] },
     { committedDate: "2026-10-08T11:45:04Z", authors: [{ login: "github-actions[bot]" }, { login: "claude" }] }];
   assert.equal(verdict.lastHumanPush(commits, (l) => l !== "claude" && !isBot(l)), "2026-10-08T10:55:01Z", "an AI commit co-authored by Claude is not a person's push");
-  const runs = [{ id: 1, title: "ai-fix PR #9", active: false, conclusion: "success", createdAt: "2026-10-08T10:00:00Z" },
-    { id: 2, title: "ai-fix PR #9", active: false, conclusion: "success", createdAt: "2026-10-08T11:00:00Z" }];
+  const runs = [{ id: 1, display_title: "ai-fix PR #9", status: "completed", conclusion: "success", created_at: "2026-10-08T10:00:00Z" },
+    { id: 2, display_title: "ai-fix PR #9", status: "completed", conclusion: "success", created_at: "2026-10-08T11:00:00Z" }];
   assert.equal(verdict.fixRunsFor(runs, 9, 0, () => true, "2026-10-08T10:55:01Z"), 1, "rounds count again from a person's push");
 });
 
@@ -126,10 +126,10 @@ test("start decisions: a job that has nothing to do is decided before a runner s
   assert.deepEqual([over.run, over.stop], [false, true]);
   assert.equal(start.decide("fix", { ai: on, branch: "issue-1", rounds: { n: 1, limit: 2 } }).run, true);
   assert.match(start.decide("fix", { ai: on, branch: "issue-1", fixing: true }).why, /already fixing/, "one fix at a time per PR (#460)");
-  const inFlight = [{ title: "ai-fix PR #9", active: false }, { title: "ai-fix PR #8", active: true }];
+  const inFlight = [{ display_title: "ai-fix PR #9", status: "completed" }, { display_title: "ai-fix PR #8", status: "queued" }];
   assert.equal(verdict.fixInFlight(inFlight, 9), false, "a finished fix does not count");
   assert.equal(verdict.fixInFlight(inFlight, 8), true, "a queued one does");
-  assert.equal(verdict.fixInFlight([{ title: "ai-fix PR #8", active: true }], 8), true);
+  assert.equal(verdict.fixInFlight([{ display_title: "ai-fix PR #8", status: "in_progress" }], 8), true);
   // the build pushes the sprint merge with its own commit: pushed alone, it ran CI on the old code and queued a fix
   const impl = readFileSync(new URL("../../.github/workflows/ai-implement.yml", import.meta.url), "utf8");
   const merge = impl.slice(impl.indexOf("name: Bring the story branch up to date"), impl.indexOf("uses: ./.pipeline/.github/actions/sf-auth"));
@@ -168,33 +168,32 @@ test("start decisions: a job that has nothing to do is decided before a runner s
   assert.equal(start.ciPlan({ ref: "issue-4", base: "main", files: null }).ui, true, "fails closed");
   // the job starter acts on the decision: dispatch, or post the verdict and say why
   const did = [];
-  const runner = { runId: "1", start: (j, i = {}, o) => did.push(o ? ["dispatch", j, i, o.ref] : ["dispatch", j, i]), runs: () => [], agentRan: () => true };
-  const host = { repo: "o/r", runUrl: "u", status: (...a) => did.push(["status", ...a]),
-    api: (m, path) => (path.includes("/compare/") ? { files: [{ filename: "docs/readme.md" }] } : {}) };
+  const host = { repo: "o/r", runUrl: "u", dispatch: (...a) => did.push(["dispatch", ...a]), status: (...a) => did.push(["status", ...a]),
+    api: (m, path) => (path.includes("/compare/") ? { files: [{ filename: "docs/readme.md" }] } : {}), workflowRuns: () => [] };
   const gh = (a) => { did.push(a.slice(0, 3).join(" ")); return a[0] === "pr" && a[1] === "view" ? { headRefName: "issue-5", baseRefName: "release/w", headRefOid: "h5", labels: [], state: "OPEN", commits: [] } : null; };
   const cards = { refreshPr: async () => did.push("card"), refresh: async () => did.push("card") };
-  const d = await start.startJob("review", 5, { host, runner, gh, cards, ai: on });
+  const d = await start.startJob("review", 5, { host, gh, cards, ai: on });
   assert.equal(d.run, false);
   assert.ok(did.some((x) => Array.isArray(x) && x[0] === "status" && x[1] === "h5" && x[3] === "success"), "posts not needed on the head");
   assert.ok(!did.some((x) => Array.isArray(x) && x[0] === "dispatch"), "no review runner");
   did.length = 0;
-  await start.startJob("fix", 5, { host, runner, gh, cards, ai: on });
-  assert.deepEqual(did.find((x) => Array.isArray(x) && x[0] === "dispatch"), ["dispatch", "ai-fix", { pr: 5 }]);
+  await start.startJob("fix", 5, { host, gh, cards, ai: on });
+  assert.deepEqual(did.find((x) => Array.isArray(x) && x[0] === "dispatch"), ["dispatch", "ai-fix.yml", { pr: 5 }]);
   // a review that runs is pending on the head first, so the card and a second start see it running (scenario fuzz)
   did.length = 0;
-  await start.startJob("review", 5, { host: { ...host, api: () => ({ files: [{ filename: "force-app/main/default/classes/A.cls" }] }) }, runner, gh, cards, ai: on });
+  await start.startJob("review", 5, { host: { ...host, api: () => ({ files: [{ filename: "force-app/main/default/classes/A.cls" }] }) }, gh, cards, ai: on });
   const order = did.filter(Array.isArray).map((x) => `${x[0]} ${x[0] === "status" ? `${x[2]} ${x[3]}` : x[1]}`);
-  assert.deepEqual(order, ["status pipeline/ai-review pending", "dispatch ai-review"]);
+  assert.deepEqual(order, ["status pipeline/ai-review pending", "dispatch ai-review.yml"]);
   // follow-ups: the same for the gate and an emergency merge
   did.length = 0;
   const removed = [];
-  await start.startFollowUps("staging delete-story-org", { pr: 9, base: "release/w", sha: "m1", story: "5" }, { host, runner, gh, cards, removeOrg: (t) => removed.push(t) });
-  assert.deepEqual(did.filter(Array.isArray), [["dispatch", "staging", {}, "release/w"]]);
+  await start.startFollowUps("staging delete-story-org", { pr: 9, base: "release/w", sha: "m1", story: "5" }, { host, gh, cards, removeOrg: (t) => removed.push(t) });
+  assert.deepEqual(did.filter(Array.isArray), [["dispatch", "staging-deploy.yml", {}, "release/w"]]);
   assert.deepEqual(removed, ["story:5"]);
   assert.ok(did.includes("issue edit 5"), "in-sprint label (the emergency path used to miss it)");
   did.length = 0;
-  await start.startFollowUps("release", { pr: 9, sha: "m1", job: "0Af1", tree: "t1" }, { host, runner, gh, cards, removeOrg: () => {} });
-  assert.deepEqual(did.filter(Array.isArray), [["dispatch", "release", { sha: "m1", validated_job: "0Af1", validated_tree: "t1" }]]);
+  await start.startFollowUps("release", { pr: 9, sha: "m1", job: "0Af1", tree: "t1" }, { host, gh, cards, removeOrg: () => {} });
+  assert.deepEqual(did.filter(Array.isArray), [["dispatch", "release.yml", { sha: "m1", validated_job: "0Af1", validated_tree: "t1" }]]);
 });
 
 test("Standing's carry rules are one table: specs-only, exact head, and no-force-app for CI's Salesforce tests", () => {
@@ -251,10 +250,9 @@ test("start decisions read Standing: a review or Claude's UI test that still sta
   for (const f of ["ai-review", "ui-test"]) assert.match(readFileSync(new URL(`../../.github/workflows/${f}.yml`, import.meta.url), "utf8"), /--explicit/);
   // starting Claude's UI test marks it running on the head, so a second writer is not started meanwhile
   const posted = [];
-  const runner = { start: () => {} };
-  const host = { repo: "o/r", api: () => ({}), status: (...a) => posted.push(a), prFacts: () => ({ pr: { headRefName: "issue-1", baseRefName: "release/w1", headRefOid: "h" }, statuses: [], reviews: [], checkRuns: [] }) };
+  const host = { repo: "o/r", api: () => ({}), dispatch: () => {}, status: (...a) => posted.push(a), prFacts: () => ({ pr: { headRefName: "issue-1", baseRefName: "release/w1", headRefOid: "h" }, statuses: [], reviews: [], checkRuns: [] }) };
   const gh = () => ({ state: "OPEN", labels: [], headRefName: "issue-1", baseRefName: "release/w1", headRefOid: "h" });
-  return start.startJob("ui-test", 1, { host, runner, gh, ai: on, mode: "ai" }).then((d) => {
+  return start.startJob("ui-test", 1, { host, gh, ai: on, mode: "ai" }).then((d) => {
     assert.equal(d.run, true);
     assert.deepEqual(posted[0].slice(0, 3), ["h", "pipeline/ui-test", "pending"]);
   });
@@ -275,7 +273,7 @@ test("the journey decides what starts next from Standing: after a review, after 
   assert.deepEqual(journey.nextSteps("review", st_({ route: "release", review: { state: "failure" } }), { ai }), []);
   const rel = (staging, uat) => st_({ route: "release", checks: { [names.CHECKS.staging]: { state: staging } }, uat: { state: uat } });
   for (const after of ["staging", "release-pr", "org-freed"]) {
-    assert.deepEqual(journey.nextSteps(after, rel("passed", "missing"), { uat: true, pr: 197 }).map((x) => [x.job, x.inputs]), [["uat-deploy", { pr: "197" }]], after);
+    assert.deepEqual(journey.nextSteps(after, rel("passed", "missing"), { uat: true, pr: 197 }).map((x) => [x.dispatch, x.inputs]), [["uat-deploy.yml", { pr: "197" }]], after);
   }
   assert.deepEqual(journey.nextSteps("staging", rel("passed", "stale"), { uat: true, pr: 1 }).length, 1, "a newer head needs UAT again");
   assert.deepEqual(journey.nextSteps("staging", rel("passed", "pending"), { uat: true, pr: 1 }), [], "UAT already has this commit");
@@ -294,11 +292,10 @@ test("the journey decides what starts next from Standing: after a review, after 
 test("journey.next finds the open release PR when none is named, and acts through the start decision or a dispatch", async () => {
   const did = [];
   const facts = { pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: "success", started_at: "t" }], statuses: [], reviews: [], compare: { prFiles: ["force-app/x"] } };
-  const host = { openRelease: () => "origin/release/2026-w1", releasePrOf: (b) => (b === "release/2026-w1" ? 197 : null), prFacts: () => facts };
-  const runner = { start: (j, i, o) => did.push([j, i, o?.ref]) };
+  const host = { openRelease: () => "origin/release/2026-w1", releasePrOf: (b) => (b === "release/2026-w1" ? 197 : null), prFacts: () => facts, dispatch: (w, i, ref) => did.push([w, i, ref]) };
   const gh = () => null;
-  const r = await journey.next("org-freed", null, { host, runner, gh, ai: {}, uat: true, startJob: async () => {} });
-  assert.deepEqual(did, [["staging", {}, "release/2026-w1"], ["uat-deploy", { pr: "197" }, undefined]], "the UI regression (on the release branch) beside UAT");
+  const r = await journey.next("org-freed", null, { host, gh, ai: {}, uat: true, startJob: async () => {} });
+  assert.deepEqual(did, [["staging-deploy.yml", {}, "release/2026-w1"], ["uat-deploy.yml", { pr: "197" }, undefined]], "the UI regression (on the release branch) beside UAT");
   assert.match(r.said, /uat-deploy/);
   const none = await journey.next("staging", null, { host: { openRelease: () => null }, gh, ai: {}, uat: true });
   assert.match(none.said, /no pull request/);
@@ -306,7 +303,7 @@ test("journey.next finds the open release PR when none is named, and acts throug
 
 test("after a merge: deleting the story org lets UAT try again; a change to the gate's rules re-decides open PRs (E12, E15)", async () => {
   const seen = [];
-  await start.startFollowUps("delete-story-org regate", { pr: null, story: "193" }, { host: {}, runner: { start: () => {} }, gh: () => null, cards: { refreshPr: async () => {} },
+  await start.startFollowUps("delete-story-org regate", { pr: null, story: "193" }, { host: { dispatch: () => {} }, gh: () => null, cards: { refreshPr: async () => {} },
     removeOrg: () => true, orgFreed: async () => seen.push("org-freed"), regate: () => { seen.push("regate"); return [5]; } });
   assert.deepEqual(seen, ["org-freed", "regate"]);
   const m = { headRefName: "fix/gate", baseRefName: "main" };
@@ -315,25 +312,25 @@ test("after a merge: deleting the story org lets UAT try again; a change to the 
   const { regate } = await import("../src/shipping.mjs");
   const out = [];
   const io = { gh: () => [{ number: 5, headRefOid: "a" }, { number: 6, headRefOid: "b" }], ghPages: (p) => (p.includes("/a/") ? [{ context: "pipeline/gate", state: "success", creator: { login: "github-actions[bot]" } }] : [{ context: "pipeline/gate", state: "pending", creator: { login: "github-actions[bot]" } }]) };
-  assert.deepEqual(regate(io, { repo: "o/r", runner: { start: (j, i) => out.push(i.pr) } }), [5]);
+  assert.deepEqual(regate(io, { repo: "o/r", dispatch: (w, i) => out.push(i.pr) }), [5]);
   assert.deepEqual(out, [5], "only PRs whose head carries a success the old rules gave");
 });
 
 test("no free scratch-org slot: the story waits in line (no runner waits) and the next org deleted starts it, after UAT", async () => {
   const dispatched = [], edited = [];
-  const host = { openRelease: () => null }, runner = { start: (j, i) => dispatched.push([j, i]) };
+  const host = { openRelease: () => null, repoDispatch: (t, p) => dispatched.push([t, p]) };
   const gh = (a) => (a[0] === "issue" && a[1] === "list" ? [{ number: 9, createdAt: "2", labels: [] }, { number: 7, createdAt: "1", labels: [{ name: "feature" }, { name: "waiting:org" }] }] : a[0] === "issue" && a[1] === "edit" ? edited.push(a) : null);
-  const r = await journey.next("org-freed", null, { host, runner, gh, ai: {}, uat: true });
-  assert.deepEqual(dispatched, [["issue-start", { key: "7", labels: "feature" }]], "the one waiting longest");
+  const r = await journey.next("org-freed", null, { host, gh, ai: {}, uat: true });
+  assert.deepEqual(dispatched, [["jira-start", { key: "7", labels: "feature" }]], "the one waiting longest");
   assert.ok(edited.some((a) => a.includes("--remove-label") && a.includes("waiting:org")));
   assert.match(r.said, /story #7/);
   // a sweep that freed two slots on a bigger Dev Hub starts the two waiting longest, not one per janitor tick
   dispatched.length = 0;
-  const two = await journey.next("org-freed", null, { host, runner, gh, ai: {}, uat: true, freeSlots: () => 2 });
+  const two = await journey.next("org-freed", null, { host, gh, ai: {}, uat: true, freeSlots: () => 2 });
   assert.deepEqual(dispatched.map(([, p]) => p.key), ["7", "9"]);
   assert.match(two.said, /stories #7, #9/);
   dispatched.length = 0;
-  await journey.next("org-freed", null, { host, runner, gh, ai: {}, uat: true, freeSlots: () => { throw new Error("no Dev Hub login"); } });
+  await journey.next("org-freed", null, { host, gh, ai: {}, uat: true, freeSlots: () => { throw new Error("no Dev Hub login"); } });
   assert.equal(dispatched.length, 1, "slots unknown: one, as before");
   const wf = readFileSync(new URL("../../.github/workflows/issue-start.yml", import.meta.url), "utf8");
   assert.match(wf, /steps\.org\.outputs\.waiting == 'true'[\s\S]*--add-label waiting:org/);
@@ -378,7 +375,7 @@ test("the UI regression runs once per release (#273): Apex on every staging run,
   // the journey starts it when the release PR is open, beside UAT; a pass or a failure on the head stops it
   const rel = (statuses = []) => gate.standing({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: "success", started_at: "t" }], statuses, reviews: [] });
   const ui = (state) => ({ sha: "h", context: gate.STATUS.uiRegression, state, created_at: "t", creator: { login: "github-actions[bot]" } });
-  assert.deepEqual(journey.nextSteps("release-pr", rel(), { uat: false, pr: 1 }).map((x) => [x.job, x.ref]), [["staging", "release/2026-w1"]], "UAT off: still once per release");
+  assert.deepEqual(journey.nextSteps("release-pr", rel(), { uat: false, pr: 1 }).map((x) => [x.dispatch, x.ref]), [["staging-deploy.yml", "release/2026-w1"]], "UAT off: still once per release");
   assert.deepEqual(journey.nextSteps("staging", rel([ui("success")]), { uat: false, pr: 1 }), []);
   assert.deepEqual(journey.nextSteps("staging", rel([ui("failure")]), { uat: false, pr: 1 }), [], "a failure is not owed: no loop");
   const running = gate.standing({ pr: { state: "OPEN", headRefName: "release/2026-w1", baseRefName: "main", headRefOid: "h" }, checkRuns: [{ name: names.CHECKS.staging, conclusion: null, status: "in_progress", started_at: "t" }], statuses: [], reviews: [] });
