@@ -13,7 +13,6 @@ Workflows are thin adapters. The decisions live in `pipeline/` (Node, no depende
 | `tracker` | `tracker story\|comment\|open-sprint`, `release notes` | GitHub Issues adapter and Jira adapter behind one interface (`TRACKER=jira`) |
 | `verdict` | `verdict instructions\|review\|rounds` | The AI output formats: the instruction and its parser in one place |
 | `io` | — | The only module that runs `gh`, `sf`, `git`; injected so tests use fakes |
-| `runners/` | — | The CI runner behind one interface: `start(job, inputs, { ref })`, `runs(job)`, `agentRan(run)`, `publish({ outputs, summary })`. Policy names jobs (`jobs.mjs`), never workflow files or labels; the GitHub Actions adapter maps each job to a workflow or a `repository_dispatch` event. `bin/compose.mjs` is the one place adapters are chosen. |
 
 Tests (`npm run test:pipeline`) replay recorded PR facts as fixtures. Add a fixture whenever a gate decides wrongly in a real run.
 

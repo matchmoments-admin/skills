@@ -70,7 +70,7 @@ export function mintAppSync({ appId, privateKey, repo }, run) {
   catch (e) { throw new Error(`minting failed${String(e.message).split(" failed").pop().replace(/\s+/g, " ").slice(0, 300)}`); }   // the reason, never the script (nor the key: it goes on stdin)
 }
 
-export function codeHost({ io, env = process.env, sleep = () => {}, log = () => {}, fetcher = globalThis.fetch, now = () => Date.now(), mintApp = (creds) => mintAppSync(creds, io.run), runUrl = () => undefined }) {
+export function codeHost({ io, env = process.env, sleep = () => {}, log = () => {}, fetcher = globalThis.fetch, now = () => Date.now(), mintApp = (creds) => mintAppSync(creds, io.run) }) {
   const repo = env.GH_REPO || env.GITHUB_REPOSITORY;
   const repoUrl = `${env.GITHUB_SERVER_URL || "https://github.com"}/${repo}`;
   const memo = new Map();
@@ -120,8 +120,8 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
 
   const host = {
     repo, repoUrl, api,
-    /** The current CI run's page, from the CI runner (runners/): statuses, check runs and cards link to it. */
-    get runUrl() { return runUrl(); },
+    /** This workflow run's page: the "watch it live" link. */
+    runUrl: env.GITHUB_RUN_ID ? `${repoUrl}/actions/runs/${env.GITHUB_RUN_ID}` : undefined,
 
     /** The open sprint's release branch (from the API: works in any checkout, with or without git credentials). */
     openRelease: () => once("open-release", () => pickOpenRelease((reads.gh(["api", `repos/${repo}/git/matching-refs/heads/release/`], { allowFail: true }) || []).map((r) => r.ref.replace("refs/heads/", "origin/")))),
@@ -167,6 +167,21 @@ export function codeHost({ io, env = process.env, sleep = () => {}, log = () => 
         },
       };
     },
+
+    /** Start a workflow on main (or a ref) with inputs. The ref is always named: without one gh looks up the default
+     *  branch, which a token without contents: read cannot (this broke /ship and /uat-pass). */
+    dispatch(workflow, inputs = {}, ref = "main") {
+      io.gh(["workflow", "run", workflow, "--ref", ref, ...Object.entries(inputs).flatMap(([k, v]) => ["-f", `${k}=${v}`])]);
+    },
+
+    /** A repository_dispatch event (it starts workflows even when sent with the Actions token), e.g. a waiting story's
+     *  start: repoDispatch("jira-start", { key: "200", labels: "feature" }). */
+    repoDispatch(type, payload = {}) {
+      io.gh(["api", `repos/${repo}/dispatches`, "-f", `event_type=${type}`, ...Object.entries(payload).flatMap(([k, v]) => ["-f", `client_payload[${k}]=${v}`])]);
+    },
+
+    /** A workflow's newest runs (one page, newest first: callers need the recent ones, never the whole history). */
+    workflowRuns: (file, query = "", perPage = 100) => reads.gh(["api", `repos/${repo}/actions/workflows/${file}/runs?per_page=${perPage}${query ? `&${query}` : ""}`])?.workflow_runs || [],
 
     /** GraphQL as the pipeline App (organisation projects need it; the Actions token cannot reach them). */
     async appGraphql(query, variables) {

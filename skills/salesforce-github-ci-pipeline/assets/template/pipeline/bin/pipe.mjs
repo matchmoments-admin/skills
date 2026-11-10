@@ -53,6 +53,7 @@ import * as closeout from "../src/closeout.mjs";
 import * as metrics from "../src/metrics.mjs";
 import { typesafeJev, triageUiFailure, triageReview, storyReadiness, isDeclarativeOnly } from "../src/jev.mjs";
 import * as plans from "../src/plan.mjs";
+import { storyCards } from "../src/card.mjs";
 import * as tests from "../src/tests.mjs";
 import * as capacity from "../src/capacity.mjs";
 import * as production from "../src/production.mjs";
@@ -60,10 +61,11 @@ import { orgRegistry, personaOf as orgPersona, packageList, sameSourceVia, snaps
 import { orgCommands } from "./commands/org.mjs"; import { dataCommands } from "./commands/data.mjs";   // orgs and lanes; test data on request
 import { evalCommands } from "./commands/eval.mjs";
 import { checkCommands } from "./commands/checks.mjs";
+import { tracker as makeTracker, githubTracker } from "../src/tracker.mjs";
 import * as pack from "../src/context-pack.mjs";
 import * as shipping from "../src/shipping.mjs";
 import * as events from "../src/events.mjs";
-import { compose } from "./compose.mjs";
+import { codeHost } from "../src/github.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
 import * as evidence from "../src/evidence.mjs";
@@ -92,14 +94,22 @@ const say = (s) => process.stdout.write(s.endsWith("\n") ? s : s + "\n");
 const log = (s) => process.stderr.write(s + "\n");
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-const { host, runner, tracker, cards } = compose({ io, sleep, log });   // the adapters behind the ports (compose.mjs)
-const output = (values) => runner.publish({ outputs: values });   // step outputs, on whichever CI runs this
-const summary = (md) => runner.publish({ summary: md });
+/** Write step outputs when running in Actions (multi-line safe). */
+function output(values) {
+  if (!process.env.GITHUB_OUTPUT) return;
+  for (const [k, v] of Object.entries(values)) { const s = String(v ?? ""); appendFileSync(process.env.GITHUB_OUTPUT, s.includes("\n") ? `${k}<<__PIPE__\n${s}\n__PIPE__\n` : `${k}=${s}\n`); }
+}
+const summary = (md) => { if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + "\n"); };
+
+// one of each per process: the code host remembers what it fetched, the trackers the comments they edit
+const host = codeHost({ io, sleep, log });
+let made; const tracker = new Proxy({}, { get: (_, k) => (made ||= makeTracker(io))[k], has: (_, k) => k in (made ||= makeTracker(io)) });   // built on first use: only tracker commands need TRACKER=jira's login
+const cards = storyCards({ host, tracker, prTracker: githubTracker({ gh: io.gh, ghPages: io.ghPages }), log });
 // a snapshot Salesforce refused is marked with a tag (snapshot-refused-<name>) so no later run spends a daily org on it
 const refused = (n) => `repos/${host.repo}/git/refs/tags/snapshot-refused-${n}`;
 const refuseSnapshot = (n) => { const sha = host.api("GET", `repos/${host.repo}/git/ref/heads/main`)?.object?.sha; if (sha) host.api("POST", `repos/${host.repo}/git/refs`, { ref: `refs/tags/snapshot-refused-${n}`, sha }); };
 const budgetOf = roles.budgetReader({ read: (onFail) => events.readLog(io, { days: 120, onFail }), base: () => Number(names.setting("AI_STORY_BUDGET_USD")), log });   // the story's AI budget
-const nextAfter = (after, pr = null) => journey.next(after, pr, { host, runner, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, jev: triageJev(), budgetOf, freeSlots: () => { const a = orgs().limits().active; return a.remaining === undefined ? 1 : a.remaining - (Number(names.setting("ORG_RESERVE")) || 0); }, log });
+const nextAfter = (after, pr = null) => journey.next(after, pr, { host, gh: io.gh, cards, ai: names.aiFeatures(), uat: names.setting("UAT_ENABLED") === "true", startJob: start.startJob, jev: triageJev(), budgetOf, freeSlots: () => { const a = orgs().limits().active; return a.remaining === undefined ? 1 : a.remaining - (Number(names.setting("ORG_RESERVE")) || 0); }, log });
 const freed = async () => { try { log((await nextAfter("org-freed")).said); } catch (e) { log(`::warning::could not start what waited for a slot: ${e.message}`); } };   // UAT first, else the story waiting longest
 let registry; const orgs = () => (registry ||= orgRegistry({ sf: io.sf, log, record: (...a) => record(...a), snapshotRefused: (n) => !host.api("GET", refused(n).replace("/refs/", "/ref/"))?.status, refuseSnapshot, sameSource: sameSourceVia((a, b) => host.api("GET", `repos/${host.repo}/compare/${a}...${b}`)), env: { ...process.env, ...orgSettings() } }));   // one per process (its Dev Hub reads are shared); every setting org provisioning reads, resolved (SEED=off once never arrived)
 const { record } = host; const meter = host.meter(`${cmd} ${sub ?? ""}`.trim(), { pr: flag("pr") || (["gate", "pr"].includes(cmd) && /^\d+$/.test(arg(0) || "") ? arg(0) : null) }), stopMeter = () => { try { meter.stop(); } catch { /* never fails a command */ } }; process.once("exit", stopMeter); process.once("SIGTERM", () => { stopMeter(); process.exit(143); });   // the GitHub calls this process made (#422), recorded as it exits: process.exit, and a cancelled or timed-out job too
@@ -119,7 +129,7 @@ const commands = {
   },
 
   // ---- orgs and lanes (commands/org.mjs)
-  ...orgCommands({ io, host, runner, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record: (...a) => record(...a), freed }),
+  ...orgCommands({ io, host, cards, tracker, flag, has, arg, output, say, log, sleep, orgs, record: (...a) => record(...a), freed }),
   ...dataCommands({ flag, has, output, say, orgs }),   // test data on request (commands/data.mjs)
   ...evalCommands({ flag, say, record: (...a) => record(...a) }),   // the reviewer eval set (commands/eval.mjs)
   ...checkCommands({ io, flag, has, say, log, summary, root: PIPELINE_ROOT }),   // access and automation checks (commands/checks.mjs)
@@ -135,7 +145,7 @@ const commands = {
       reasons: d.reasons.map((r) => `- ${r}`).join("\n"), head: facts.pr.headRefOid, open: facts.pr.state === "OPEN", merge: d.rules?.merge || "",
       validate: d.validate || false, after: (d.after || []).join(" "), approval: d.standing ? gate.approvalRecord(d.standing.approval) : "", lock: ["release", "hotfix", "maintenance"].includes(d.route) ? "main" : `pr-${pr}`,
     });
-    if (journey.idleOrgWanted(d, facts, io.gh)) { runner.start("scratch-janitor"); log("a story waits for a slot and this PR waits only for its approval: started scratch-janitor to release its org"); }
+    if (journey.idleOrgWanted(d, facts, io.gh)) { host.dispatch("scratch-janitor.yml"); log("a story waits for a slot and this PR waits only for its approval: started scratch-janitor to release its org"); }
     if (has("card")) await cards.refreshPr(pr);   // the same facts: one gather for the decision and the card
     return say(JSON.stringify({ route: d.route, mergeable: d.mergeable, reasons: d.reasons, story: d.story, validate: d.validate, after: d.after }, null, 2));
   },
@@ -175,7 +185,7 @@ const commands = {
     // after every check or verdict: re-run the gate if a person signed off, and refresh the story card
     const pr = arg(0);
     const n = gate.nudge(host.prFacts(pr));
-    if (n.action === "dispatch") runner.start("gate", { pr });
+    if (n.action === "dispatch") host.dispatch("gate.yml", { pr });
     await cards.refreshPr(pr);
     return say(n.action === "dispatch" ? `re-ran the gate for approved PR #${pr}` : `nothing to do: ${n.why}`);
   },
@@ -214,9 +224,9 @@ const commands = {
   "start ui-test": () => startCmd("ui-test"),
   "start followups": async () => {   // after a merge: what the gate (or an emergency merge) starts, one way
     const steps = await start.startFollowUps(flag("after"), { pr: flag("pr"), base: flag("base"), sha: flag("sha"), job: flag("job", ""), tree: flag("tree", ""), story: flag("story", "") },
-      { host, runner, gh: io.gh, cards, removeOrg: (t) => { const o = names.orgFor(t); if (orgs().remove(t)) record("org", { action: "deleted", org: o?.description, story: o?.key }); return true; }, log,
+      { host, gh: io.gh, cards, removeOrg: (t) => { const o = names.orgFor(t); if (orgs().remove(t)) record("org", { action: "deleted", org: o?.description, story: o?.key }); return true; }, log,
         orgFreed: freed,   // UAT may have been waiting for that slot
-        regate: () => shipping.regate(io, { repo: host.repo, runner }, log), tracker, approvers: gate.approverList(names.setting("APPROVERS")) });
+        regate: () => shipping.regate(io, host, log), tracker, approvers: gate.approverList(names.setting("APPROVERS")) });
     return say(`follow-ups: ${steps.join(" ") || "none"}`);
   },
   "start closed": () => { const p = start.closedPlan({ head: flag("head"), openPrs: (io.gh(["pr", "list", "--head", flag("head"), "--state", "open", "--json", "number"]) || []).length }); output({ story: p.story || "" }); return say(p.story ? `story ${p.story}: its org goes back` : `nothing to give back: ${p.why}`); },   // merged.yml closed
@@ -233,16 +243,16 @@ const commands = {
   // the last step of every job that produces a result: verdict, gate, card, then what is owed next (finish.mjs)
   ...Object.fromEntries(Object.keys(STAGE).map((stage) => [`finish ${stage}`, async () => {
     const r = await finish(stage, { pr: flag("pr"), branch: flag("branch"), sha: flag("sha"), url: flag("url"), outcome: flag("outcome", ""), detail: flag("detail", ""), weak: flag("weak", ""), kind: flag("kind", ""), story: flag("story", ""), hasSpec: !has("no-spec"), planned: has("planned") },
-      { host, runner, gh: io.gh, cards, next: nextAfter, record, log });
+      { host, gh: io.gh, cards, next: nextAfter, record, log });
     return say(r.said);
   }])),
   "reconcile ": async () => {   // the hourly sweep (reconcile.yml): what is owed on every idle open PR, started; a dropped event costs one tick
     const rerun = flag("pr") ? [] : rerunNotStarted({ host, record, log });
-    const r = await reconcile({ host, runner, gh: io.gh, cards, next: nextAfter, record, log, only: flag("pr") });
+    const r = await reconcile({ host, gh: io.gh, cards, next: nextAfter, record, log, only: flag("pr") });
     return say([...rerun.map((id) => `re-ran run ${id}: GitHub never started its jobs`),
       ...r.map((x) => `#${x.pr}: ${x.skipped || (x.started.length ? `started ${x.started.join(", ")}` : "nothing owed")}`)].join("\n") || "no open pull request");
   },
-  "next ": async () => { const r = await nextAfter(flag("after"), flag("pr")); output({ next: r.steps.map((x) => x.start || x.job).join(" ") }); return say(r.said); },
+  "next ": async () => { const r = await nextAfter(flag("after"), flag("pr")); output({ next: r.steps.map((x) => x.start || x.dispatch).join(" ") }); return say(r.said); },
   "ci results": () => { const t = roles.ciResults(host.checkRuns(arg(0))); if (flag("out")) writeFileSync(flag("out"), t); return say(t); },   // for an agent or Jev
   "agent budget": () => {   // the role's provider, model and turns (config/ai-models.json); --changed: the PR's paths, one a line
     const files = flag("changed") && existsSync(flag("changed")) ? readFileSync(flag("changed"), "utf8").split("\n").filter(Boolean) : null;
@@ -354,7 +364,7 @@ const commands = {
     // a person's action from a comment command (--command) or a ticked card box (--before/--after the edit)
     const said = await actions.act({ number: flag("number"), isPr: has("is-pr"), who: flag("by"), whoType: flag("by-type"),
       command: flag("command"), before: flag("before") && readFileSync(flag("before"), "utf8"), after: flag("after") && readFileSync(flag("after"), "utf8"), commentId: flag("comment") },
-      { io, host, runner, cards, log, appToken: process.env.APP_TOKEN, makeStory: specs.makeStory, specMark: specs.SPEC_MARK });
+      { io, host, cards, log, appToken: process.env.APP_TOKEN, makeStory: specs.makeStory, specMark: specs.SPEC_MARK });
     return say(said);
   },
   "story plan-pending": async () => {
@@ -430,13 +440,13 @@ const commands = {
     return say(`${p.action}: ${p.why}`);
   },
   "ship renudge": () => {
-    const again = shipping.renudge(io, runner, { base: flag("base", "main"), except: flag("except") }, (n) => gate.nudge(host.prFacts(n)));
+    const again = shipping.renudge(io, host, { base: flag("base", "main"), except: flag("except") }, (n) => gate.nudge(host.prFacts(n)));
     return say(again.length ? `re-ran the gate for ${again.map((n) => `#${n}`).join(", ")}` : `nothing else waiting on ${flag("base", "main")}`);
   },
   "ship watchdog": () => {
-    const f = shipping.watchdogFacts(io, runner);
+    const f = shipping.watchdogFacts(io, host);
     const w = shipping.watchdog(f);
-    if (w.action === "release") runner.start("release", { sha: f.mainSha });
+    if (w.action === "release") host.dispatch("release.yml", { sha: f.mainSha });
     if (w.action === "report") log(`::warning::${w.why}`);
     return say(`watchdog: ${w.action} (${w.why})`);
   },
@@ -467,7 +477,7 @@ const commands = {
 };
 
 async function startCmd(kind) {
-  const d = await start.startJob(kind, flag("pr"), { host, runner, gh: io.gh, cards, ai: names.aiFeatures(), budgetOf, mode: flag("mode", "run"), before: flag("before"), after: flag("after"), explicit: has("explicit"), log });
+  const d = await start.startJob(kind, flag("pr"), { host, gh: io.gh, cards, ai: names.aiFeatures(), budgetOf, mode: flag("mode", "run"), before: flag("before"), after: flag("after"), explicit: has("explicit"), log });
   output({ run: d.run, why: d.why || "" });
   return say(d.run ? `started ${kind} for PR #${flag("pr")}` : `not started: ${d.why}`);
 }

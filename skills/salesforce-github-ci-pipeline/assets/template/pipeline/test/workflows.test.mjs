@@ -27,7 +27,6 @@ import * as closeout from "../src/closeout.mjs";
 import { lane, jobId, wakeAll, waiterJob } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
-import { ranAgent, runOf } from "../src/runners/github-actions.mjs";
 import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
@@ -234,7 +233,7 @@ test("Jira Automation starts each button by repository_dispatch; release-cut cut
 
 test("fix rounds are this PR's earlier completed ai-fix runs, whatever the commits were called", () => {
   const runs = [{ id: 1, display_title: "ai-fix PR #90", status: "completed", conclusion: "success" }, { id: 2, display_title: "ai-fix PR #90", status: "completed", conclusion: "cancelled" },
-    { id: 3, display_title: "ai-fix PR #91", status: "completed", conclusion: "success" }, { id: 4, display_title: "ai-fix PR #90", status: "in_progress" }, { id: 5, display_title: "ai-fix PR #90", status: "completed", conclusion: "failure" }].map(runOf);   // as the Actions runner reports them
+    { id: 3, display_title: "ai-fix PR #91", status: "completed", conclusion: "success" }, { id: 4, display_title: "ai-fix PR #90", status: "in_progress" }, { id: 5, display_title: "ai-fix PR #90", status: "completed", conclusion: "failure" }];
   assert.equal(verdict.fixRunsFor(runs, 90, 5), 1);
   assert.equal(verdict.fixRunsFor(runs, 90, 4), 2);
   const wf = readFileSync(new URL("../../.github/workflows/ai-fix.yml", import.meta.url), "utf8");
@@ -362,7 +361,7 @@ test("review round 3: a spec revision keeps the spec and its story link; screens
   assert.equal(specs.storyOfSpec(specs.pendingComment(made, { state: "running", what: "x" })), 143, "the link survives the pending status");
   assert.doesNotMatch(plans.planContext([{ author: "app/pipeline", body: made, created: "1" }], { mark: specs.SPEC_MARK, title: specs.SPEC_TITLE }).plan, /Story:|story:143/);
 
-  assert.equal(ranAgent(undefined), true, "an API error counts as a round: the limit holds");
+  assert.equal(verdict.ranAgent(undefined), true, "an API error counts as a round: the limit holds");
   assert.equal(names.uiFacing(["force-app/main/default/objects/Account/recordTypes/Customer.recordType-meta.xml", "force-app/main/default/objects/Account/webLinks/Map.webLink-meta.xml"]).length, 2);
 
   const wf = (n) => readFileSync(new URL(`../../.github/workflows/${n}.yml`, import.meta.url), "utf8");

@@ -24,13 +24,13 @@ const specPush = (st) => /^test\(e2e\): story [\w-]+$/.test(st.ctx?.pr?.commits?
 /**
  * What starts after `after` finished (review | ci | staging | release-pr | org-freed | any), given the head's Standing (st, from
  * gate.standing) and settings: { ai: { fix, uiTest, autoChain }, uat, uiNeeded }. Returns
- * [{ start: "fix" | "ui-test", mode? } | { job, inputs, ref? }] with a why on each (job: jobs.mjs); [] when nothing is owed.
+ * [{ start: "fix" | "ui-test", mode? } | { dispatch: workflow, inputs }] with a why on each; [] when nothing is owed.
  */
 export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr = null } = {}) {
   // any: whatever is owed now, whichever stage finished last (the reconcile sweep: a dropped event costs one tick)
   if (after === "any") {
     const seen = new Set();
-    return ["review", "ci", "staging"].flatMap((a) => nextSteps(a, st, { ai, uat, uiNeeded, pr })).filter((s) => !seen.has(s.start || s.job) && seen.add(s.start || s.job));
+    return ["review", "ci", "staging"].flatMap((a) => nextSteps(a, st, { ai, uat, uiNeeded, pr })).filter((s) => !seen.has(s.start || s.dispatch) && seen.add(s.start || s.dispatch));
   }
   const out = [];
   if (after === "review") {
@@ -55,11 +55,11 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
     // the UI regression runs once per release (#273): when the release PR is open and its head has staging's Apex pass
     // but no UI pass, a staging run does it (a run going now does it itself: only a finished one counts as passed).
     // It runs beside UAT, which uses another org; a failed one is not owed, so it never loops.
-    if (staging?.state === "passed" && owed(st.uiRegression) && st.ctx?.pr?.headRefName) out.push({ job: "staging", inputs: {}, ref: st.ctx.pr.headRefName, why: "the release PR is open and its head has no UI regression yet" });
+    if (staging?.state === "passed" && owed(st.uiRegression) && st.ctx?.pr?.headRefName) out.push({ dispatch: "staging-deploy.yml", inputs: {}, ref: st.ctx.pr.headRefName, why: "the release PR is open and its head has no UI regression yet" });
     if (!uat) return out;
-    if (staging?.state === "passed" && owed(st.uat)) out.push({ job: "uat-deploy", inputs: { pr: String(pr) }, why: "staging passed on this commit and UAT does not have it" });
+    if (staging?.state === "passed" && owed(st.uat)) out.push({ dispatch: "uat-deploy.yml", inputs: { pr: String(pr) }, why: "staging passed on this commit and UAT does not have it" });
     // the release PR opened before staging passed: build UAT's org now, alongside staging, so UAT after it is quick
-    else if (after === "release-pr" && owed(st.uat)) out.push({ job: "uat-deploy", inputs: { pr: String(pr), warm: "true" }, why: "UAT's org is built while staging runs" });
+    else if (after === "release-pr" && owed(st.uat)) out.push({ dispatch: "uat-deploy.yml", inputs: { pr: String(pr), warm: "true" }, why: "UAT's org is built while staging runs" });
     return out;
   }
   throw new Error(`journey: unknown stage "${after}" (review, ci, staging, release-pr, org-freed or any)`);
@@ -67,16 +67,16 @@ export function nextSteps(after, st, { ai = {}, uat = false, uiNeeded = true, pr
 
 /**
  * Gather, decide, act: what starts after `after` on PR `pr` (without one, the open release PR: staging finished, or
- * an org slot freed up). Starts go through the start decision (startJob), other jobs straight to the CI runner. A freed
+ * an org slot freed up). Starts go through the start decision (startJob), dispatches straight to the workflow. A freed
  * slot goes to UAT first (the release waits on it), else to the story that has waited longest for one (waiting:org).
- * deps: { host, runner, gh, cards, ai, uat, startJob, jev, log } (jev: AI_TRIAGE's fix gate, start.fixGate). Returns { steps, said }.
+ * deps: { host, gh, cards, ai, uat, startJob, jev, log } (jev: AI_TRIAGE's fix gate, start.fixGate). Returns { steps, said }.
  */
 export async function next(after, pr, deps) {
   const r = await prNext(after, pr, deps);
   return after === "org-freed" && !r.steps.length ? startWaiting(deps) || r : r;
 }
 
-async function prNext(after, pr, { host, runner, gh, cards, ai, uat, startJob, jev = null, budgetOf, log = () => {} }) {
+async function prNext(after, pr, { host, gh, cards, ai, uat, startJob, jev = null, budgetOf, log = () => {} }) {
   if (!pr) {
     const rel = String(host.openRelease() || "").replace(/^origin\//, "");
     pr = rel ? host.releasePrOf(rel) : null;
@@ -87,18 +87,18 @@ async function prNext(after, pr, { host, runner, gh, cards, ai, uat, startJob, j
   const files = facts.compare?.prFiles;
   const steps = nextSteps(after, standing(facts), { ai, uat, uiNeeded: uiNeeded(files), pr });
   for (const s of steps) {
-    log(`next after ${after}: ${s.start || s.job} (${s.why})`);
-    if (s.start) await startJob(s.start, pr, { host, runner, gh, cards, ai, jev, budgetOf, mode: s.mode || "run", log });
-    else runner.start(s.job, s.inputs, { ref: s.ref });
+    log(`next after ${after}: ${s.start || s.dispatch} (${s.why})`);
+    if (s.start) await startJob(s.start, pr, { host, gh, cards, ai, jev, budgetOf, mode: s.mode || "run", log });
+    else host.dispatch(s.dispatch, s.inputs, s.ref);
   }
-  return { steps, said: steps.length ? `started: ${steps.map((x) => `${x.start || x.job} (${x.why})`).join("; ")}` : `nothing owed after ${after} on PR #${pr}` };
+  return { steps, said: steps.length ? `started: ${steps.map((x) => `${x.start || x.dispatch} (${x.why})`).join("; ")}` : `nothing owed after ${after} on PR #${pr}` };
 }
 
 /** The stories that have waited longest for a scratch-org slot (label waiting:org), started again, as many as the Dev
  *  Hub has slots free past ORG_RESERVE (freeSlots(); unknown or unreadable: one), so a sweep that frees several slots
  *  on a bigger Dev Hub starts several, not one per janitor tick. Each start checks its own slot again (issue-start), so
  *  a miscount only puts a story back in line. null if none waits. */
-function startWaiting({ runner, gh, freeSlots = () => 1, log = () => {} }) {
+function startWaiting({ host, gh, freeSlots = () => 1, log = () => {} }) {
   let n = 1;
   try { n = Math.max(1, Math.min(10, Number(freeSlots()) || 1)); } catch { n = 1; }
   const ws = (gh(["issue", "list", "--state", "open", "--label", "waiting:org", "--json", "number,labels,createdAt", "--limit", "50"], { allowFail: true }) || [])
@@ -106,11 +106,11 @@ function startWaiting({ runner, gh, freeSlots = () => 1, log = () => {} }) {
   if (!ws.length) return null;
   for (const w of ws) {
     gh(["issue", "edit", String(w.number), "--remove-label", "waiting:org"], { allowFail: true });
-    runner.start("issue-start", { key: String(w.number), labels: (w.labels || []).map((l) => l.name).filter((l) => l !== "waiting:org").join(",") });
+    host.repoDispatch("jira-start", { key: String(w.number), labels: (w.labels || []).map((l) => l.name).filter((l) => l !== "waiting:org").join(",") });
     log(`next after org-freed: started story #${w.number} (it was waiting for a scratch-org slot)`);
   }
   const which = `${ws.length === 1 ? "story" : "stories"} ${ws.map((w) => `#${w.number}`).join(", ")}`;
-  return { steps: ws.map((w) => ({ job: "issue-start", why: `story #${w.number} waited for a slot` })), said: `started ${which}, which ${ws.length === 1 ? "was" : "were"} waiting for a scratch-org slot` };
+  return { steps: ws.map((w) => ({ dispatch: "issue-start", why: `story #${w.number} waited for a slot` })), said: `started ${which}, which ${ws.length === 1 ? "was" : "were"} waiting for a scratch-org slot` };
 }
 
 /**

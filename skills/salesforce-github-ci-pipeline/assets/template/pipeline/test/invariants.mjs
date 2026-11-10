@@ -74,7 +74,7 @@ export async function actAs(w, number, who, text) {
   const before = (w.state.comments[number] || []).length, statuses = JSON.stringify(w.state.statuses);
   w.comment(number, who, text);
   w.acting({ event: "issue_comment", branch: "main", workflow: "pr-command.yml" });
-  await act({ number, isPr: true, who, whoType: "User", command: text }, { io: w.io, host: w.host(), runner: w.runner(), cards: { refreshPr: async () => {}, refresh: async () => {} }, log: () => {} });
+  await act({ number, isPr: true, who, whoType: "User", command: text }, { io: w.io, host: w.host(), cards: { refreshPr: async () => {}, refresh: async () => {} }, log: () => {} });
   const said = (w.state.comments[number] || []).slice(before + 1).map((c) => c.body).join("\n");
   return { done: JSON.stringify(w.state.statuses) !== statuses, text: said };
 }
@@ -134,7 +134,7 @@ export async function finish(w, run, { outcome = "success", drop = false, env = 
 export const nextDeps = (w, env = {}) => {
   const host = w.host(env);
   const f = (n) => host.prFacts(n);
-  return { host, runner: w.runner(env), gh: w.io.gh, cards: { refreshPr: async () => {} }, ai: aiFeatures(env), uat: env.UAT_ENABLED === "true" || process.env.UAT_ENABLED === "true",
+  return { host, gh: w.io.gh, cards: { refreshPr: async () => {} }, ai: aiFeatures(env), uat: env.UAT_ENABLED === "true" || process.env.UAT_ENABLED === "true",
     // the start decision posts the UI test as pending on the head, then dispatches it (start.startJob)
     startJob: async (kind, pr) => {
       const head = f(pr).pr;
