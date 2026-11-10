@@ -32,7 +32,7 @@ const all = async (w, opts) => { let r; while ((r = w.take())) await finish(w, r
 /** finish() and reconcile() on the simulated world, as `pipe` wires them. */
 const stageDeps = (w, env = ENV, cards = { refreshPr: async () => {} }) => {
   const d = nextDeps(w, env);
-  return { host: d.host, gh: w.io.gh, cards, next: (after, pr) => next(after, pr, nextDeps(w, env)), record: () => {} };
+  return { host: d.host, runner: d.runner, gh: w.io.gh, cards, next: (after, pr) => next(after, pr, nextDeps(w, env)), record: () => {} };
 };
 
 /** A sprint with one story merged into its release branch, CI and staging passed, and the release PR not open yet. */
@@ -213,7 +213,7 @@ test("reconcile: a dropped workflow_run is caught on the next tick, once; a PR w
   await all(w, { drop: true });
   assert.match((await violations(w, REL, ENV)).join(), /2: stuck/);
   const first = await reconcile(stageDeps(w));
-  assert.deepEqual(first.find((x) => x.pr === REL).started, ["uat-deploy.yml"], "the staging run did the UI regression itself; UAT is what the dropped event never started");
+  assert.deepEqual(first.find((x) => x.pr === REL).started, ["uat-deploy"], "the staging run did the UI regression itself; UAT is what the dropped event never started");
   assert.deepEqual(await reconcile(stageDeps(w)), [{ pr: REL, skipped: "a run is going" }], "what it started is running: the next tick starts nothing");
   await all(w);
   assert.deepEqual(await violations(w, REL, ENV), []);

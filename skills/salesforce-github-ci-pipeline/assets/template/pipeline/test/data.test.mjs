@@ -738,13 +738,13 @@ test("/data on a story or its PR dispatches story-data with the typed line; empt
   const { command, perform, help } = await import("../src/actions.mjs");
   assert.deepEqual(command("/data Account 20; Contact 2 per Account\nmore words"), { id: "data", arg: "Account 20; Contact 2 per Account" });
   const dispatched = [];
-  const host = { dispatch: (wf, inputs) => dispatched.push({ wf, inputs }) };
-  const story = perform("data", "Case 5 Status=Escalated", { number: 9, isPr: false }, "ann", { host });
-  assert.deepEqual(dispatched[0], { wf: "story-data.yml", inputs: { story: "9", who: "ann", request: "Case 5 Status=Escalated" } });
+  const runner = { start: (job, inputs) => dispatched.push({ job, inputs }) };
+  const story = perform("data", "Case 5 Status=Escalated", { number: 9, isPr: false }, "ann", { runner });
+  assert.deepEqual(dispatched[0], { job: "story-data", inputs: { story: "9", who: "ann", request: "Case 5 Status=Escalated" } });
   assert.match(story.done, /story 9's org/);
-  perform("data", "Account 3", { number: 12, isPr: true, pr: { headRefName: "issue-9" } }, "ann", { host });
+  perform("data", "Account 3", { number: 12, isPr: true, pr: { headRefName: "issue-9" } }, "ann", { runner });
   assert.equal(dispatched[1].inputs.story, "9", "on the PR: its story");
-  assert.match(perform("data", "", { number: 9, isPr: false }, "ann", { host }).said, /`\/data Account 20; Contact 2 per Account; Case 5 Status=Escalated`/);
+  assert.match(perform("data", "", { number: 9, isPr: false }, "ann", { runner }).said, /`\/data Account 20; Contact 2 per Account; Case 5 Status=Escalated`/);
   assert.equal(dispatched.length, 2, "nothing dispatched for an empty /data");
   assert.match(help(false), /\/data Account 20/); assert.match(help(true), /\/data Account 20/);
 });

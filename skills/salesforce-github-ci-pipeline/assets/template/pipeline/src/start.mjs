@@ -189,17 +189,17 @@ export async function stopForBudget({ key, pr = null, sb }, { gh, cards = null }
 /** The one comment when Claude's fix rounds are used up. Pure. */
 export const stopMessage = (limit) => `Claude has had ${limit} fix rounds on this change since the last push by a person, so it stops here. **What you can do:** push a fix yourself (the count starts again, and the review re-runs), or, if the AI review is wrong, comment \`/review-ok <why>\` to accept the change anyway.`;
 
-const WORKFLOW = { review: "ai-review.yml", fix: "ai-fix.yml", "ui-test": "ui-test.yml" };
+const JOB = { review: "ai-review", fix: "ai-fix", "ui-test": "ui-test" };
 
 /**
  * Gather the facts for decide(), then act: dispatch the job on main, or post its verdict, say the flag is off, or stop
  * the fix rounds (block the PR, say what a person can do, once). The one door into review, fix and the UI test: the
  * route jobs (labels, ticked boxes, comments, auto-chain) and CI's autofix all come through here.
- * deps: { host, gh, cards, ai, jev, budgetOf }. jev (AI_TRIAGE, the journey's chained starts only): a fix Jev
+ * deps: { host, runner, gh, cards, ai, jev, budgetOf }. jev (AI_TRIAGE, the journey's chained starts only): a fix Jev
  * confidently judges unneeded is not started (fixGate). budgetOf(story): the story's AI budget (roles.storyBudget) or
  * null (no limit, or the event log could not be read): over it, no runner starts (stopForBudget). Returns the decision.
  */
-export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, budgetOf = () => null, mode = "run", before = null, after = null, explicit = false, log = () => {} }) {
+export async function startJob(kind, pr, { host, runner, gh, cards, ai, jev = null, budgetOf = () => null, mode = "run", before = null, after = null, explicit = false, log = () => {} }) {
   const p = gh(["pr", "view", String(pr), "--json", "headRefName,baseRefName,headRefOid,labels,state"]);
   if (p.state !== "OPEN") return { run: false, why: `the PR is ${String(p.state).toLowerCase()}` };
   const labels = (p.labels || []).map((l) => l.name);
@@ -211,8 +211,8 @@ export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, budg
     ai, branch: p.headRefName, labels, mode, explicit, review: st?.review || null, ui: st?.ui || null,
     changed: kind === "review" ? files(p.baseRefName, p.headRefOid) : null,
     pushed: kind === "review" && before ? files(before, after || p.headRefOid) : null,
-    rounds: kind === "fix" ? { n: fixRoundsUsed(pr, { host, gh }), limit: MAX_FIX_ROUNDS } : null,
-    fixing: kind === "fix" && fixInFlight(host.workflowRuns("ai-fix.yml", "event=workflow_dispatch"), pr),
+    rounds: kind === "fix" ? { n: fixRoundsUsed(pr, { runner, gh }), limit: MAX_FIX_ROUNDS } : null,
+    fixing: kind === "fix" && fixInFlight(runner.runs("ai-fix", { dispatched: true }), pr),
     hasSpec: kind === "ui-test" && mode !== "ai" ? Boolean(key && host.api("GET", `repos/${host.repo}/contents/e2e/story-${key}.spec.ts?ref=${p.headRefOid}`)?.sha) : false,
     budget: key && (kind !== "ui-test" || mode === "ai") ? budgetOf(key) : null,
   });
@@ -232,7 +232,7 @@ export async function startJob(kind, pr, { host, gh, cards, ai, jev = null, budg
     // the review too: without it the card said "run it again" and offered a second review while one ran (scenario
     // fuzz, 15 Oct); its verdict job always replaces it (pass, changes, or error when no verdict came)
     if (kind === "review") host.status(p.headRefOid, STATUS.review, "pending", REVIEW.running());
-    host.dispatch(WORKFLOW[kind], kind === "ui-test" ? { pr, mode } : { pr });
+    runner.start(JOB[kind], kind === "ui-test" ? { pr, mode } : { pr });
     return d;
   }
   log(`not started: ${d.why}`);
@@ -288,15 +288,15 @@ export function closedPlan({ head, openPrs = 0 }) {
  * What starts after a merge, the same for the gate and an emergency merge (follow-ups from gate.followUps): the next
  * workflows first (staging on the release branch, so its check lands on the release PR; the release, with the
  * validated job and tree when the gate validated; a back-merge), then the card, then cleanup that cannot fail the merge
- * (the story's org, then UAT if it waited for that slot; the in-sprint label). deps: { host, gh, cards, removeOrg,
+ * (the story's org, then UAT if it waited for that slot; the in-sprint label). deps: { host, runner, gh, cards, removeOrg,
  * orgFreed, regate, log }.
  */
-export async function startFollowUps(after, { pr, base, sha, job = "", tree = "", story = "" }, { host, gh, cards, removeOrg, orgFreed = async () => {}, regate = () => [], log = () => {}, tracker = null, approvers = [] }) {
+export async function startFollowUps(after, { pr, base, sha, job = "", tree = "", story = "" }, { host, runner, gh, cards, removeOrg, orgFreed = async () => {}, regate = () => [], log = () => {}, tracker = null, approvers = [] }) {
   const steps = String(after || "").split(/\s+/).filter(Boolean);
   for (const step of steps) {
-    if (step === "staging") host.dispatch("staging-deploy.yml", {}, base);
-    if (step === "release") host.dispatch("release.yml", { sha, ...(job ? { validated_job: job } : {}), ...(tree ? { validated_tree: tree } : {}) });
-    if (step === "backmerge") host.dispatch("back-merge.yml");
+    if (step === "staging") runner.start("staging", {}, { ref: base });
+    if (step === "release") runner.start("release", { sha, ...(job ? { validated_job: job } : {}), ...(tree ? { validated_tree: tree } : {}) });
+    if (step === "backmerge") runner.start("back-merge");
   }
   if (pr) await cards.refreshPr(pr);
   for (const step of steps) {

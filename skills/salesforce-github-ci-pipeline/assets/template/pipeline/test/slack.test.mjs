@@ -131,10 +131,10 @@ test("a story with no open sprint says to start the sprint first, with its box a
 
 test("one press: a sprint started from a story starts that story when it opens; while it starts, the card waits (no second 'your turn')", () => {
   const dispatched = [];
-  const host = { dispatch: (wf, inputs) => dispatched.push([wf, inputs]) };
-  actions.perform("sprint", "", { number: 343, isPr: false, nextSprint: "2027-w02" }, "pat", { host });
-  actions.perform("sprint", "", { number: 296, isPr: true, nextSprint: "2027-w03" }, "pat", { host });
-  assert.deepEqual(dispatched, [["sprint-start.yml", { sprint: "2027-w02", start: "343" }], ["sprint-start.yml", { sprint: "2027-w03" }]]);
+  const runner = { start: (job, inputs) => dispatched.push([job, inputs]) };
+  actions.perform("sprint", "", { number: 343, isPr: false, nextSprint: "2027-w02" }, "pat", { runner });
+  actions.perform("sprint", "", { number: 296, isPr: true, nextSprint: "2027-w03" }, "pat", { runner });
+  assert.deepEqual(dispatched, [["sprint-start", { sprint: "2027-w02", start: "343" }], ["sprint-start", { sprint: "2027-w03" }]]);
   const wf = readFileSync(new URL("../../.github/workflows/sprint-start.yml", import.meta.url), "utf8");
   assert.match(wf, /gh issue edit "\$START" --add-label start/);
   assert.match(wf, /is starting now \(its branch and scratch org\)/);
@@ -165,7 +165,7 @@ test("pull request actions from Slack (fix, re-run CI, review, UI test) name the
 test("a pull request box ticked on the story's own card acts on the story's open PR (not 'fix works on a pull request')", async () => {
   const calls = [];
   const io = { gh: (a) => { calls.push(a.join(" ")); return a[0] === "pr" && a[1] === "view" ? { number: 353, headRefName: "issue-343", headRefOid: "abc", baseRefName: "release/x", state: "OPEN" } : null; }, ghPages: () => [] };
-  const host = { repo: "o/r", api: () => ({ permission: "write" }), storyPr: (b) => (b === "issue-343" ? { number: 353, state: "OPEN" } : null), prFacts: () => ({}), record: () => {}, dispatch: () => {} };
+  const host = { repo: "o/r", api: () => ({ permission: "write" }), storyPr: (b) => (b === "issue-343" ? { number: 353, state: "OPEN" } : null), prFacts: () => ({}), record: () => {} };
   const card = "<!-- pipeline:story-card -->\n- [x] 🛠 Fix <!-- act:fix -->";
   await actions.act({ number: 343, isPr: false, who: "pat", whoType: "User", before: card.replace("[x]", "[ ]"), after: card, commentId: 1 }, { io, host, cards: { refresh: async () => {}, refreshPr: async () => {} } });
   assert.ok(calls.some((c) => /pr edit 353 --add-label ai:fix/.test(c) || /issue edit 353 --add-label ai:fix/.test(c)), `labels the PR: ${calls.join(" | ")}`);

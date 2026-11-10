@@ -63,34 +63,34 @@ export function gatherRelease(git, { sha, validated = {} }) {
 
 /** After landing: re-run the gate for every other approved PR into the same base. GitHub keeps one waiting run per
  *  concurrency group and cancels the one before, so a ship that was queued is never lost. Returns the PRs re-run. */
-export function renudge({ gh }, host, { base, except }, nudge) {
+export function renudge({ gh }, runner, { base, except }, nudge) {
   const prs = gh(["pr", "list", "--base", base, "--state", "open", "--limit", "1000", "--json", "number"]) || [];
   const again = prs.map((p) => p.number).filter((n) => String(n) !== String(except) && nudge(n).action === "dispatch");
-  for (const n of again) host.dispatch("gate.yml", { pr: n });
+  for (const n of again) runner.start("gate", { pr: n });
   return again;
 }
 
 /** Re-decide the gate on every open PR whose head carries a pipeline/gate success (one decided under rules that have
  *  since changed must not keep the merge button unlocked). Returns the PR numbers dispatched. */
-export function regate({ gh, ghPages }, host, log = () => {}) {
+export function regate({ gh, ghPages }, { repo, runner }, log = () => {}) {
   const prs = gh(["pr", "list", "--state", "open", "--limit", "200", "--json", "number,headRefOid"]) || [];
-  const again = prs.filter((p) => statusOn(ghPages, host.repo, p.headRefOid, GATE_STATUS).state === "success").map((p) => p.number);
-  for (const n of again) { host.dispatch("gate.yml", { pr: n }); log(`re-deciding #${n}`); }
+  const again = prs.filter((p) => statusOn(ghPages, repo, p.headRefOid, GATE_STATUS).state === "success").map((p) => p.number);
+  for (const n of again) { runner.start("gate", { pr: n }); log(`re-deciding #${n}`); }
   return again;
 }
 
 /** The facts watchdog() decides on, from git, the release runs and the open issues. */
-export function watchdogFacts({ git, gh }, host) {
+export function watchdogFacts({ git, gh }, runner) {
   git(["fetch", "-q", "--tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
   const mainSha = git(["rev-parse", "origin/main"]);
   const previous = lastRelease(git, mainSha);
-  const runs = host.workflowRuns("release.yml", "", 20);
-  const last = runs.find((r) => r.status === "completed" && r.conclusion !== "cancelled");   // a cancelled run hides nothing
+  const runs = runner.runs("release", { limit: 20 });
+  const last = runs.find((r) => !r.active && r.conclusion !== "cancelled");   // a cancelled run hides nothing
   return {
     mainSha, previous,
     forceAppChanged: Boolean(previous) && git(["diff", "--quiet", previous, mainSha, "--", "force-app"], { allowFail: true }) === null,
-    releaseActive: runs.some((r) => ["queued", "in_progress", "waiting", "pending", "requested"].includes(r.status)),
-    lastRun: last ? { sha: (String(last.display_title).match(/[0-9a-f]{40}/) || [])[0], conclusion: last.conclusion } : null,
+    releaseActive: runs.some((r) => r.active),
+    lastRun: last ? { sha: (String(last.title).match(/[0-9a-f]{40}/) || [])[0], conclusion: last.conclusion } : null,
     rolledBack: (gh(["issue", "list", "--state", "open", "--search", 'in:title "Production rolled back to"', "--json", "number"]) || []).length > 0,
   };
 }

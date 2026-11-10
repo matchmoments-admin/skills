@@ -27,6 +27,7 @@ import * as closeout from "../src/closeout.mjs";
 import { lane, jobId, wakeAll, waiterJob } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
+import { actionsRunner } from "../src/runners/github-actions.mjs";
 import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
@@ -176,8 +177,11 @@ test("board: stage follows the story; moving a card adds it and sets Status", as
 
 test("code host: one call per fact per process, errors as a status, verdicts linked to the run", () => {
   const { io, calls } = fakeGitHub();
-  const h = codeHost({ io, env: { GH_REPO: "o/r", GITHUB_SERVER_URL: "https://github.com", GITHUB_RUN_ID: "5" } });
-  assert.equal(h.runUrl, "https://github.com/o/r/actions/runs/5");
+  const env = { GH_REPO: "o/r", GITHUB_SERVER_URL: "https://github.com", GITHUB_RUN_ID: "5" };
+  let runner;
+  const h = codeHost({ io, env, runUrl: () => runner.runUrl });
+  runner = actionsRunner({ io, api: h.api, repo: h.repo, repoUrl: h.repoUrl, env });
+  assert.equal(h.runUrl, "https://github.com/o/r/actions/runs/5", "the run's page, from the CI runner");
   assert.equal(h.openRelease(), "release/w45");
   h.openRelease(); h.storyPr("issue-84"); h.storyPr("issue-84");
   assert.equal(calls.filter((c) => /matching-refs/.test(c)).length, 1);
@@ -366,11 +370,12 @@ test("App-token reads (#427): with APP_TOKEN_READS on, every read is sent with t
     // writes alone (a status, a check run, a dispatch, an event-log PUT): nothing minted
     host.status(head, "pipeline/ui-test", "success", "passed");
     host.checkRun(head, "Salesforce tests").update({ title: "done" }, "success");
-    host.dispatch("gate.yml", { pr: 90 });
+    const runner = actionsRunner({ io: w.io, api: host.api, repo: REPO, env: {} });
+    runner.start("gate", { pr: 90 });
     host.api("PUT", "repos/o/r/contents/x", { a: 1 });
     const mintedByWrites = m.calls.length;
     // then the reads a stage's finish makes: the facts and the PR, the code host's lookups, a GET through api()
-    host.prFacts(90); host.storyPr("issue-84"); host.openRelease(); host.releasePrOf("release/w"); host.checkRuns(head); host.workflowRuns("ci.yml");
+    host.prFacts(90); host.storyPr("issue-84"); host.openRelease(); host.releasePrOf("release/w"); host.checkRuns(head); runner.runs("ci");
     host.api("GET", "repos/o/r/branches/issue-84");
     host.prFacts(91 - 1);
     return { notes, mintedByWrites, mints: m.calls.length, tokens: [...w.state.tokens] };
@@ -426,10 +431,10 @@ test("App-token reads (#427): the token is minted again before its hour ends, an
     run: (cmd, args, o = {}) => { const tok = o.env?.GH_TOKEN || "actions"; sent.push([tok, args.join(" ")]); if (tok === reject) throw new Error("gh api -X GET failed: HTTP 401: Bad credentials"); return JSON.stringify({ ok: tok }); },
   };
   const host = codeHost({ io, env: { GH_REPO: "o/r", APP_TOKEN_READS: "true", ...APP }, mintApp: m.mint, now: () => t, log: () => {} });
-  host.workflowRuns("a.yml");
-  t = 49 * 60e3; host.workflowRuns("b.yml");
+  host.storyPr("a");
+  t = 49 * 60e3; host.storyPr("b");
   assert.equal(m.calls.length, 1, "still fresh at 49 minutes");
-  t = 51 * 60e3; host.workflowRuns("c.yml");
+  t = 51 * 60e3; host.storyPr("c");
   assert.equal(m.calls.length, 2, "minted again past 50 minutes (it lives an hour)");
   assert.equal(sent.at(-1)[0], "app-token-2");
 
@@ -444,7 +449,7 @@ test("App-token reads (#427): the token is minted again before its hour ends, an
   assert.deepEqual(sent.map(([tok]) => tok), ["app-token-3", "actions"]);
   reject = "app-token-4";
   sent.length = 0;
-  assert.deepEqual(host.workflowRuns("d.yml"), []);
+  assert.equal(host.storyPr("d"), null);
   assert.deepEqual(sent.map(([tok]) => tok), ["app-token-4", "actions"]);
   assert.equal(m.calls.length, 4, "each refusal drops the token: the next read mints a new one");
 });
@@ -466,7 +471,7 @@ test("API count with App-token reads (#427): reads are counted on the App's toke
   const m = fakeMint();
   let host = codeHost({ io: counted(raw, { token: () => "job", jobIsApp: () => false }), env, mintApp: m.mint });
   let meter = host.meter("finish review", { pr: 90 });
-  host.workflowRuns("x.yml");                                  // a read: the App's token
+  host.api("GET", "repos/o/r/branches/x");                     // a REST read: the App's token
   host.status("sha", "pipeline/ai-review", "success", "ok");   // a write: the Actions token
   const used = meter.stop();
   assert.deepEqual([used.rest, used.graphql, used.appRest, used.appGraphql], [2, 0, 1, 0], "the status and the event's own write; one read on the App");

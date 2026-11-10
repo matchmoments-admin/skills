@@ -27,6 +27,7 @@ import * as closeout from "../src/closeout.mjs";
 import { lane, jobId, wakeAll, waiterJob } from "../src/lane.mjs";
 import * as events from "../src/events.mjs";
 import { codeHost } from "../src/github.mjs";
+import { ranAgent } from "../src/runners/github-actions.mjs";
 import { storyCards, releaseCard, newStoryCard } from "../src/card.mjs";
 import * as actions from "../src/actions.mjs";
 import * as specs from "../src/spec.mjs";
@@ -215,11 +216,11 @@ test("spec: open questions make the story an explicit choice; one story from the
 });
 
 test("a fix round counts only when Claude ran in it (PR #144's runs that failed on a permission were not rounds)", () => {
-  const runs = [1, 2, 3].map((id) => ({ id, display_title: "ai-fix PR #144", status: "completed", conclusion: "failure" }));
+  const runs = [1, 2, 3].map((id) => ({ id, title: "ai-fix PR #144", active: false, conclusion: "failure" }));
   const ran = { 1: false, 2: false, 3: true };
   assert.equal(verdict.fixRunsFor(runs, 144, 9, (id) => ran[id]), 1);
-  assert.equal(verdict.ranAgent([{ steps: [{ name: "Enforce the round limit", conclusion: "failure" }, { name: "Run ./.pipeline/.github/actions/claude-agent", conclusion: "skipped" }] }]), false);
-  assert.equal(verdict.ranAgent([{ steps: [{ name: "Run ./.pipeline/.github/actions/claude-agent", conclusion: "failure" }] }]), true);
+  assert.equal(ranAgent([{ steps: [{ name: "Enforce the round limit", conclusion: "failure" }, { name: "Run ./.pipeline/.github/actions/claude-agent", conclusion: "skipped" }] }]), false);
+  assert.equal(ranAgent([{ steps: [{ name: "Run ./.pipeline/.github/actions/claude-agent", conclusion: "failure" }] }]), true);
 });
 
 test("the review rubric: the UI test spec comes after the review; answers win over the spec text", () => {
@@ -256,7 +257,8 @@ test("the fix gate: a chained fix Jev skips posts /review-ok and no dispatch; a 
   const start = await import("../src/start.mjs");
   const on = { review: true, fix: true, uiTest: true, autoChain: true };
   const did = [], events = [];
-  const host = { repo: "o/r", runUrl: "u", dispatch: (...a) => did.push(["dispatch", ...a]), status: () => {}, api: () => ({}), workflowRuns: () => [],
+  const runner = { runId: "1", start: (...a) => did.push(["dispatch", ...a]), runs: () => [], agentRan: () => true };
+  const host = { repo: "o/r", runUrl: "u", status: () => {}, api: () => ({}),
     record: (k, d) => events.push([k, d]), prFacts: () => ({ pr: { headRefName: "issue-5", baseRefName: "release/w", headRefOid: "h5", state: "OPEN", labels: [], commits: [] }, checkRuns: [] }) };
   const gh = (a) => {
     did.push(a.slice(0, 3).join(" "));
@@ -264,19 +266,19 @@ test("the fix gate: a chained fix Jev skips posts /review-ok and no dispatch; a 
     return a[0] === "pr" && a[1] === "view" ? { headRefName: "issue-5", baseRefName: "release/w", headRefOid: "h5", labels: [], state: "OPEN", commits: [] } : null;
   };
   const minor = fakeJev({ findings: { type: "choice", choice: "minor-only", confidence: 0.9 } });
-  const d = await start.startJob("fix", 5, { host, gh, cards: {}, ai: on, jev: minor });
+  const d = await start.startJob("fix", 5, { host, runner, gh, cards: {}, ai: on, jev: minor });
   assert.equal(d.run, false);
   assert.ok(!did.some((x) => Array.isArray(x)), "no fix runner");
   assert.ok(did.includes("pr comment 5"), "says what a person can do");
   assert.deepEqual([events[0][0], events[0][1].decision, events[0][1].skipped], ["jev", "fix", true]);
   did.length = 0;
-  await start.startJob("fix", 5, { host, gh, cards: {}, ai: on, jev: minor, explicit: true });
-  assert.deepEqual(did.find(Array.isArray), ["dispatch", "ai-fix.yml", { pr: 5 }], "a person asked: it runs");
+  await start.startJob("fix", 5, { host, runner, gh, cards: {}, ai: on, jev: minor, explicit: true });
+  assert.deepEqual(did.find(Array.isArray), ["dispatch", "ai-fix", { pr: 5 }], "a person asked: it runs");
   did.length = 0;
-  await start.startJob("fix", 5, { host, gh, cards: {}, ai: on });
-  assert.deepEqual(did.find(Array.isArray), ["dispatch", "ai-fix.yml", { pr: 5 }], "no Jev (AI_TRIAGE off): it runs");
+  await start.startJob("fix", 5, { host, runner, gh, cards: {}, ai: on });
+  assert.deepEqual(did.find(Array.isArray), ["dispatch", "ai-fix", { pr: 5 }], "no Jev (AI_TRIAGE off): it runs");
   const s = events.length;
-  await start.startJob("fix", 5, { host, gh, cards: {}, ai: on, jev: fakeJev({}, 500) });
+  await start.startJob("fix", 5, { host, runner, gh, cards: {}, ai: on, jev: fakeJev({}, 500) });
   assert.equal(events.at(-1)[1].skipped, false, "Jev down: recorded, and it runs");
   assert.equal(events.length, s + 1);
 });
